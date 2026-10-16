@@ -15,7 +15,7 @@ Claude Code 与 Codex 共用这一份。做任何任务前先读本文件、`PRO
 | 界面 | Ant Design 6（React 19），中文语言包，不用 Tailwind，不自己画组件 |
 | 数据库 | PostgreSQL 17（本机 Windows 服务），Prisma 管表结构与迁移 |
 | 登录 | 账号密码 + bcrypt 哈希 + cookie 会话，登录接口限流 |
-| 测试 | Vitest 测业务规则（只盖核心链路：开单扣库存、日结对账、权限判断）；Playwright 1 到 2 条端到端 |
+| 测试 | Vitest 测业务规则（只盖核心链路：开单扣库存、日结对账、权限判断；`*.db.test.ts` 连本机库在事务里跑完回滚）；Playwright 1 到 2 条端到端（`tests/e2e`，本机 Edge） |
 | 部署 | 第 9 周：Docker + 一台云服务器 + Caddy HTTPS，GitHub Actions 自动部署 |
 
 Next.js 16 比训练数据新（Middleware 改名 Proxy，`src/proxy.ts`；本项目不开 `cacheComponents`，页面按常规动态渲染）：写涉及路由、缓存、`params`、表单动作的代码前，先读 `node_modules/next/dist/docs/` 里对应章节，遵守废弃提示。

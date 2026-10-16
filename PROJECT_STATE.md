@@ -1,7 +1,7 @@
 # 项目状态（PROJECT_STATE.md）
 
 - 更新：2026-10-16
-- 阶段：第 7 周完成（以旧换新、多支付、退货、转良品），下一步第 8 周收银日结对账
+- 阶段：第 8 周开发完成（日结对账、收银日报、端到端测试），下一步第 9 周模拟数据 v1、看板、部署
 
 ## 做完了什么
 
@@ -25,6 +25,7 @@
 - 大件三个码（SN / IMEI1 / IMEI2）：主码 code，按任意码查找，入库一行一台 1 到 3 个码，迁移 device_three_codes。
 - 第 6 周：客户 `src/server/customers`（手机号唯一、列表脱敏）；开单 `src/server/sales/sales-service.ts`（一个事务写销售单、明细成本快照、收款、扣库存、流水；作废恢复库存留痕，日结后不可作废；店员只看自己的单）；页面 `/customers`、`/sales/new`、`/sales`、`/sales/[id]`。验收通过：开一单一机一配件 → 库存少一台一件、流水两条 → 作废后机器回在库、配件加回、再两条流水。测试 49 条。
 - 第 7 周：回收单 `src/server/tradein/trade-in-service.ts`（收旧机进回收库、成本 = 估价，转良品）；收款拆分与退款分摊纯函数 `src/server/sales/payments.ts`；开单接入以旧换新抵扣 + 多种收款（合计必须等于应收）；退货 `src/server/sales/return-service.ts`（退回库存、负数退款记在原单收款方式、抵扣不退、有退货不能作废）；页面 `/trade-ins`、`/trade-ins/new`、`/trade-ins/stock`、`/sales/[id]/return`，开单页加“以旧换新”和“再加一种收款”。迁移 `trade_in_device_code`；种子加“回收机（其他机型）”SKU。验收通过：开单现场收 iPhone 12 抵 1200 + 微信 3000 + 现金 1328 → 退掉钢化膜退 29 元 → 回收机转良品 → 1599 元卖出，毛利 399。测试 58 条。
+- 第 8 周：日结 `src/server/dailyclose/`（summary 纯函数：按支付方式汇总、差异、能否确认；daily-close-service：逐笔比对、录实收、确认后当日销售单和退货单挂日结锁定、当天不能再开单退货、总部可撤销；收银日报 cashierReport）；页面 `/daily-close`、`/reports/cashier`，导出接口 `/api/reports/cashier`（CSV 带 BOM，Excel 直接打开）。端到端 `tests/e2e/sale-daily-close.spec.ts`（`pnpm test:e2e`，用本机 Edge）：店长登录 → 开单 → 配件库存少 1 → 日结微信系统数多出这单 → 作废还原。验收通过：中山路店当天现金 1328、微信 4570（3000 + 1599 − 29）、抵扣 1200，录实收确认后锁单，再撤销留给坤总试用。单元测试 63 条。
 
 ## 进行中
 
@@ -37,7 +38,7 @@
 ## 下一步
 
 1. CI 绿勾：等坤总在项目里选公开/私有后推一次验证。
-2. 第 8 周：日结（按门店按日按支付方式汇总、和订单逐笔比对、差异标红、确认后当日单据锁定）；收银日报表与导出 Excel；Playwright 端到端一条（登录 → 开单 → 库存减 → 日结对得上）。买服务器和备案是坤总的事。
+2. 第 9 周：模拟数据生成器 v1（10 店、100 人、3 个月订单，含回收、退货，周末月末高峰，带日结）；看板 6 张；部署要等坤总买好服务器（见外层《服务器与备案指引.md》）。
 3. “第 1 到 2 周学到什么”一页纸是坤总的作业，提纲已给。
 
 ## 卡在哪
@@ -68,7 +69,8 @@ code/
 ## 常用命令
 
 - `pnpm dev`：启动开发服务器，浏览器开 http://localhost:3000 （或双击外层 `启动ERP.cmd`）
-- `pnpm test`：Vitest 单元测试
+- `pnpm test`：Vitest 单元测试（含连本机库的核心链路测试，跑完回滚）
+- `pnpm test:e2e`：Playwright 端到端一条（用本机 Edge，开发服务器开着就复用）
 - `pnpm typecheck`：先生成路由类型再做 TypeScript 检查
 - `pnpm lint`：ESLint
 - `pnpm db:migrate`：改了 schema.prisma 后生成并执行迁移

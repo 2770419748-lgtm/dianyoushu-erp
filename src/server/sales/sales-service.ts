@@ -11,6 +11,7 @@ import { canSell as deviceCanSell, DeviceStateError } from "@/server/stock/devic
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { effectivePriceFen } from "@/server/products/search";
 import { buildSalePayments, PaymentError } from "./payments";
+import { DAY_CLOSED_MESSAGE, isDayClosed } from "@/server/dailyclose/guard";
 
 // 开单服务层：选机器和配件、改价优惠、以旧换新抵扣（关联回收单）、多种收款拆分（合计必须等于应收）。
 // 口径第 11 节第 3 条：销售单、明细、收款、扣库存、写流水在一个事务里，失败全部回滚。
@@ -92,6 +93,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   const store = await tx.store.findUnique({ where: { id: data.storeId }, select: { id: true, regionId: true, isActive: true } });
   if (!store || !store.isActive) throw new SalesError("门店不存在或已停用");
   assertStoreAccess(user, store);
+  if (await isDayClosed(tx, data.storeId, todayBizDate())) throw new SalesError(DAY_CLOSED_MESSAGE);
   if (data.customerId) {
     const customer = await tx.customer.findUnique({ where: { id: data.customerId }, select: { id: true } });
     if (!customer) throw new SalesError("客户不存在");

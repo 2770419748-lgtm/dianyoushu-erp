@@ -15,3 +15,8 @@ body {
 * {
   box-sizing: border-box;
 }
+
+/* 表格里需要标红的行（日结对不上的单等） */
+.row-danger > td {
+  background: #fff1f0 !important;
+}

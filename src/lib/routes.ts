@@ -22,6 +22,9 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/trade-ins": "回收单",
   "/trade-ins/new": "新建回收单",
   "/trade-ins/stock": "回收库存",
+  "/daily-close": "日结",
+  "/reports": "报表",
+  "/reports/cashier": "收银日报",
 };
 
 /** 路径里通用的最后一段（如 /sales/12/return） */

@@ -49,6 +49,8 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "trade_in.create": "开回收单",
   "trade_in.refurbish": "回收机转良品",
   "return.create": "退货",
+  "daily_close.confirm": "日结确认",
+  "daily_close.reopen": "撤销日结",
 };
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
@@ -67,6 +69,7 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   trade_in_order: "回收单",
   return_order: "退货单",
   device: "机器",
+  daily_close: "日结",
 };
 
 export function auditActionLabel(action: string): string {

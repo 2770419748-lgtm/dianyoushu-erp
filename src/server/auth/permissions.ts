@@ -91,6 +91,11 @@ export function canSell(role: Role): boolean {
   return role === "STAFF" || role === "STORE_MANAGER" || role === "HQ";
 }
 
+/** 谁能做日结（录实收、确认）：店长（本店）、总部 */
+export function canCloseDay(role: Role): boolean {
+  return role === "STORE_MANAGER" || role === "HQ";
+}
+
 /** 谁能把回收机转良品：店长、总部 */
 export function canRefurbish(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
@@ -124,16 +129,16 @@ const MENU_STORE_MANAGER: MenuEntry[] = [
   { key: "transfers", label: "调拨", href: "/transfers" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
-  { key: "daily-close", label: "日结" },
+  { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "prices", label: "门店售价", href: "/products/prices" },
-  { key: "reports", label: "门店报表" },
+  { key: "reports", label: "收银日报", href: "/reports/cashier" },
 ];
 
 const MENU_REGIONAL: MenuEntry[] = [
   { key: "dashboard", label: "看板" },
   { key: "stores", label: "辖区门店", href: "/stores" },
   { key: "stock", label: "库存", href: "/stock" },
-  { key: "reports", label: "报表" },
+  { key: "reports", label: "收银日报", href: "/reports/cashier" },
 ];
 
 const MENU_HQ: MenuEntry[] = [
@@ -149,8 +154,8 @@ const MENU_HQ: MenuEntry[] = [
   { key: "sales-list", label: "销售", href: "/sales" },
   { key: "customers", label: "客户", href: "/customers" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
-  { key: "daily-close", label: "日结" },
-  { key: "reports", label: "报表" },
+  { key: "daily-close", label: "日结", href: "/daily-close" },
+  { key: "reports", label: "收银日报", href: "/reports/cashier" },
   { key: "kpi", label: "KPI 目标" },
   { key: "logs", label: "操作日志", href: "/logs" },
   { key: "roadmap", label: "后续规划" },

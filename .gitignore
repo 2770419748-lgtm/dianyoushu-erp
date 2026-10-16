@@ -27,3 +27,7 @@ Thumbs.db
 
 # Prisma 生成的客户端代码（pnpm install 后自动生成）
 src/generated/
+
+# Playwright 输出
+/test-results/
+/playwright-report/
