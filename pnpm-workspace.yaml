@@ -1,0 +1,7 @@
+# pnpm 12：依赖的安装脚本默认不跑，这里逐个放行。
+allowBuilds:
+  prisma: true
+  "@prisma/engines": true
+  esbuild: true
+  sharp: false
+  unrs-resolver: false

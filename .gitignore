@@ -1,19 +1,29 @@
 # 依赖
 node_modules/
 .pnpm-store/
+.pnpm-debug.log*
 
-# 环境变量：密码、密钥只放这里，永远不提交
+# 环境变量：密码、密钥只放这里，永远不提交（.env.example 是模板，可以提交）
 .env
 .env.*
 !.env.example
 
-# 构建产物
+# Next.js 构建产物
 .next/
-dist/
 out/
-coverage/
+build/
+next-env.d.ts
+*.tsbuildinfo
 
-# 日志与系统文件
+# 测试与其他产物
+coverage/
+dist/
+
+# 日志、证书、系统文件
 *.log
+*.pem
 .DS_Store
 Thumbs.db
+
+# Prisma 生成的客户端代码（pnpm install 后自动生成）
+src/generated/

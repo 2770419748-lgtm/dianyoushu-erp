@@ -1,0 +1,76 @@
+// 店有数 ERP 数据表定义。
+// 第 1 周先建组织与用户（临时版，等《业务口径》定稿后在第 3 天按口径调整并补迁移）。
+// 约定：模型 PascalCase、字段 camelCase，用 @@map/@map 映射到 snake_case 表名和列名；
+// 金额一律整数"分"，字段名以 Fen 结尾；单据不物理删除。
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// 角色：店员、店长、区域经理、总部
+enum Role {
+  STAFF            // 店员：本店开单、退货、回收、查库存、盘点录入
+  STORE_MANAGER    // 店长：本店全部 + 调拨收发、日结确认、作废、改售价
+  REGIONAL_MANAGER // 区域经理：看辖区所有门店数据和看板
+  HQ               // 总部：全部，含商品主数据、采购、组织、KPI 目标
+
+  @@map("role")
+}
+
+/// 区域
+model Region {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  stores Store[]
+  users  User[]
+
+  @@map("regions")
+}
+
+/// 门店
+model Store {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique // 门店编码，如 S001
+  name      String
+  regionId  Int      @map("region_id")
+  address   String?
+  isActive  Boolean  @default(true) @map("is_active") // 停用不删
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  region Region @relation(fields: [regionId], references: [id])
+  users  User[]
+
+  @@index([regionId])
+  @@map("stores")
+}
+
+/// 员工即登录用户
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique // 登录账号
+  passwordHash String   @map("password_hash") // bcrypt 哈希，永远不存明文
+  name         String // 姓名
+  role         Role
+  storeId      Int?     @map("store_id") // 店员、店长必填；区域经理、总部为空
+  regionId     Int?     @map("region_id") // 区域经理所辖区域
+  isActive     Boolean  @default(true) @map("is_active") // 离职/停用不删
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  store  Store?  @relation(fields: [storeId], references: [id])
+  region Region? @relation(fields: [regionId], references: [id])
+
+  @@index([storeId])
+  @@index([regionId])
+  @@map("users")
+}
