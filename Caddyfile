@@ -1,0 +1,5 @@
+# SITE_ADDRESS 是 :80（只用 IP）时走 HTTP；是域名时 Caddy 自动申请并续期 HTTPS 证书。
+{$SITE_ADDRESS} {
+	encode gzip
+	reverse_proxy app:3000
+}

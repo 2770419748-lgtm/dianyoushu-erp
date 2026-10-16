@@ -1,0 +1,58 @@
+# 一台服务器跑三样：数据库、应用、Caddy（自动申请 HTTPS 证书）。
+# 用法见 docs/部署.md。密码和密钥都放同目录的 .env（不进仓库），这里只引用变量名。
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: erp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?在 .env 里设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: dianyoushu_erp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp -d dianyoushu_erp"]
+      interval: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://erp:${POSTGRES_PASSWORD}@db:5432/dianyoushu_erp?schema=public
+      SESSION_SECRET: ${SESSION_SECRET:?在 .env 里设置 SESSION_SECRET}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 备案没下来时用 IP 访问：SITE_ADDRESS 设成 :80；有域名后设成域名，Caddy 自动上 HTTPS
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - app
+
+  # 迁移和灌演示数据：docker compose run --rm tools pnpm exec prisma migrate deploy
+  tools:
+    build:
+      context: .
+      target: build
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgresql://erp:${POSTGRES_PASSWORD}@db:5432/dianyoushu_erp?schema=public
+      ALLOW_DB_RESET: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  caddy_data:
