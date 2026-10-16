@@ -42,6 +42,10 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "stocktake.count": "录入实盘",
   "stocktake.confirm": "确认盘点",
   "stocktake.void": "作废盘点",
+  "customer.create": "新增客户",
+  "customer.update": "修改客户",
+  "sale.create": "开单",
+  "sale.void": "作废销售单",
 };
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
@@ -55,6 +59,8 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   purchase_order: "采购单",
   transfer_order: "调拨单",
   stocktake: "盘点单",
+  customer: "客户",
+  sales_order: "销售单",
 };
 
 export function auditActionLabel(action: string): string {

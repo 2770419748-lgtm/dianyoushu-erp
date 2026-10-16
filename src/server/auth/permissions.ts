@@ -86,6 +86,16 @@ export function canConfirmStocktake(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
 }
 
+/** 谁能开单、退货、开回收单、管客户：店员、店长、总部 */
+export function canSell(role: Role): boolean {
+  return role === "STAFF" || role === "STORE_MANAGER" || role === "HQ";
+}
+
+/** 谁能作废销售单、回收单：店长、总部 */
+export function canVoidSales(role: Role): boolean {
+  return role === "STORE_MANAGER" || role === "HQ";
+}
+
 export interface MenuEntry {
   key: string;
   label: string;
@@ -93,18 +103,18 @@ export interface MenuEntry {
 }
 
 const MENU_STAFF: MenuEntry[] = [
-  { key: "sales-new", label: "开单" },
+  { key: "sales-new", label: "开单", href: "/sales/new" },
   { key: "stock", label: "查库存", href: "/stock" },
   { key: "products", label: "商品查价", href: "/products" },
-  { key: "customers", label: "客户" },
-  { key: "sales-list", label: "我的订单" },
+  { key: "customers", label: "客户", href: "/customers" },
+  { key: "sales-list", label: "我的订单", href: "/sales" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
 ];
 
 // 菜单 key 与 docs/页面清单.md 的路由一一对应，后面逐页做成真链接。
 const MENU_STORE_MANAGER: MenuEntry[] = [
   ...MENU_STAFF.filter((m) => m.key !== "sales-list" && m.key !== "stocktakes"),
-  { key: "sales-list", label: "门店订单" },
+  { key: "sales-list", label: "门店订单", href: "/sales" },
   { key: "transfers", label: "调拨", href: "/transfers" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
   { key: "trade-ins", label: "回收" },
@@ -129,7 +139,9 @@ const MENU_HQ: MenuEntry[] = [
   { key: "stock", label: "库存", href: "/stock" },
   { key: "transfers", label: "调拨", href: "/transfers" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
-  { key: "sales-list", label: "销售" },
+  { key: "sales-new", label: "开单", href: "/sales/new" },
+  { key: "sales-list", label: "销售", href: "/sales" },
+  { key: "customers", label: "客户", href: "/customers" },
   { key: "trade-ins", label: "回收" },
   { key: "daily-close", label: "日结" },
   { key: "reports", label: "报表" },

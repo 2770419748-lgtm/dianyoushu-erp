@@ -16,6 +16,9 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/transfers": "调拨单",
   "/transfers/new": "新建调拨",
   "/stocktakes": "盘点",
+  "/customers": "客户",
+  "/sales": "销售单",
+  "/sales/new": "开单",
 };
 
 export interface BreadcrumbEntry {
