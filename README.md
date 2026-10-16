@@ -1,5 +1,7 @@
 # 店有数 ERP
 
+[![CI](https://github.com/2770419748-lgtm/dianyoushu-erp/actions/workflows/ci.yml/badge.svg)](https://github.com/2770419748-lgtm/dianyoushu-erp/actions/workflows/ci.yml)
+
 手机零售门店经营系统的演示版：从采购入库、串号库存、门店开单（含以旧换新）到收银日结、经营看板，一条业务链跑通。
 
 给谁看：应聘时给面试官当场演示，证明能把门店业务做成多人可用、带权限、带完整业务链的系统；也是以后真做系统时的骨架。和桌面版"店有数"（仓库 `dianyoushu`）是两个项目：桌面版在门店单机用，店有数 ERP 是多人版。
