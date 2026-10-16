@@ -20,7 +20,7 @@
 
 ## 进行中
 
-- 无。第 1 周任务全部完成。
+- 第 4 周（采购入库、串号、库存流水）刚开头：已写库存核心 `src/server/stock/`（device-state 状态机、imei 串号解析、doc-no 单号、stock-service 唯一写库入口），还没有页面、采购服务层和测试。下一步从 `src/server/purchase/purchase-service.ts` 和 `src/server/stock/stock-query.ts` 接着做，然后 /purchase、/stock 页面与单元测试。
 
 ## 下一步
 
