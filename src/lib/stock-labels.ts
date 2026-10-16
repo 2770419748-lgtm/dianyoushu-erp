@@ -1,4 +1,30 @@
-import type { DeviceStatus, LedgerDocType, PurchaseOrderStatus } from "@/generated/prisma/enums";
+import type { DeviceStatus, LedgerDocType, PurchaseOrderStatus, StocktakeStatus, TransferStatus } from "@/generated/prisma/enums";
+
+export const TRANSFER_STATUS_LABELS: Record<TransferStatus, string> = {
+  REQUESTED: "申请中",
+  SHIPPED: "已发出",
+  RECEIVED: "已收货",
+  VOIDED: "已作废",
+};
+
+export const TRANSFER_STATUS_COLORS: Record<TransferStatus, string> = {
+  REQUESTED: "orange",
+  SHIPPED: "gold",
+  RECEIVED: "green",
+  VOIDED: "red",
+};
+
+export const STOCKTAKE_STATUS_LABELS: Record<StocktakeStatus, string> = {
+  IN_PROGRESS: "进行中",
+  CONFIRMED: "已确认",
+  VOIDED: "已作废",
+};
+
+export const STOCKTAKE_STATUS_COLORS: Record<StocktakeStatus, string> = {
+  IN_PROGRESS: "blue",
+  CONFIRMED: "green",
+  VOIDED: "red",
+};
 
 // 库存相关枚举的中文说明。纯数据，客户端服务端都能用。
 

@@ -13,6 +13,9 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/stock": "库存",
   "/stock/ledger": "库存流水",
   "/stock/devices": "串号",
+  "/transfers": "调拨单",
+  "/transfers/new": "新建调拨",
+  "/stocktakes": "盘点",
 };
 
 export interface BreadcrumbEntry {

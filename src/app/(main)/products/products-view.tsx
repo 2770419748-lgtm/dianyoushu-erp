@@ -26,6 +26,7 @@ type SkuFormValues = {
   barcode?: string;
   guidePriceYuan: number;
   costPriceYuan?: number;
+  safetyQty?: number;
 };
 
 export function ProductsView({
@@ -85,6 +86,7 @@ export function ProductsView({
         barcode: record.barcode ?? undefined,
         guidePriceYuan: record.guidePriceFen / 100,
         costPriceYuan: record.costPriceFen / 100,
+        safetyQty: record.safetyQty,
       });
     }
     setModal({ open: true, record });
@@ -99,6 +101,7 @@ export function ProductsView({
       barcode: values.barcode,
       guidePriceFen: yuanToFen(values.guidePriceYuan),
       costPriceFen: yuanToFen(values.costPriceYuan ?? 0),
+      safetyQty: values.safetyQty ?? 0,
     };
     submit(
       () => (modal.record ? updateSkuAction(modal.record.id, input) : createSkuAction(input)),
@@ -241,6 +244,9 @@ export function ProductsView({
               <InputNumber min={0} precision={2} style={{ width: 160 }} />
             </Form.Item>
           </Space>
+          <Form.Item name="safetyQty" label="安全库存（小件用，门店数量低于它标红；0 = 不预警）">
+            <InputNumber min={0} precision={0} style={{ width: 160 }} />
+          </Form.Item>
         </Form>
       </Modal>
     </Card>

@@ -269,6 +269,7 @@ model Sku {
   barcode       String?  @unique
   guidePriceFen Int      @map("guide_price_fen") // 指导价
   costPriceFen  Int      @default(0) @map("cost_price_fen") // 参考成本（小件按它算毛利）
+  safetyQty     Int      @default(0) @map("safety_qty") // 小件安全库存：门店数量低于它标红；0 = 不预警
   isActive      Boolean  @default(true) @map("is_active")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")

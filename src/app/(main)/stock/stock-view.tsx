@@ -61,7 +61,22 @@ export function StockView({
     { title: "商品", render: (_, a) => a.sku.name },
     { title: "品牌 / 型号", render: (_, a) => `${a.sku.model.brand.name} ${a.sku.model.name}` },
     { title: "门店", render: (_, a) => `${a.store.code} ${a.store.name}` },
-    { title: "数量", dataIndex: "qty", align: "right", render: (v: number) => (v <= 0 ? <Tag color="red">{v}</Tag> : v) },
+    {
+      title: "数量",
+      dataIndex: "qty",
+      align: "right",
+      render: (v: number, a) =>
+        a.sku.safetyQty > 0 && v < a.sku.safetyQty ? (
+          <Space size={4}>
+            <Tag color="red">{v}</Tag>
+            <Typography.Text type="danger">低于安全库存 {a.sku.safetyQty}</Typography.Text>
+          </Space>
+        ) : v <= 0 ? (
+          <Tag color="red">{v}</Tag>
+        ) : (
+          v
+        ),
+    },
     { title: "更新时间", dataIndex: "updatedAt", render: (v: Date) => formatDateTime(v) },
   ];
 

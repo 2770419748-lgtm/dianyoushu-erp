@@ -188,10 +188,11 @@ export async function seedProducts(prisma: PrismaClient) {
       create: { brandId, categoryId: accessoryCategoryId, name: a.name },
     });
     const barcode = stableBarcode(`${a.brand}|${a.name}`);
+    // 配件默认安全库存 10 件：门店数量低于它在库存页标红
     await prisma.sku.upsert({
       where: { barcode },
-      update: { modelId: model.id, name: a.name, guidePriceFen: a.guideYuan * 100, costPriceFen: a.costYuan * 100, isActive: true },
-      create: { modelId: model.id, name: a.name, barcode, guidePriceFen: a.guideYuan * 100, costPriceFen: a.costYuan * 100 },
+      update: { modelId: model.id, name: a.name, guidePriceFen: a.guideYuan * 100, costPriceFen: a.costYuan * 100, safetyQty: 10, isActive: true },
+      create: { modelId: model.id, name: a.name, barcode, guidePriceFen: a.guideYuan * 100, costPriceFen: a.costYuan * 100, safetyQty: 10 },
     });
     skuCount++;
   }

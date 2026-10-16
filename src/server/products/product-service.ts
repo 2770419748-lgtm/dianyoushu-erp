@@ -228,11 +228,14 @@ export interface SkuInput {
   barcode?: unknown;
   guidePriceFen: unknown;
   costPriceFen?: unknown;
+  safetyQty?: unknown;
 }
 
 function parseSku(input: SkuInput) {
   const barcode = optionalText(input.barcode, 30);
   if (barcode && !/^[A-Za-z0-9-]+$/.test(barcode)) throw new ProductError("条码只能是数字、字母和横线");
+  const safetyQty = Number(input.safetyQty ?? 0);
+  if (!Number.isInteger(safetyQty) || safetyQty < 0) throw new ProductError("安全库存必须是不小于 0 的整数");
   return {
     modelId: requireId(input.modelId, "型号"),
     name: requireText(input.name, "商品名称", 80),
@@ -241,6 +244,7 @@ function parseSku(input: SkuInput) {
     barcode,
     guidePriceFen: requireFen(input.guidePriceFen, "指导价"),
     costPriceFen: requireFen(input.costPriceFen ?? 0, "参考成本"),
+    safetyQty,
   };
 }
 

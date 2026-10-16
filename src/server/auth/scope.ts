@@ -48,3 +48,8 @@ export function storeTableWhere(actor: Actor): StoreTableWhere {
 export function assertStoreAccess(actor: Actor, store: { id: number; regionId: number }): void {
   if (!canAccessStore(actor, store)) throw new PermissionError();
 }
+
+/** 只判断不抛错，给"发出店或收货店任一在范围内"这类判断用 */
+export function canAccessStoreSafe(actor: Actor, store: { id: number; regionId: number }): boolean {
+  return canAccessStore(actor, store);
+}

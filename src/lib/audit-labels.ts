@@ -34,6 +34,14 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "purchase.submit": "提交采购单",
   "purchase.void": "作废采购单",
   "purchase.receive": "到货入库",
+  "transfer.create": "申请调拨",
+  "transfer.ship": "调拨发出",
+  "transfer.receive": "调拨收货",
+  "transfer.void": "作废调拨",
+  "stocktake.create": "发起盘点",
+  "stocktake.count": "录入实盘",
+  "stocktake.confirm": "确认盘点",
+  "stocktake.void": "作废盘点",
 };
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
@@ -45,6 +53,8 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   model: "型号",
   sku: "商品",
   purchase_order: "采购单",
+  transfer_order: "调拨单",
+  stocktake: "盘点单",
 };
 
 export function auditActionLabel(action: string): string {
