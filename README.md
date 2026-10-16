@@ -14,7 +14,13 @@ Next.js（App Router）+ Prisma + PostgreSQL + Ant Design，TypeScript 全栈，
 
 ## 本地运行
 
-第 5 天搭好脚手架后补。
+1. 装好 Node 24、pnpm、PostgreSQL 17，在 PostgreSQL 里建一个空库 `dianyoushu_erp`。
+2. 把 `.env.example` 复制一份改名 `.env`，填上数据库密码。
+3. `pnpm install`（装完会自动生成 Prisma 客户端）。
+4. `pnpm db:migrate` 建表。
+5. `pnpm dev`，浏览器打开 http://localhost:3000 。
+
+常用命令见 `PROJECT_STATE.md`，开发规则见 `AGENTS.md`。
 
 ## 演示账号
 
