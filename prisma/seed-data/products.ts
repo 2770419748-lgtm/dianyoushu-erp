@@ -197,5 +197,20 @@ export async function seedProducts(prisma: PrismaClient) {
     skuCount++;
   }
 
+  // 回收用的"其他机型"：旧机对不上现有型号时选它，真实机型写在回收单上
+  const otherBrand = await prisma.brand.upsert({ where: { name: "其他" }, update: { isActive: true }, create: { name: "其他" } });
+  const otherModel = await prisma.productModel.upsert({
+    where: { brandId_name: { brandId: otherBrand.id, name: "其他回收机" } },
+    update: { categoryId: categoryIds.get("手机")!, isActive: true },
+    create: { brandId: otherBrand.id, categoryId: categoryIds.get("手机")!, name: "其他回收机" },
+  });
+  const genericBarcode = stableBarcode("其他|回收机（其他机型）");
+  await prisma.sku.upsert({
+    where: { barcode: genericBarcode },
+    update: { modelId: otherModel.id, name: "回收机（其他机型）", guidePriceFen: 0, costPriceFen: 0, isActive: true },
+    create: { modelId: otherModel.id, name: "回收机（其他机型）", barcode: genericBarcode, guidePriceFen: 0, costPriceFen: 0 },
+  });
+  skuCount++;
+
   return { models: DEVICE_MODEL_SEED.length + ACCESSORY_SEED.length, deviceModels: DEVICE_MODEL_SEED.length, accessories: ACCESSORY_SEED.length, skus: skuCount };
 }

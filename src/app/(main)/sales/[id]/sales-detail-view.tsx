@@ -21,6 +21,7 @@ export function SalesDetailView({ order, canVoid, showCost }: { order: SalesOrde
     { title: "机器 / 数量", render: (_, i) => (i.device ? <Link href={`/stock/devices/${i.device.code}`}>{i.device.code}</Link> : `× ${i.qty}`) },
     { title: "单价（元）", dataIndex: "unitPriceFen", align: "right", render: (v: number) => formatFen(v) },
     { title: "小计（元）", dataIndex: "lineTotalFen", align: "right", render: (v: number) => formatFen(v) },
+    { title: "已退", dataIndex: "returnedQty", align: "right", render: (v: number) => (v > 0 ? <Tag color="orange">{v}</Tag> : "-") },
     ...(showCost
       ? [
           { title: "成本（元）", dataIndex: "costFen", align: "right" as const, render: (v: number) => formatFen(v) },
@@ -50,7 +51,12 @@ export function SalesDetailView({ order, canVoid, showCost }: { order: SalesOrde
                 再开一单
               </Button>
             </Link>
-            {canVoid && order.status === "COMPLETED" && !order.dailyCloseId ? (
+            {order.status === "COMPLETED" && order.items.some((i) => i.returnedQty < i.qty) ? (
+              <Link href={`/sales/${order.id}/return`}>
+                <Button size="small">退货</Button>
+              </Link>
+            ) : null}
+            {canVoid && order.status === "COMPLETED" && !order.dailyCloseId && order.returnOrders.length === 0 ? (
               <Popconfirm
                 title="作废这张单？机器回在库、配件加回数量，收款作废。"
                 description={<Input placeholder="作废原因" value={reason} onChange={(e) => setReason(e.target.value)} />}
@@ -92,10 +98,33 @@ export function SalesDetailView({ order, canVoid, showCost }: { order: SalesOrde
         {order.payments.map((p) => (
           <Typography.Paragraph key={p.id} style={{ marginBottom: 4 }}>
             {PAYMENT_METHOD_LABELS[p.method]}：{formatFen(p.amountFen)} 元
+            {p.method === "TRADE_IN" ? <Typography.Text type="secondary">（回收单 {p.reference ?? order.tradeInOrder?.orderNo ?? ""}）</Typography.Text> : null}
             {order.status === "VOIDED" ? <Tag style={{ marginLeft: 8 }}>已作废</Tag> : null}
           </Typography.Paragraph>
         ))}
+        {order.tradeInOrder ? (
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            以旧换新：{order.tradeInOrder.modelName}，旧机 <Link href={`/stock/devices/${order.tradeInOrder.deviceCode}`}>{order.tradeInOrder.deviceCode}</Link>，估价 {formatFen(order.tradeInOrder.appraisedFen)} 元
+          </Typography.Paragraph>
+        ) : null}
       </Card>
+      {order.returnOrders.length > 0 ? (
+        <Card title={`退货记录（${order.returnOrders.length}）`}>
+          {order.returnOrders.map((r) => (
+            <Card key={r.id} size="small" style={{ marginBottom: 8 }} title={`${r.orderNo} · ${formatDateTime(r.createdAt)} · ${r.handledBy.name}`}>
+              {r.items.map((i) => (
+                <Typography.Paragraph key={i.id} style={{ marginBottom: 4 }}>
+                  {i.sku.name} {i.device ? i.device.code : `× ${i.qty}`}
+                </Typography.Paragraph>
+              ))}
+              <Typography.Text>
+                退款 {formatFen(r.refundFen)} 元{r.payments[0] ? `（${PAYMENT_METHOD_LABELS[r.payments[0].method]}）` : ""}
+                {r.reason ? ` · ${r.reason}` : ""}
+              </Typography.Text>
+            </Card>
+          ))}
+        </Card>
+      ) : null}
     </Space>
   );
 }

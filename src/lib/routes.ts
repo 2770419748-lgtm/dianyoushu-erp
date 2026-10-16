@@ -19,7 +19,13 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/customers": "客户",
   "/sales": "销售单",
   "/sales/new": "开单",
+  "/trade-ins": "回收单",
+  "/trade-ins/new": "新建回收单",
+  "/trade-ins/stock": "回收库存",
 };
+
+/** 路径里通用的最后一段（如 /sales/12/return） */
+const SEGMENT_TITLES: Record<string, string> = { return: "退货", edit: "编辑", new: "新建" };
 
 export interface BreadcrumbEntry {
   href?: string; // 最后一级没有链接
@@ -37,7 +43,7 @@ export function breadcrumbFor(pathname: string): BreadcrumbEntry[] {
     acc += `/${segment}`;
     const isLast = index === segments.length - 1;
     const known = ROUTE_TITLES[acc];
-    const title = known ?? (/^\d+$/.test(segment) ? "详情" : segment);
+    const title = known ?? SEGMENT_TITLES[segment] ?? (/^\d+$/.test(segment) ? "详情" : segment);
     items.push(isLast ? { title } : { href: acc, title });
   });
   return items;

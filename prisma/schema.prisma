@@ -714,7 +714,7 @@ model TradeInOrder {
   storeId      Int           @map("store_id")
   customerId   Int?          @map("customer_id")
   handledById  Int           @map("handled_by_id")
-  imei         String // 旧机串号；同时会建一条 Device（状态回收）
+  deviceCode   String        @map("device_code") // 旧机主码（SN / IMEI1 / IMEI2 规则同入库）；同时会建一条 Device（状态回收）
   modelName    String        @map("model_name") // 旧机机型描述（可能不在我们的 SKU 里）
   skuId        Int?          @map("sku_id") // 能对上 SKU 时填
   condition    String // 成色：全新 / 95 新 / 9 成新 / 8 成新 / 有损

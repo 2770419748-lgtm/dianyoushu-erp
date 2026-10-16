@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
 import * as sales from "@/server/sales/sales-service";
+import { createReturn, ReturnError, type ReturnInput } from "@/server/sales/return-service";
 
 export type SalesActionResult = { ok: true; id?: number; orderNo?: string } | { ok: false; error: string };
 
@@ -39,5 +40,23 @@ export async function searchSellableDevicesAction(storeId: number, q: string) {
     return await sales.searchSellableDevices(user, storeId, q);
   } catch {
     return [];
+  }
+}
+
+/** 退货：选原单明细退回、按原收款方式退款 */
+export async function createReturnAction(input: ReturnInput): Promise<SalesActionResult> {
+  const user = await requireUser();
+  try {
+    const result = await createReturn(user, input);
+    revalidatePath("/sales");
+    revalidatePath("/sales/[id]", "page");
+    revalidatePath("/stock");
+    revalidatePath("/stock/ledger");
+    revalidatePath("/trade-ins/stock");
+    return { ok: true, id: result.id, orderNo: result.orderNo };
+  } catch (error) {
+    if (error instanceof ReturnError || error instanceof PermissionError) return { ok: false, error: error.message };
+    console.error(error);
+    return { ok: false, error: "操作失败，请稍后再试" };
   }
 }

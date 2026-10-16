@@ -1,8 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
-import type { PaymentMethod } from "@/generated/prisma/enums";
-import { PAYMENT_METHODS_FOR_SALE, maskPhone } from "@/lib/sales-labels";
+import { maskPhone } from "@/lib/sales-labels";
 import { canSell, canVoidSales } from "@/server/auth/permissions";
 import { assertStoreAccess, PermissionError, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
@@ -11,8 +10,9 @@ import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { canSell as deviceCanSell, DeviceStateError } from "@/server/stock/device-state";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { effectivePriceFen } from "@/server/products/search";
+import { buildSalePayments, PaymentError } from "./payments";
 
-// 开单服务层（第 6 周第一版：一种支付方式，不含以旧换新）。
+// 开单服务层：选机器和配件、改价优惠、以旧换新抵扣（关联回收单）、多种收款拆分（合计必须等于应收）。
 // 口径第 11 节第 3 条：销售单、明细、收款、扣库存、写流水在一个事务里，失败全部回滚。
 // *Tx 版本接收调用方的事务（测试里可以回滚），不带 Tx 的版本自己开事务。
 
@@ -32,7 +32,9 @@ export interface SalesOrderInput {
   customerId?: unknown;
   items: SalesItemInput[];
   discountFen?: unknown;
-  paymentMethod: unknown;
+  tradeInOrderId?: unknown; // 以旧换新：关联一张本店未用过的回收单，估价全额抵扣
+  payments?: { method: unknown; amountFen: unknown }[]; // 手工收款，可以拆多种
+  paymentMethod?: unknown; // 兼容只收一种的写法：剩余金额全按这一种收
   note?: unknown;
 }
 
@@ -67,10 +69,9 @@ function parseOrder(input: SalesOrderInput) {
   });
   if (new Set(deviceLines.map((d) => d.deviceId)).size !== deviceLines.length) throw new SalesError("同一台机器选了两次");
   const discountFen = optionalFen(input.discountFen, "整单优惠") ?? 0;
-  const paymentMethod = input.paymentMethod as PaymentMethod;
-  if (!PAYMENT_METHODS_FOR_SALE.includes(paymentMethod)) throw new SalesError("请选择收款方式");
+  const tradeInOrderId = input.tradeInOrderId ? requireId(input.tradeInOrderId, "回收单") : null;
   const note = typeof input.note === "string" ? input.note.trim().slice(0, 200) || null : null;
-  return { storeId, customerId, deviceLines, accessoryLines, discountFen, paymentMethod, note };
+  return { storeId, customerId, deviceLines, accessoryLines, discountFen, tradeInOrderId, note };
 }
 
 async function resolveUnitPrice(tx: Tx, storeId: number, skuId: number, guidePriceFen: number): Promise<number> {
@@ -118,20 +119,49 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   if (data.discountFen > subtotalFen) throw new SalesError("优惠不能超过商品合计");
   const totalFen = subtotalFen - data.discountFen;
 
+  // 以旧换新：回收单必须是本店、已完成、没被别的销售单用过；估价全额抵扣
+  let tradeIn: { id: number; orderNo: string; appraisedFen: number; customerId: number | null } | null = null;
+  if (data.tradeInOrderId) {
+    const t = await tx.tradeInOrder.findUnique({ where: { id: data.tradeInOrderId }, include: { salesOrder: { select: { id: true } } } });
+    if (!t || t.status !== "COMPLETED") throw new SalesError("回收单不存在或已作废");
+    if (t.storeId !== data.storeId) throw new SalesError("回收单不是本店的");
+    if (t.salesOrder) throw new SalesError(`回收单 ${t.orderNo} 已经抵扣过别的销售单`);
+    tradeIn = { id: t.id, orderNo: t.orderNo, appraisedFen: t.appraisedFen, customerId: t.customerId };
+  }
+
+  // 收款：抵扣 + 手工收款，合计必须正好等于应收
+  const manual = Array.isArray(input.payments)
+    ? input.payments
+    : input.paymentMethod
+      ? [{ method: input.paymentMethod, amountFen: totalFen - (tradeIn?.appraisedFen ?? 0) }]
+      : [];
+  let payments;
+  try {
+    payments = buildSalePayments(totalFen, tradeIn?.appraisedFen ?? 0, manual);
+  } catch (error) {
+    if (error instanceof PaymentError) throw new SalesError(error.message);
+    throw error;
+  }
+
   const orderNo = await nextDocNo(tx, "SO");
   const order = await tx.salesOrder.create({
     data: {
       orderNo,
       storeId: data.storeId,
-      customerId: data.customerId,
+      customerId: data.customerId ?? tradeIn?.customerId ?? null,
       salespersonId: user.id,
       bizDate: todayBizDate(),
       subtotalFen,
       discountFen: data.discountFen,
       totalFen,
       note: data.note,
+      tradeInOrderId: tradeIn?.id ?? null,
       items: { create: lines },
-      payments: { create: [{ method: data.paymentMethod, amountFen: totalFen }] },
+      payments: {
+        create: payments.map((p) =>
+          p.method === "TRADE_IN" && tradeIn ? { method: p.method, amountFen: p.amountFen, tradeInOrderId: tradeIn.id, reference: tradeIn.orderNo } : { method: p.method, amountFen: p.amountFen },
+        ),
+      },
     },
   });
 
@@ -147,7 +177,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     wrapStockError(error);
   }
 
-  await writeAudit({ userId: user.id, action: "sale.create", entity: "sales_order", entityId: order.id, detail: { orderNo, totalFen, lines: lines.length } }, tx);
+  await writeAudit({ userId: user.id, action: "sale.create", entity: "sales_order", entityId: order.id, detail: { orderNo, totalFen, lines: lines.length, tradeIn: tradeIn?.orderNo ?? null, payments: payments.map((p) => p.method) } }, tx);
   return { id: order.id, orderNo };
 }
 
@@ -159,11 +189,12 @@ export async function createSalesOrder(user: CurrentUser, input: SalesOrderInput
 
 export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: number, reason: unknown) {
   if (!canVoidSales(user.role)) throw new SalesError("只有店长和总部能作废销售单");
-  const order = await tx.salesOrder.findUnique({ where: { id: orderId }, include: { store: true, items: true } });
+  const order = await tx.salesOrder.findUnique({ where: { id: orderId }, include: { store: true, items: true, _count: { select: { returnOrders: true } } } });
   if (!order) throw new SalesError("销售单不存在");
   assertStoreAccess(user, order.store);
   if (order.status !== "COMPLETED") throw new SalesError("这张单已经作废了");
   if (order.dailyCloseId) throw new SalesError("当日已日结确认，不能作废");
+  if (order._count.returnOrders > 0) throw new SalesError("这张单已经有退货记录，不能作废，剩下的继续走退货");
   const voidReason = typeof reason === "string" ? reason.trim().slice(0, 200) || null : null;
 
   try {
@@ -177,7 +208,11 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
   } catch (error) {
     wrapStockError(error);
   }
-  await tx.salesOrder.update({ where: { id: orderId }, data: { status: "VOIDED", voidedById: user.id, voidedAt: new Date(), voidReason } });
+  // 关联的回收单放回去：旧机还在店里，回收单可以抵扣下一张单（抵扣记录的 reference 里还留着回收单号）
+  if (order.tradeInOrderId) {
+    await tx.payment.updateMany({ where: { salesOrderId: orderId, tradeInOrderId: order.tradeInOrderId }, data: { tradeInOrderId: null } });
+  }
+  await tx.salesOrder.update({ where: { id: orderId }, data: { status: "VOIDED", voidedById: user.id, voidedAt: new Date(), voidReason, tradeInOrderId: null } });
   await writeAudit({ userId: user.id, action: "sale.void", entity: "sales_order", entityId: orderId, detail: { reason: voidReason } }, tx);
 }
 
@@ -229,7 +264,12 @@ export async function getSalesOrder(user: CurrentUser, id: number) {
       salesperson: { select: { id: true, name: true } },
       voidedBy: { select: { name: true } },
       items: { include: { sku: { select: { name: true } }, device: { select: { code: true } } } },
-      payments: true,
+      payments: { orderBy: { id: "asc" } },
+      tradeInOrder: { select: { id: true, orderNo: true, modelName: true, deviceCode: true, appraisedFen: true } },
+      returnOrders: {
+        orderBy: { id: "asc" },
+        include: { handledBy: { select: { name: true } }, payments: true, items: { include: { sku: { select: { name: true } }, device: { select: { code: true } } } } },
+      },
     },
   });
   if (!order) return null;
@@ -257,14 +297,18 @@ export async function searchSellableDevices(user: CurrentUser, storeId: number, 
     },
     orderBy: [{ skuId: "asc" }, { code: "asc" }],
     take: 50,
-    include: { sku: { select: { id: true, name: true, guidePriceFen: true, storePrices: { where: { storeId }, select: { priceFen: true } } } } },
+    include: {
+      sku: { select: { id: true, name: true, guidePriceFen: true, storePrices: { where: { storeId }, select: { priceFen: true } } } },
+      tradeInOrder: { select: { modelName: true } },
+    },
   });
   return devices.map((d) => ({
     id: d.id,
     code: d.code,
     status: d.status,
     skuId: d.sku.id,
-    skuName: d.sku.name,
+    // 良品（回收机）显示回收单上写的真实机型
+    skuName: d.status === "REFURBISHED" ? `良品 · ${d.tradeInOrder?.modelName ?? d.sku.name}` : d.sku.name,
     priceFen: effectivePriceFen(d.sku.guidePriceFen, d.sku.storePrices[0]?.priceFen ?? null),
   }));
 }

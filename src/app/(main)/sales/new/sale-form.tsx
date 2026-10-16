@@ -8,7 +8,9 @@ import type { PaymentMethod } from "@/generated/prisma/enums";
 import { formatFen, yuanToFen } from "@/lib/format";
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS_FOR_SALE } from "@/lib/sales-labels";
 import type { SellableAccessory, SellableDevice } from "@/server/sales/sales-service";
+import type { AvailableTradeIn } from "@/server/tradein/trade-in-service";
 import { createCustomerAction, searchCustomersAction } from "../../customers/actions";
+import { TradeInForm, type CreatedTradeIn, type TradeInSkuOption } from "../../trade-ins/trade-in-form";
 import { createSalesOrderAction, searchSellableDevicesAction } from "../actions";
 
 interface Line {
@@ -24,14 +26,40 @@ interface Line {
   listPriceFen: number; // 门店售价/指导价，改价时参照
 }
 
+interface PaymentRow {
+  key: number;
+  method: PaymentMethod;
+  amountYuan: number | null;
+}
+
+interface TradeInPick {
+  id: number;
+  orderNo: string;
+  modelName: string;
+  deviceCode: string;
+  appraisedFen: number;
+}
+
 interface CustomerPick {
   id: number;
   name: string;
   phoneMasked: string;
 }
 
-// 开单第一版：选客户 → 选机器/加配件 → 改价优惠 → 一种收款方式 → 提交（一个事务扣库存）。
-export function SaleForm({ stores, storeId, accessories }: { stores: { id: number; label: string }[]; storeId: number; accessories: SellableAccessory[] }) {
+// 开单：选客户 → 选机器/加配件 → 改价优惠 → 以旧换新抵扣（可选）→ 多种收款拆分 → 提交（一个事务扣库存）。
+export function SaleForm({
+  stores,
+  storeId,
+  accessories,
+  availableTradeIns,
+  tradeInSkuOptions,
+}: {
+  stores: { id: number; label: string }[];
+  storeId: number;
+  accessories: SellableAccessory[];
+  availableTradeIns: AvailableTradeIn[];
+  tradeInSkuOptions: TradeInSkuOption[];
+}) {
   const router = useRouter();
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
@@ -48,12 +76,39 @@ export function SaleForm({ stores, storeId, accessories }: { stores: { id: numbe
 
   const [lines, setLines] = useState<Line[]>([]);
   const [discountYuan, setDiscountYuan] = useState<number>(0);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("WECHAT");
+  const [payments, setPayments] = useState<PaymentRow[]>([{ key: 1, method: "WECHAT", amountYuan: null }]);
   const [note, setNote] = useState("");
+
+  const [tradeIn, setTradeIn] = useState<TradeInPick | null>(null);
+  const [tradeInOptions, setTradeInOptions] = useState<TradeInPick[]>(availableTradeIns);
+  const [tradeInModalOpen, setTradeInModalOpen] = useState(false);
 
   const subtotalFen = useMemo(() => lines.reduce((s, l) => s + l.unitPriceFen * l.qty, 0), [lines]);
   const discountFen = Math.min(yuanToFen(discountYuan) || 0, subtotalFen);
   const totalFen = subtotalFen - discountFen;
+  const tradeInFen = tradeIn?.appraisedFen ?? 0;
+  const needFen = totalFen - tradeInFen; // 抵扣之后还要客户付的
+  // 只有一行收款且没填金额时，默认收剩下的全部
+  const paymentFen = (row: PaymentRow) => (row.amountYuan === null ? (payments.length === 1 ? Math.max(needFen, 0) : 0) : yuanToFen(row.amountYuan) || 0);
+  const paidFen = payments.reduce((s, p) => s + paymentFen(p), 0);
+  const gapFen = needFen - paidFen; // 正数 = 还差，负数 = 多收
+
+  function onTradeInCreated(t: CreatedTradeIn) {
+    const pick = { id: t.id, orderNo: t.orderNo, modelName: t.modelName, deviceCode: t.deviceCode, appraisedFen: t.appraisedFen };
+    setTradeInOptions([pick, ...tradeInOptions]);
+    setTradeIn(pick);
+    setTradeInModalOpen(false);
+  }
+
+  function updatePayment(key: number, patch: Partial<PaymentRow>) {
+    setPayments(payments.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+  }
+
+  /** 把这一行改成"剩下没收的全部" */
+  function fillPayment(key: number) {
+    const others = payments.filter((p) => p.key !== key).reduce((s, p) => s + paymentFen(p), 0);
+    updatePayment(key, { amountYuan: Math.max(needFen - others, 0) / 100 });
+  }
 
   async function searchCustomers(q: string) {
     if (!q.trim()) return setCustomerResults([]);
@@ -98,7 +153,8 @@ export function SaleForm({ stores, storeId, accessories }: { stores: { id: numbe
         customerId: customer?.id,
         items: lines.map((l) => (l.kind === "device" ? { deviceId: l.deviceId, unitPriceFen: l.unitPriceFen } : { skuId: l.skuId, qty: l.qty, unitPriceFen: l.unitPriceFen })),
         discountFen,
-        paymentMethod,
+        tradeInOrderId: tradeIn?.id,
+        payments: payments.map((p) => ({ method: p.method, amountFen: paymentFen(p) })),
         note,
       });
       if (!result.ok) {
@@ -196,19 +252,77 @@ export function SaleForm({ stores, storeId, accessories }: { stores: { id: numbe
               <span>应收</span>
               <Typography.Title level={4} style={{ margin: 0 }}>{formatFen(totalFen)} 元</Typography.Title>
             </Space>
-            <Space>
-              <span>收款方式</span>
-              <Select value={paymentMethod} style={{ width: 160 }} onChange={setPaymentMethod} options={PAYMENT_METHODS_FOR_SALE.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] }))} />
-              <Typography.Text type="secondary">实收 {formatFen(totalFen)} 元</Typography.Text>
-            </Space>
+            <Card size="small" title="以旧换新" extra={<Button size="small" onClick={() => setTradeInModalOpen(true)}>现场收旧机</Button>}>
+              <Select
+                allowClear
+                placeholder="不用就留空；选一张本店未用的回收单抵扣"
+                style={{ width: "100%" }}
+                value={tradeIn?.id}
+                onChange={(id) => setTradeIn(tradeInOptions.find((t) => t.id === id) ?? null)}
+                options={tradeInOptions.map((t) => ({ value: t.id, label: `${t.orderNo} · ${t.modelName} · 抵 ${formatFen(t.appraisedFen)} 元` }))}
+              />
+              {tradeIn ? (
+                <Typography.Text type={tradeInFen > totalFen ? "danger" : "secondary"} style={{ display: "block", marginTop: 8 }}>
+                  抵扣 {formatFen(tradeInFen)} 元{tradeInFen > totalFen ? "，超过应收了，换一张或加商品" : ""}
+                </Typography.Text>
+              ) : null}
+            </Card>
+            <Card size="small" title={`收款（还要付 ${formatFen(Math.max(needFen, 0))} 元）`}>
+              <Space orientation="vertical" style={{ width: "100%" }}>
+                {payments.map((p) => (
+                  <Space key={p.key} wrap>
+                    <Select
+                      value={p.method}
+                      style={{ width: 120 }}
+                      onChange={(m) => updatePayment(p.key, { method: m })}
+                      options={PAYMENT_METHODS_FOR_SALE.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m], disabled: payments.some((x) => x.key !== p.key && x.method === m) }))}
+                    />
+                    <InputNumber
+                      min={0}
+                      precision={2}
+                      style={{ width: 130 }}
+                      placeholder={payments.length === 1 ? (Math.max(needFen, 0) / 100).toFixed(2) : "0.00"}
+                      value={p.amountYuan}
+                      onChange={(v) => updatePayment(p.key, { amountYuan: v === null ? null : Number(v) })}
+                    />
+                    <Button size="small" onClick={() => fillPayment(p.key)}>
+                      补齐
+                    </Button>
+                    {payments.length > 1 ? (
+                      <Button size="small" type="link" danger onClick={() => setPayments(payments.filter((x) => x.key !== p.key))}>
+                        删
+                      </Button>
+                    ) : null}
+                  </Space>
+                ))}
+                <Space wrap>
+                  <Button
+                    size="small"
+                    disabled={payments.length >= PAYMENT_METHODS_FOR_SALE.length}
+                    onClick={() => {
+                      const used = new Set(payments.map((x) => x.method));
+                      const method = PAYMENT_METHODS_FOR_SALE.find((m) => !used.has(m))!;
+                      setPayments([...payments.map((x) => (x.amountYuan === null ? { ...x, amountYuan: paymentFen(x) / 100 } : x)), { key: Date.now(), method, amountYuan: null }]);
+                    }}
+                  >
+                    再加一种收款
+                  </Button>
+                  {gapFen === 0 ? <Tag color="green">收款已对上</Tag> : <Tag color="red">{gapFen > 0 ? `还差 ${formatFen(gapFen)} 元` : `多收 ${formatFen(-gapFen)} 元`}</Tag>}
+                </Space>
+              </Space>
+            </Card>
             <Input placeholder="备注" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} />
-            <Button type="primary" size="large" block loading={pending} onClick={submit} disabled={lines.length === 0}>
+            <Button type="primary" size="large" block loading={pending} onClick={submit} disabled={lines.length === 0 || gapFen !== 0 || tradeInFen > totalFen}>
               提交开单
             </Button>
             <Typography.Text type="secondary">提交后机器变已售、配件减数量，都在库存流水里有记录；作废要店长。</Typography.Text>
           </Space>
         </Card>
       </Col>
+
+      <Modal title="以旧换新：现场收旧机" open={tradeInModalOpen} onCancel={() => setTradeInModalOpen(false)} footer={null} destroyOnHidden width={640}>
+        <TradeInForm storeId={storeId} customerId={customer?.id} skuOptions={tradeInSkuOptions} onCreated={onTradeInCreated} submitText="收下旧机并用来抵扣" />
+      </Modal>
 
       <Modal title="新建客户" open={customerModalOpen} confirmLoading={pending} onCancel={() => setCustomerModalOpen(false)} onOk={() => customerForm.submit()} destroyOnHidden>
         <Form
