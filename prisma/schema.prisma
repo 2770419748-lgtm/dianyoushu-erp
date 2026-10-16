@@ -1,7 +1,6 @@
-// 店有数 ERP 数据表定义。
-// 第 1 周先建组织与用户（临时版，等《业务口径》定稿后在第 3 天按口径调整并补迁移）。
+// 店有数 ERP 数据表定义（第 3 天，按 docs/业务口径.md v0 设计，中文说明见 docs/数据模型.md）。
 // 约定：模型 PascalCase、字段 camelCase，用 @@map/@map 映射到 snake_case 表名和列名；
-// 金额一律整数"分"，字段名以 Fen 结尾；单据不物理删除。
+// 金额一律整数"分"，字段名以 Fen 结尾；数量字段 qty；单据不物理删除，只有作废状态。
 
 generator client {
   provider = "prisma-client"
@@ -12,15 +11,122 @@ datasource db {
   provider = "postgresql"
 }
 
+// ============================================================
+// 枚举
+// ============================================================
+
 /// 角色：店员、店长、区域经理、总部
 enum Role {
-  STAFF            // 店员：本店开单、退货、回收、查库存、盘点录入
-  STORE_MANAGER    // 店长：本店全部 + 调拨收发、日结确认、作废、改售价
-  REGIONAL_MANAGER // 区域经理：看辖区所有门店数据和看板
-  HQ               // 总部：全部，含商品主数据、采购、组织、KPI 目标
+  STAFF            // 店员
+  STORE_MANAGER    // 店长
+  REGIONAL_MANAGER // 区域经理
+  HQ               // 总部
 
   @@map("role")
 }
+
+/// 商品管理方式：大件按串号一机一码，小件按数量
+enum SkuKind {
+  DEVICE    // 大件：手机、平板、电脑
+  ACCESSORY // 小件：配件、号卡
+
+  @@map("sku_kind")
+}
+
+/// 串号机器状态（口径第 4 节状态机）
+enum DeviceStatus {
+  IN_TRANSIT  // 在途：调拨已发出未收货
+  IN_STOCK    // 在库：可开单
+  SOLD        // 已售
+  RECYCLED    // 回收：以旧换新收回的旧机，未检测
+  REFURBISHED // 良品：回收机检测合格，可开单
+  LOCKED      // 锁定：调拨已申请未发出
+  LOST        // 盘亏：盘点确认少了
+
+  @@map("device_status")
+}
+
+enum PurchaseOrderStatus {
+  DRAFT     // 草稿
+  SUBMITTED // 已提交
+  RECEIVED  // 已到货（全部到齐）
+  VOIDED    // 已作废
+
+  @@map("purchase_order_status")
+}
+
+enum TransferStatus {
+  REQUESTED // 申请
+  SHIPPED   // 已发出
+  RECEIVED  // 已收货
+  VOIDED    // 已作废
+
+  @@map("transfer_status")
+}
+
+enum StocktakeStatus {
+  IN_PROGRESS // 进行中
+  CONFIRMED   // 已确认
+  VOIDED      // 已作废
+
+  @@map("stocktake_status")
+}
+
+enum SalesOrderStatus {
+  COMPLETED // 已完成
+  VOIDED    // 已作废
+
+  @@map("sales_order_status")
+}
+
+enum TradeInStatus {
+  COMPLETED // 已完成
+  VOIDED    // 已作废
+
+  @@map("trade_in_status")
+}
+
+enum DailyCloseStatus {
+  PENDING   // 未确认
+  CONFIRMED // 已确认
+
+  @@map("daily_close_status")
+}
+
+/// 支付方式（口径第 6 节）
+enum PaymentMethod {
+  CASH        // 现金
+  WECHAT      // 微信
+  ALIPAY      // 支付宝
+  CARD        // 刷卡
+  INSTALLMENT // 分期
+  TRADE_IN    // 以旧换新抵扣
+  OTHER       // 其他
+
+  @@map("payment_method")
+}
+
+/// 库存流水的单据类型
+enum LedgerDocType {
+  PURCHASE_RECEIPT // 采购入库 +
+  TRANSFER_LOCK    // 调拨申请锁定（数量不变，只记状态）
+  TRANSFER_UNLOCK  // 调拨作废解锁（数量不变）
+  TRANSFER_OUT     // 调拨发出 −
+  TRANSFER_IN      // 调拨收货 +
+  STOCKTAKE_GAIN   // 盘盈 +
+  STOCKTAKE_LOSS   // 盘亏 −
+  SALE             // 销售出库 −
+  SALE_VOID        // 销售作废恢复 +
+  RETURN           // 退货入库 +
+  TRADE_IN         // 回收入库 +
+  REFURBISH        // 回收转良品（数量不变，只记状态）
+
+  @@map("ledger_doc_type")
+}
+
+// ============================================================
+// 组织与用户
+// ============================================================
 
 /// 区域
 model Region {
@@ -48,7 +154,22 @@ model Store {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   region Region @relation(fields: [regionId], references: [id])
-  users  User[]
+
+  users           User[]
+  storePrices     StorePrice[]
+  devices         Device[]
+  accessoryStocks AccessoryStock[]
+  ledgers         StockLedger[]
+  purchaseOrders  PurchaseOrder[]
+  goodsReceipts   GoodsReceipt[]
+  transfersOut    TransferOrder[]  @relation("TransferFromStore")
+  transfersIn     TransferOrder[]  @relation("TransferToStore")
+  stocktakes      Stocktake[]
+  salesOrders     SalesOrder[]
+  returnOrders    ReturnOrder[]
+  tradeInOrders   TradeInOrder[]
+  dailyCloses     DailyClose[]
+  kpiTargets      KpiTarget[]
 
   @@index([regionId])
   @@map("stores")
@@ -70,7 +191,633 @@ model User {
   store  Store?  @relation(fields: [storeId], references: [id])
   region Region? @relation(fields: [regionId], references: [id])
 
+  purchaseOrdersCreated PurchaseOrder[]
+  goodsReceipts         GoodsReceipt[]
+  transfersRequested    TransferOrder[] @relation("TransferRequestedBy")
+  transfersShipped      TransferOrder[] @relation("TransferShippedBy")
+  transfersReceived     TransferOrder[] @relation("TransferReceivedBy")
+  stocktakesCreated     Stocktake[]     @relation("StocktakeCreatedBy")
+  stocktakesConfirmed   Stocktake[]     @relation("StocktakeConfirmedBy")
+  salesOrders           SalesOrder[]    @relation("SalesOrderSalesperson")
+  salesOrdersVoided     SalesOrder[]    @relation("SalesOrderVoidedBy")
+  returnOrders          ReturnOrder[]
+  tradeInOrders         TradeInOrder[]  @relation("TradeInHandledBy")
+  tradeInOrdersVoided   TradeInOrder[]  @relation("TradeInVoidedBy")
+  dailyClosesConfirmed  DailyClose[]
+  ledgers               StockLedger[]
+  auditLogs             AuditLog[]
+
   @@index([storeId])
   @@index([regionId])
   @@map("users")
+}
+
+// ============================================================
+// 商品主数据
+// ============================================================
+
+/// 品类：一级，带大件/小件标记
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  kind      SkuKind
+  sortOrder Int      @default(0) @map("sort_order")
+  isActive  Boolean  @default(true) @map("is_active")
+
+  models ProductModel[]
+
+  @@map("categories")
+}
+
+/// 品牌
+model Brand {
+  id       Int     @id @default(autoincrement())
+  name     String  @unique
+  isActive Boolean @default(true) @map("is_active")
+
+  models ProductModel[]
+
+  @@map("brands")
+}
+
+/// 型号：品牌 + 品类 + 名称，如 华为 Mate 70
+model ProductModel {
+  id         Int      @id @default(autoincrement())
+  brandId    Int      @map("brand_id")
+  categoryId Int      @map("category_id")
+  name       String
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  brand    Brand    @relation(fields: [brandId], references: [id])
+  category Category @relation(fields: [categoryId], references: [id])
+  skus     Sku[]
+
+  @@unique([brandId, name])
+  @@index([categoryId])
+  @@map("product_models")
+}
+
+/// SKU = 型号 + 颜色 + 容量
+model Sku {
+  id            Int      @id @default(autoincrement())
+  modelId       Int      @map("model_id")
+  name          String // 显示名，如 "Mate 70 12GB+256GB 曜金黑"
+  color         String?
+  storage       String? // 容量，如 "12GB+256GB"
+  barcode       String?  @unique
+  guidePriceFen Int      @map("guide_price_fen") // 指导价
+  costPriceFen  Int      @default(0) @map("cost_price_fen") // 参考成本（小件按它算毛利）
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  model ProductModel @relation(fields: [modelId], references: [id])
+
+  storePrices     StorePrice[]
+  devices         Device[]
+  accessoryStocks AccessoryStock[]
+  ledgers         StockLedger[]
+  purchaseItems   PurchaseOrderItem[]
+  receiptItems    GoodsReceiptItem[]
+  transferItems   TransferItem[]
+  stocktakeItems  StocktakeItem[]
+  salesItems      SalesOrderItem[]
+  returnItems     ReturnOrderItem[]
+  tradeInOrders   TradeInOrder[]
+
+  @@index([modelId])
+  @@map("skus")
+}
+
+/// 门店售价：按门店覆盖指导价
+model StorePrice {
+  id        Int      @id @default(autoincrement())
+  storeId   Int      @map("store_id")
+  skuId     Int      @map("sku_id")
+  priceFen  Int      @map("price_fen")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  store Store @relation(fields: [storeId], references: [id])
+  sku   Sku   @relation(fields: [skuId], references: [id])
+
+  @@unique([storeId, skuId])
+  @@map("store_prices")
+}
+
+// ============================================================
+// 库存
+// ============================================================
+
+/// 串号机器：一台一条
+model Device {
+  id             Int          @id @default(autoincrement())
+  imei           String       @unique // 15 位数字
+  skuId          Int          @map("sku_id")
+  storeId        Int          @map("store_id") // 当前归属门店；在途时仍是发出店
+  status         DeviceStatus
+  costFen        Int          @map("cost_fen") // 采购成本或回收估价
+  condition      String? // 成色（回收机）
+  goodsReceiptId Int?         @map("goods_receipt_id") // 采购入库来源
+  tradeInOrderId Int?         @unique @map("trade_in_order_id") // 回收来源
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  sku          Sku           @relation(fields: [skuId], references: [id])
+  store        Store         @relation(fields: [storeId], references: [id])
+  goodsReceipt GoodsReceipt? @relation(fields: [goodsReceiptId], references: [id])
+  tradeInOrder TradeInOrder? @relation(fields: [tradeInOrderId], references: [id])
+
+  ledgers        StockLedger[]
+  transferItems  TransferItem[]
+  stocktakeItems StocktakeItem[]
+  salesItems     SalesOrderItem[]
+  returnItems    ReturnOrderItem[]
+
+  @@index([storeId, status])
+  @@index([skuId])
+  @@map("devices")
+}
+
+/// 配件库存余额：门店 × SKU × 数量（由流水在同一事务里维护，永远能从流水重算）
+model AccessoryStock {
+  id        Int      @id @default(autoincrement())
+  storeId   Int      @map("store_id")
+  skuId     Int      @map("sku_id")
+  qty       Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  store Store @relation(fields: [storeId], references: [id])
+  sku   Sku   @relation(fields: [skuId], references: [id])
+
+  @@unique([storeId, skuId])
+  @@map("accessory_stocks")
+}
+
+/// 库存流水：每一次增减一条，带单据类型和单号
+model StockLedger {
+  id           Int           @id @default(autoincrement())
+  docType      LedgerDocType @map("doc_type")
+  docNo        String        @map("doc_no")
+  storeId      Int           @map("store_id")
+  skuId        Int           @map("sku_id")
+  deviceId     Int?          @map("device_id") // 大件必填
+  qtyDelta     Int           @map("qty_delta") // 正增负减；只改状态的记 0
+  balanceAfter Int?          @map("balance_after") // 小件变动后余额
+  statusBefore DeviceStatus? @map("status_before")
+  statusAfter  DeviceStatus? @map("status_after")
+  operatorId   Int           @map("operator_id")
+  note         String?
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  store    Store   @relation(fields: [storeId], references: [id])
+  sku      Sku     @relation(fields: [skuId], references: [id])
+  device   Device? @relation(fields: [deviceId], references: [id])
+  operator User    @relation(fields: [operatorId], references: [id])
+
+  @@index([storeId, skuId, createdAt])
+  @@index([deviceId])
+  @@index([docType, docNo])
+  @@map("stock_ledgers")
+}
+
+// ============================================================
+// 采购入库
+// ============================================================
+
+/// 采购单
+model PurchaseOrder {
+  id           Int                 @id @default(autoincrement())
+  orderNo      String              @unique @map("order_no") // PO + yyyyMMdd + 4 位
+  storeId      Int                 @map("store_id") // 收货门店
+  status       PurchaseOrderStatus @default(DRAFT)
+  supplierName String?             @map("supplier_name")
+  note         String?
+  createdById  Int                 @map("created_by_id")
+  submittedAt  DateTime?           @map("submitted_at")
+  receivedAt   DateTime?           @map("received_at")
+  voidedAt     DateTime?           @map("voided_at")
+  createdAt    DateTime            @default(now()) @map("created_at")
+  updatedAt    DateTime            @updatedAt @map("updated_at")
+
+  store     Store @relation(fields: [storeId], references: [id])
+  createdBy User  @relation(fields: [createdById], references: [id])
+
+  items    PurchaseOrderItem[]
+  receipts GoodsReceipt[]
+
+  @@index([storeId, status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id          Int @id @default(autoincrement())
+  orderId     Int @map("order_id")
+  skuId       Int @map("sku_id")
+  qty         Int
+  unitCostFen Int @map("unit_cost_fen")
+  receivedQty Int @default(0) @map("received_qty")
+
+  order PurchaseOrder @relation(fields: [orderId], references: [id])
+  sku   Sku           @relation(fields: [skuId], references: [id])
+
+  @@index([orderId])
+  @@map("purchase_order_items")
+}
+
+/// 入库单：一次到货一张
+model GoodsReceipt {
+  id              Int      @id @default(autoincrement())
+  receiptNo       String   @unique @map("receipt_no") // RI + yyyyMMdd + 4 位
+  purchaseOrderId Int      @map("purchase_order_id")
+  storeId         Int      @map("store_id")
+  receivedById    Int      @map("received_by_id")
+  note            String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  store         Store         @relation(fields: [storeId], references: [id])
+  receivedBy    User          @relation(fields: [receivedById], references: [id])
+
+  items   GoodsReceiptItem[]
+  devices Device[]
+
+  @@index([purchaseOrderId])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptItem {
+  id          Int @id @default(autoincrement())
+  receiptId   Int @map("receipt_id")
+  skuId       Int @map("sku_id")
+  qty         Int // 大件 = 串号条数
+  unitCostFen Int @map("unit_cost_fen")
+
+  receipt GoodsReceipt @relation(fields: [receiptId], references: [id])
+  sku     Sku          @relation(fields: [skuId], references: [id])
+
+  @@index([receiptId])
+  @@map("goods_receipt_items")
+}
+
+// ============================================================
+// 调拨与盘点
+// ============================================================
+
+/// 调拨单
+model TransferOrder {
+  id            Int            @id @default(autoincrement())
+  orderNo       String         @unique @map("order_no") // TR + yyyyMMdd + 4 位
+  fromStoreId   Int            @map("from_store_id")
+  toStoreId     Int            @map("to_store_id")
+  status        TransferStatus @default(REQUESTED)
+  note          String?
+  requestedById Int            @map("requested_by_id")
+  shippedById   Int?           @map("shipped_by_id")
+  receivedById  Int?           @map("received_by_id")
+  requestedAt   DateTime       @default(now()) @map("requested_at")
+  shippedAt     DateTime?      @map("shipped_at")
+  receivedAt    DateTime?      @map("received_at")
+  voidedAt      DateTime?      @map("voided_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  fromStore   Store @relation("TransferFromStore", fields: [fromStoreId], references: [id])
+  toStore     Store @relation("TransferToStore", fields: [toStoreId], references: [id])
+  requestedBy User  @relation("TransferRequestedBy", fields: [requestedById], references: [id])
+  shippedBy   User? @relation("TransferShippedBy", fields: [shippedById], references: [id])
+  receivedBy  User? @relation("TransferReceivedBy", fields: [receivedById], references: [id])
+
+  items TransferItem[]
+
+  @@index([fromStoreId, status])
+  @@index([toStoreId, status])
+  @@map("transfer_orders")
+}
+
+/// 调拨明细：大件一台一行，小件一个 SKU 一行
+model TransferItem {
+  id          Int       @id @default(autoincrement())
+  transferId  Int       @map("transfer_id")
+  skuId       Int       @map("sku_id")
+  deviceId    Int?      @map("device_id")
+  qty         Int       @default(1)
+  receivedQty Int       @default(0) @map("received_qty")
+  receivedAt  DateTime? @map("received_at")
+
+  transfer TransferOrder @relation(fields: [transferId], references: [id])
+  sku      Sku           @relation(fields: [skuId], references: [id])
+  device   Device?       @relation(fields: [deviceId], references: [id])
+
+  @@index([transferId])
+  @@map("transfer_items")
+}
+
+/// 盘点单
+model Stocktake {
+  id            Int             @id @default(autoincrement())
+  stocktakeNo   String          @unique @map("stocktake_no") // ST + yyyyMMdd + 4 位
+  storeId       Int             @map("store_id")
+  status        StocktakeStatus @default(IN_PROGRESS)
+  note          String?
+  createdById   Int             @map("created_by_id")
+  confirmedById Int?            @map("confirmed_by_id")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  confirmedAt   DateTime?       @map("confirmed_at")
+  voidedAt      DateTime?       @map("voided_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  store       Store @relation(fields: [storeId], references: [id])
+  createdBy   User  @relation("StocktakeCreatedBy", fields: [createdById], references: [id])
+  confirmedBy User? @relation("StocktakeConfirmedBy", fields: [confirmedById], references: [id])
+
+  items StocktakeItem[]
+
+  @@index([storeId, status])
+  @@map("stocktakes")
+}
+
+/// 盘点明细：建任务时快照应有数，录入实盘后算差异
+model StocktakeItem {
+  id          Int  @id @default(autoincrement())
+  stocktakeId Int  @map("stocktake_id")
+  skuId       Int  @map("sku_id")
+  deviceId    Int? @map("device_id") // 大件一台一行
+  expectedQty Int  @map("expected_qty")
+  countedQty  Int? @map("counted_qty")
+  diffQty     Int? @map("diff_qty") // 实盘 − 应有
+
+  stocktake Stocktake @relation(fields: [stocktakeId], references: [id])
+  sku       Sku       @relation(fields: [skuId], references: [id])
+  device    Device?   @relation(fields: [deviceId], references: [id])
+
+  @@index([stocktakeId])
+  @@map("stocktake_items")
+}
+
+// ============================================================
+// 客户、销售、退货、回收
+// ============================================================
+
+/// 客户
+model Customer {
+  id        Int      @id @default(autoincrement())
+  name      String
+  phone     String   @unique // 列表脱敏显示
+  note      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  salesOrders   SalesOrder[]
+  returnOrders  ReturnOrder[]
+  tradeInOrders TradeInOrder[]
+
+  @@map("customers")
+}
+
+/// 销售单
+model SalesOrder {
+  id             Int              @id @default(autoincrement())
+  orderNo        String           @unique @map("order_no") // SO + yyyyMMdd + 4 位
+  storeId        Int              @map("store_id")
+  customerId     Int?             @map("customer_id")
+  salespersonId  Int              @map("salesperson_id")
+  status         SalesOrderStatus @default(COMPLETED)
+  bizDate        DateTime         @map("biz_date") @db.Date // 营业日，日结按它分组
+  subtotalFen    Int              @map("subtotal_fen") // 折前合计
+  discountFen    Int              @default(0) @map("discount_fen") // 整单优惠
+  totalFen       Int              @map("total_fen") // 应收 = 折前 − 优惠；支付明细合计必须等于它
+  tradeInOrderId Int?             @unique @map("trade_in_order_id") // 关联的回收单（以旧换新）
+  dailyCloseId   Int?             @map("daily_close_id") // 日结确认后回填，之后不可作废
+  note           String?
+  voidedById     Int?             @map("voided_by_id")
+  voidedAt       DateTime?        @map("voided_at")
+  voidReason     String?          @map("void_reason")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  store        Store         @relation(fields: [storeId], references: [id])
+  customer     Customer?     @relation(fields: [customerId], references: [id])
+  salesperson  User          @relation("SalesOrderSalesperson", fields: [salespersonId], references: [id])
+  voidedBy     User?         @relation("SalesOrderVoidedBy", fields: [voidedById], references: [id])
+  tradeInOrder TradeInOrder? @relation(fields: [tradeInOrderId], references: [id])
+  dailyClose   DailyClose?   @relation(fields: [dailyCloseId], references: [id])
+
+  items        SalesOrderItem[]
+  payments     Payment[]
+  returnOrders ReturnOrder[]
+
+  @@index([storeId, bizDate])
+  @@index([salespersonId, bizDate])
+  @@map("sales_orders")
+}
+
+/// 销售明细
+model SalesOrderItem {
+  id           Int  @id @default(autoincrement())
+  orderId      Int  @map("order_id")
+  skuId        Int  @map("sku_id")
+  deviceId     Int? @map("device_id") // 大件必填
+  qty          Int  @default(1)
+  unitPriceFen Int  @map("unit_price_fen") // 成交单价
+  discountFen  Int  @default(0) @map("discount_fen") // 行优惠
+  lineTotalFen Int  @map("line_total_fen") // 单价 × 数量 − 行优惠
+  costFen      Int  @map("cost_fen") // 成本快照合计，算毛利用
+  returnedQty  Int  @default(0) @map("returned_qty")
+
+  order  SalesOrder @relation(fields: [orderId], references: [id])
+  sku    Sku        @relation(fields: [skuId], references: [id])
+  device Device?    @relation(fields: [deviceId], references: [id])
+
+  returnItems ReturnOrderItem[]
+
+  @@index([orderId])
+  @@index([deviceId])
+  @@map("sales_order_items")
+}
+
+/// 支付明细：收款为正，退款为负；一张单可拆多种方式
+model Payment {
+  id             Int           @id @default(autoincrement())
+  salesOrderId   Int?          @map("sales_order_id")
+  returnOrderId  Int?          @map("return_order_id")
+  method         PaymentMethod
+  amountFen      Int           @map("amount_fen")
+  tradeInOrderId Int?          @unique @map("trade_in_order_id") // method = TRADE_IN 时指向回收单
+  reference      String? // 交易号等
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  salesOrder   SalesOrder?   @relation(fields: [salesOrderId], references: [id])
+  returnOrder  ReturnOrder?  @relation(fields: [returnOrderId], references: [id])
+  tradeInOrder TradeInOrder? @relation(fields: [tradeInOrderId], references: [id])
+
+  @@index([salesOrderId])
+  @@index([returnOrderId])
+  @@map("payments")
+}
+
+/// 退货单
+model ReturnOrder {
+  id           Int       @id @default(autoincrement())
+  orderNo      String    @unique @map("order_no") // RT + yyyyMMdd + 4 位
+  storeId      Int       @map("store_id")
+  salesOrderId Int       @map("sales_order_id") // 原销售单
+  customerId   Int?      @map("customer_id")
+  handledById  Int       @map("handled_by_id")
+  bizDate      DateTime  @map("biz_date") @db.Date
+  refundFen    Int       @map("refund_fen") // 退款合计（正数）
+  reason       String?
+  dailyCloseId Int?      @map("daily_close_id")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  store      Store       @relation(fields: [storeId], references: [id])
+  salesOrder SalesOrder  @relation(fields: [salesOrderId], references: [id])
+  customer   Customer?   @relation(fields: [customerId], references: [id])
+  handledBy  User        @relation(fields: [handledById], references: [id])
+  dailyClose DailyClose? @relation(fields: [dailyCloseId], references: [id])
+
+  items    ReturnOrderItem[]
+  payments Payment[]
+
+  @@index([storeId, bizDate])
+  @@index([salesOrderId])
+  @@map("return_orders")
+}
+
+model ReturnOrderItem {
+  id            Int  @id @default(autoincrement())
+  returnOrderId Int  @map("return_order_id")
+  salesItemId   Int  @map("sales_item_id")
+  skuId         Int  @map("sku_id")
+  deviceId      Int? @map("device_id")
+  qty           Int  @default(1)
+  refundFen     Int  @map("refund_fen")
+
+  returnOrder ReturnOrder    @relation(fields: [returnOrderId], references: [id])
+  salesItem   SalesOrderItem @relation(fields: [salesItemId], references: [id])
+  sku         Sku            @relation(fields: [skuId], references: [id])
+  device      Device?        @relation(fields: [deviceId], references: [id])
+
+  @@index([returnOrderId])
+  @@map("return_order_items")
+}
+
+/// 回收单（以旧换新收旧机）
+model TradeInOrder {
+  id           Int           @id @default(autoincrement())
+  orderNo      String        @unique @map("order_no") // RC + yyyyMMdd + 4 位
+  storeId      Int           @map("store_id")
+  customerId   Int?          @map("customer_id")
+  handledById  Int           @map("handled_by_id")
+  imei         String // 旧机串号；同时会建一条 Device（状态回收）
+  modelName    String        @map("model_name") // 旧机机型描述（可能不在我们的 SKU 里）
+  skuId        Int?          @map("sku_id") // 能对上 SKU 时填
+  condition    String // 成色：全新 / 95 新 / 9 成新 / 8 成新 / 有损
+  appraisedFen Int           @map("appraised_fen") // 估价 = 抵扣金额 = 旧机成本
+  status       TradeInStatus @default(COMPLETED)
+  note         String?
+  voidedById   Int?          @map("voided_by_id")
+  voidedAt     DateTime?     @map("voided_at")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  store     Store     @relation(fields: [storeId], references: [id])
+  customer  Customer? @relation(fields: [customerId], references: [id])
+  handledBy User      @relation("TradeInHandledBy", fields: [handledById], references: [id])
+  voidedBy  User?     @relation("TradeInVoidedBy", fields: [voidedById], references: [id])
+  sku       Sku?      @relation(fields: [skuId], references: [id])
+
+  device     Device?     // 收回的旧机
+  salesOrder SalesOrder? // 被哪张销售单抵扣
+  payment    Payment?    // 对应的抵扣支付明细
+
+  @@index([storeId, createdAt])
+  @@map("trade_in_orders")
+}
+
+// ============================================================
+// 日结、KPI、日志、单号
+// ============================================================
+
+/// 日结记录：门店 × 营业日一条
+model DailyClose {
+  id            Int              @id @default(autoincrement())
+  closeNo       String           @unique @map("close_no") // DC + yyyyMMdd + 4 位
+  storeId       Int              @map("store_id")
+  bizDate       DateTime         @map("biz_date") @db.Date
+  status        DailyCloseStatus @default(PENDING)
+  confirmedById Int?             @map("confirmed_by_id")
+  confirmedAt   DateTime?        @map("confirmed_at")
+  note          String?
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+
+  store       Store @relation(fields: [storeId], references: [id])
+  confirmedBy User? @relation(fields: [confirmedById], references: [id])
+
+  lines        DailyCloseLine[]
+  salesOrders  SalesOrder[]
+  returnOrders ReturnOrder[]
+
+  @@unique([storeId, bizDate])
+  @@map("daily_closes")
+}
+
+/// 日结明细：按支付方式，系统应收 vs 实收
+model DailyCloseLine {
+  id           Int           @id @default(autoincrement())
+  dailyCloseId Int           @map("daily_close_id")
+  method       PaymentMethod
+  systemFen    Int           @map("system_fen") // 从支付明细汇总（收款 − 退款）
+  actualFen    Int?          @map("actual_fen") // 店长录入的实收
+  diffFen      Int?          @map("diff_fen") // 实收 − 系统，差异标红
+
+  dailyClose DailyClose @relation(fields: [dailyCloseId], references: [id])
+
+  @@unique([dailyCloseId, method])
+  @@map("daily_close_lines")
+}
+
+/// KPI 目标：门店 × 月
+model KpiTarget {
+  id               Int      @id @default(autoincrement())
+  storeId          Int      @map("store_id")
+  year             Int
+  month            Int
+  salesTargetFen   Int      @map("sales_target_fen") // 销售额目标
+  profitTargetFen  Int      @map("profit_target_fen") // 毛利目标
+  deviceQtyTarget  Int      @map("device_qty_target") // 主机量目标
+  tradeInQtyTarget Int      @map("trade_in_qty_target") // 旧机回收台数目标
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, year, month])
+  @@map("kpi_targets")
+}
+
+/// 操作日志：谁、什么时候、做了什么、对哪条记录
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?     @map("user_id")
+  action    String // 如 login、logout、store.update、sales_order.void
+  entity    String? // 表名或业务对象名
+  entityId  String?  @map("entity_id")
+  detail    Json?
+  ip        String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
+
+/// 单号计数器：key = 前缀 + yyyyMMdd，在事务里自增，保证同一天单号不重
+model DocCounter {
+  key   String @id
+  value Int    @default(0)
+
+  @@map("doc_counters")
 }

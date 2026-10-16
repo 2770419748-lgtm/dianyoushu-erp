@@ -88,3 +88,11 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - 密码：`password.ts` bcryptjs 10 轮；登录限流 `rate-limit.ts` 内存计数，同账号同 IP 15 分钟错 5 次锁 15 分钟。
 - 数据范围：`permissions.ts` 的 `getDataScope` / `canAccessStore` 是纯函数，所有按门店过滤的查询都从这里取范围；单元测试在 `tests/`。
 - 页面表单提交用 Server Function（文件顶部 `"use server"`，客户端用 `useActionState`），不另写 API 路由。
+
+## 规则之源与库存服务层（第 2 到 4 天补）
+
+- 业务规则以 `docs/业务口径.md` 为准（角色权限矩阵、串号状态机、单据状态、支付方式、以旧换新、KPI）；表结构说明在 `docs/数据模型.md`；页面与路由在 `docs/页面清单.md`。改口径先改文档再改代码。
+- 库存只能通过 `src/server/stock/` 的服务层改（第 4 周建）：串号状态跳转按口径第 4 节的表校验；每次变动写 `stock_ledgers`，小件同一事务更新 `accessory_stocks` 并记 `balance_after`；不允许在页面或别的服务里直接 update `devices.status` 或 `accessory_stocks.qty`。
+- 单号用 `doc_counters` 在事务里自增：`前缀 + yyyyMMdd + 4 位`。
+- 所有列表和详情查询先用 `getDataScope(user)` 取范围，再按 `store_id` 过滤；跨店访问返回无权限，不要只在前端隐藏。
+- 金额列一律 `xxxFen` 整数；汇总在数据库里 `SUM` 出 bigint 再转数字。
