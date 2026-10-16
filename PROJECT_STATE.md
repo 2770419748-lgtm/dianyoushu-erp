@@ -13,6 +13,7 @@
 - 第 4 天：`docs/页面清单.md`（30 页）；AGENTS.md 补了库存服务层规则。
 - 第 8 天：组织管理页 `/org`：左侧组织树（总部 / 区域 → 门店 → 员工），右侧区域、门店、员工三个页签的列表、新增、编辑、停用/启用、重置密码；服务层 `src/server/org/org-service.ts`，每次写入记操作日志 `audit_logs`；登录、登出也记日志。菜单项变成真链接，当前页高亮。验收通过：界面上新建 1 个区域、2 家店、3 个员工，树上都能看到，停用/启用正常。
 - 第 9 天：数据权限落到查询上。`src/server/auth/scope.ts` 按角色给出 where 条件（`storeScopeWhere` 给带 store_id 的表、`storeTableWhere` 给门店表）和越权拒绝 `assertStoreAccess`（抛 `PermissionError`）；只读门店页 `/stores`、`/stores/[id]` 走这层。验收通过：店员账号直接打开别家店的地址显示"没有权限"，列表只有本店。单元测试 20 条。
+- 第 10 天：通用布局补面包屑（`src/lib/routes.ts` 路由标题表），手机宽度下侧栏收起、顶栏只留姓名和退出、内容区缩小留白；操作日志页 `/logs`（总部，分页 20 条/页，动作显示成中文 `src/lib/audit-labels.ts`）。时间显示统一走 `src/lib/format.ts` 固定北京时间。验收通过：375 宽度下页面不横向滚动（scrollWidth = clientWidth），日志页能看到登录、组织变更记录。
 
 ## 进行中
 
@@ -20,8 +21,9 @@
 
 ## 下一步
 
-1. 第 10 天通用布局（面包屑、手机端侧栏收起）与操作日志页。
-2. 第 11 天 CI（GitHub Actions 跑 typecheck 和 test，README 徽章）；第 12 天模拟数据 v0（3 区域、10 门店、100 员工、一键重置）。
+1. 第 11 天 CI：GitHub Actions 每次推送跑 `pnpm typecheck` 和 `pnpm test`，README 加徽章。
+2. 第 12 天模拟数据 v0：3 区域、10 门店、100 员工，一键重置脚本。
+3. 第 13 到 14 天收尾：PROJECT_STATE 更新到第 2 周完成，写一页“第 1 到 2 周学到什么”。
 
 ## 卡在哪
 

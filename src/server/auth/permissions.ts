@@ -100,7 +100,7 @@ const MENU_HQ: MenuEntry[] = [
   { key: "daily-close", label: "日结" },
   { key: "reports", label: "报表" },
   { key: "kpi", label: "KPI 目标" },
-  { key: "logs", label: "操作日志" },
+  { key: "logs", label: "操作日志", href: "/logs" },
   { key: "roadmap", label: "后续规划" },
 ];
 

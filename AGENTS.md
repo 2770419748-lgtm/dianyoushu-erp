@@ -106,3 +106,4 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 3. 用到设备能力的功能（扫码、拍照、定位）封装成独立模块放 `src/lib/device/`，对外只暴露接口，网页版用浏览器 API 实现，App 版换原生插件实现，调用方不改。
 4. 手机端页面按 PWA 做（第 10 周加 `manifest`、图标、可安装），界面不依赖鼠标悬停，触控优先。
 5. 不做的：React Native / Flutter 独立工程、离线同步、应用商店上架流程。这些等真要上架时再做，不进当前清单。
+- 时间显示一律用 `src/lib/format.ts` 的 `formatDateTime` / `formatDate`（固定北京时间），金额显示用 `formatFen`；不要在组件里直接 `dayjs(x).format`，否则服务端和浏览器时区不同会报 hydration 不一致。

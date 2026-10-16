@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Button, Layout, Menu, Space, Tag, Typography } from "antd";
+import { Breadcrumb, Button, Grid, Layout, Menu, Space, Tag, Typography } from "antd";
 import type { MenuEntry } from "@/server/auth/permissions";
+import { breadcrumbFor } from "@/lib/routes";
 import { logout } from "@/app/(auth)/login/actions";
 
 const { Header, Sider, Content } = Layout;
@@ -25,10 +26,15 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const screens = Grid.useBreakpoint();
+  const compact = !screens.md; // 手机宽度：顶栏只留姓名和退出，内容区缩小留白
   // 当前页高亮：取 href 和路径前缀匹配最长的那一项
   const selectedKey = menu
     .filter((m) => m.href && (pathname === m.href || pathname.startsWith(m.href + "/")))
     .sort((a, b) => (b.href?.length ?? 0) - (a.href?.length ?? 0))[0]?.key;
+  const crumbs = breadcrumbFor(pathname).map((c) => ({
+    title: c.href ? <Link href={c.href}>{c.title}</Link> : c.title,
+  }));
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -51,17 +57,18 @@ export function AppShell({
         <Header
           style={{
             background: "#fff",
-            padding: "0 24px",
+            padding: compact ? "0 12px 0 56px" : "0 24px",
             display: "flex",
             alignItems: "center",
             justifyContent: "flex-end",
             gap: 12,
+            overflow: "hidden",
           }}
         >
-          <Space>
+          <Space size="small" wrap={false} style={{ whiteSpace: "nowrap" }}>
             <Typography.Text strong>{user.name}</Typography.Text>
             <Tag color="blue">{user.roleLabel}</Tag>
-            <Typography.Text type="secondary">{user.scopeLabel}</Typography.Text>
+            {compact ? null : <Typography.Text type="secondary">{user.scopeLabel}</Typography.Text>}
           </Space>
           <form action={logout}>
             <Button htmlType="submit" size="small">
@@ -69,7 +76,10 @@ export function AppShell({
             </Button>
           </form>
         </Header>
-        <Content style={{ padding: 24 }}>{children}</Content>
+        <Content style={{ padding: compact ? 12 : 24, minWidth: 0 }}>
+          <Breadcrumb items={crumbs} style={{ marginBottom: compact ? 12 : 16 }} />
+          {children}
+        </Content>
       </Layout>
     </Layout>
   );
