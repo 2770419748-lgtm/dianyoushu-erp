@@ -1,7 +1,7 @@
 # 项目状态（PROJECT_STATE.md）
 
 - 更新：2026-10-16
-- 阶段：第 3 周完成（商品主数据），下一步第 4 周采购入库、串号、库存流水
+- 阶段：第 4 周完成（采购入库、串号、库存流水），下一步第 5 周调拨与盘点
 
 ## 做完了什么
 
@@ -18,14 +18,16 @@
 - 第 12 天：模拟数据 v0。`prisma/seed.ts` 生成 3 区域、10 门店、100 员工（固定随机种子，每次一样；4 个演示账号不变）；一键重置 `pnpm db:reset` = `prisma/reset.ts` 清空全部业务表 + 重新跑种子。没用 `prisma migrate reset`，因为 Prisma 7 检测到 AI 调用会拒绝，而且自写脚本带了"只允许本机库"的安全阀。验收通过：重置后登录，组织树 10 家店、100 个员工。
 - 第 3 周：商品主数据。服务层 `src/server/products/`（product-service 品类/品牌/型号/SKU 增改停用，price-service 门店售价，search 纯函数）；页面 `/products`（搜索、筛选、总部可新增编辑停售）、`/products/catalog`（品类/品牌/型号，总部）、`/products/prices`（门店售价，店长本店、总部任意店，按范围校验）；模拟数据 50 个机型 + 30 个配件共 278 个 SKU（`prisma/seed-data/products.ts`，条码按名字稳定生成）。验收通过：搜"Mate"出 33 条；S001 把一个 SKU 改成 5299，S002 仍按指导价 5499。单元测试 24 条。
 
+- 第 4 周：采购入库、串号、库存流水。库存核心 `src/server/stock/`：device-state（状态机，唯一允许的跳转表）、imei（串号解析）、doc-no（单号 = 前缀 + 北京日期 + 4 位，计数器在事务里自增）、stock-service（全系统唯一写库入口：receiveDevices、changeAccessoryStock、applyDeviceAction）、stock-query（带范围的查询）。采购 `src/server/purchase/purchase-service.ts`：草稿 → 提交 → 到货（可多次，齐了自动已到货）、作废；到货入库和入库单、流水在同一事务。页面 `/purchase`（列表、新建、编辑草稿、详情含到货入库）、`/stock`（串号/配件库存、状态筛选、汇总）、`/stock/ledger`、`/stock/devices/[imei]`（全程流水）。验收通过：开单 10 台 + 5 件配件 → 提交 → 粘贴 10 个串号入库 → 库存页 10 台在库、流水 11 条、串号页能看全程；再入同一串号提示“不能重复入库”，整批不入。测试 37 条，其中 4 条连本机库跑（事务回滚，连不上自动跳过）。
+
 ## 进行中
 
-- 第 4 周（采购入库、串号、库存流水）刚开头：已写库存核心 `src/server/stock/`（device-state 状态机、imei 串号解析、doc-no 单号、stock-service 唯一写库入口），还没有页面、采购服务层和测试。下一步从 `src/server/purchase/purchase-service.ts` 和 `src/server/stock/stock-query.ts` 接着做，然后 /purchase、/stock 页面与单元测试。
+- 无。第 4 周完成。
 
 ## 下一步
 
 1. CI 绿勾：等坤总在项目里选公开/私有后推一次验证。
-2. 第 4 周：采购单（新建、提交、到货）；入库录串号（批量粘贴、校验唯一和 15 位）；配件按数量入库；库存流水服务层 `src/server/stock/`（所有库存变动只走这里）；门店库存页；单元测试（入库后流水与余额一致、重复串号被拒）。
+2. 第 5 周：调拨单（申请锁定 → 发出在途 → 收货核对串号，可部分收货）；盘点（建任务快照 → 录实盘 → 差异 → 确认写盘盈盘亏流水）；配件安全库存预警；单元测试（在途不可卖、盘点差异流水正确）。
 3. “第 1 到 2 周学到什么”一页纸是坤总的作业，提纲已给。
 
 ## 卡在哪

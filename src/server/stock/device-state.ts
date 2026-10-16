@@ -1,4 +1,5 @@
 import type { DeviceStatus } from "@/generated/prisma/enums";
+import { DEVICE_STATUS_LABELS } from "@/lib/stock-labels";
 
 // 串号状态机（docs/业务口径.md 第 4 节）。纯函数，所有状态跳转都必须经过 nextDeviceStatus。
 
@@ -52,16 +53,6 @@ export const ACTION_QTY_DELTA: Record<DeviceAction, 1 | 0 | -1> = {
 
 /** 能开单卖的状态 */
 export const SELLABLE_STATUSES: DeviceStatus[] = ["IN_STOCK", "REFURBISHED"];
-
-export const DEVICE_STATUS_LABELS: Record<DeviceStatus, string> = {
-  IN_TRANSIT: "在途",
-  IN_STOCK: "在库",
-  SOLD: "已售",
-  RECYCLED: "回收",
-  REFURBISHED: "良品",
-  LOCKED: "锁定",
-  LOST: "盘亏",
-};
 
 /**
  * 算下一个状态；不合法就抛 DeviceStateError。

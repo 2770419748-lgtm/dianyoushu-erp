@@ -8,6 +8,11 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/products": "商品",
   "/products/catalog": "品类与品牌",
   "/products/prices": "门店售价",
+  "/purchase": "采购单",
+  "/purchase/new": "新建采购单",
+  "/stock": "库存",
+  "/stock/ledger": "库存流水",
+  "/stock/devices": "串号",
 };
 
 export interface BreadcrumbEntry {

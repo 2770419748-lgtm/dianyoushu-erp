@@ -29,6 +29,11 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "sku.deactivate": "停用商品",
   "price.set": "设置门店售价",
   "price.reset": "恢复指导价",
+  "purchase.create": "新建采购单",
+  "purchase.update": "修改采购单",
+  "purchase.submit": "提交采购单",
+  "purchase.void": "作废采购单",
+  "purchase.receive": "到货入库",
 };
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
@@ -39,6 +44,7 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   brand: "品牌",
   model: "型号",
   sku: "商品",
+  purchase_order: "采购单",
 };
 
 export function auditActionLabel(action: string): string {

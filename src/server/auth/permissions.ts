@@ -66,6 +66,11 @@ export function canManagePrices(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
 }
 
+/** 谁能做采购（开采购单、到货入库） */
+export function canManagePurchase(role: Role): boolean {
+  return role === "HQ";
+}
+
 export interface MenuEntry {
   key: string;
   label: string;
@@ -74,7 +79,7 @@ export interface MenuEntry {
 
 const MENU_STAFF: MenuEntry[] = [
   { key: "sales-new", label: "开单" },
-  { key: "stock", label: "查库存" },
+  { key: "stock", label: "查库存", href: "/stock" },
   { key: "products", label: "商品查价", href: "/products" },
   { key: "customers", label: "客户" },
   { key: "sales-list", label: "我的订单" },
@@ -95,7 +100,7 @@ const MENU_STORE_MANAGER: MenuEntry[] = [
 const MENU_REGIONAL: MenuEntry[] = [
   { key: "dashboard", label: "看板" },
   { key: "stores", label: "辖区门店", href: "/stores" },
-  { key: "stock", label: "库存" },
+  { key: "stock", label: "库存", href: "/stock" },
   { key: "reports", label: "报表" },
 ];
 
@@ -104,8 +109,8 @@ const MENU_HQ: MenuEntry[] = [
   { key: "org", label: "组织管理", href: "/org" },
   { key: "products", label: "商品", href: "/products" },
   { key: "prices", label: "门店售价", href: "/products/prices" },
-  { key: "purchase", label: "采购入库" },
-  { key: "stock", label: "库存" },
+  { key: "purchase", label: "采购入库", href: "/purchase" },
+  { key: "stock", label: "库存", href: "/stock" },
   { key: "transfers", label: "调拨" },
   { key: "stocktakes", label: "盘点" },
   { key: "sales-list", label: "销售" },
