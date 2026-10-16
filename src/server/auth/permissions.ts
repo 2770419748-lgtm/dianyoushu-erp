@@ -56,6 +56,16 @@ export function canManageOrg(role: Role): boolean {
   return role === "HQ";
 }
 
+/** 谁能维护商品主数据（品类、品牌、型号、SKU、指导价） */
+export function canManageProducts(role: Role): boolean {
+  return role === "HQ";
+}
+
+/** 谁能改门店售价：店长（本店）、总部（任意店）；门店范围另由 scope 校验 */
+export function canManagePrices(role: Role): boolean {
+  return role === "STORE_MANAGER" || role === "HQ";
+}
+
 export interface MenuEntry {
   key: string;
   label: string;
@@ -65,6 +75,7 @@ export interface MenuEntry {
 const MENU_STAFF: MenuEntry[] = [
   { key: "sales-new", label: "开单" },
   { key: "stock", label: "查库存" },
+  { key: "products", label: "商品查价", href: "/products" },
   { key: "customers", label: "客户" },
   { key: "sales-list", label: "我的订单" },
 ];
@@ -77,6 +88,7 @@ const MENU_STORE_MANAGER: MenuEntry[] = [
   { key: "stocktakes", label: "盘点" },
   { key: "trade-ins", label: "回收" },
   { key: "daily-close", label: "日结" },
+  { key: "prices", label: "门店售价", href: "/products/prices" },
   { key: "reports", label: "门店报表" },
 ];
 
@@ -90,7 +102,8 @@ const MENU_REGIONAL: MenuEntry[] = [
 const MENU_HQ: MenuEntry[] = [
   { key: "dashboard", label: "看板" },
   { key: "org", label: "组织管理", href: "/org" },
-  { key: "products", label: "商品" },
+  { key: "products", label: "商品", href: "/products" },
+  { key: "prices", label: "门店售价", href: "/products/prices" },
   { key: "purchase", label: "采购入库" },
   { key: "stock", label: "库存" },
   { key: "transfers", label: "调拨" },

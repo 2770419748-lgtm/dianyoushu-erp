@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { hashPassword } from "../src/server/auth/password";
+import { seedProducts } from "./seed-data/products";
 
 // 模拟数据 v0（第 12 天）：3 个区域、10 家门店、100 个员工（含 4 个固定演示账号）。
 // 名字是从姓氏表和名字表里拼出来的，不是真人。随机数用固定种子，每次重置生成的数据一模一样。
@@ -117,12 +118,17 @@ async function main() {
     });
   }
 
+  // 商品主数据：50 个机型 + 30 个配件
+  const products = await seedProducts(prisma);
+
   const counts = {
     regions: await prisma.region.count(),
     stores: await prisma.store.count(),
     users: await prisma.user.count(),
   };
-  console.log(`种子数据完成：区域 ${counts.regions}、门店 ${counts.stores}、员工 ${counts.users}（演示账号 hq / regional / manager / staff，密码见 README）`);
+  console.log(
+    `种子数据完成：区域 ${counts.regions}、门店 ${counts.stores}、员工 ${counts.users}；机型 ${products.deviceModels}、配件 ${products.accessories}、SKU ${products.skus}（演示账号 hq / regional / manager / staff，密码见 README）`,
+  );
   await prisma.$disconnect();
 }
 

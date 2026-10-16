@@ -21,3 +21,10 @@ export function formatDate(value: Date | string | number): string {
 export function formatFen(fen: number): string {
   return (fen / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+/** 元（表单里输入的数）→ 分；非法值返回 NaN，由服务层拒绝 */
+export function yuanToFen(yuan: unknown): number {
+  const n = typeof yuan === "number" ? yuan : Number(yuan);
+  if (!Number.isFinite(n)) return Number.NaN;
+  return Math.round(n * 100);
+}

@@ -17,12 +17,28 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "user.reset_password": "重置密码",
   "user.activate": "启用员工",
   "user.deactivate": "停用员工",
+  "category.create": "新增品类",
+  "category.update": "修改品类",
+  "brand.create": "新增品牌",
+  "brand.update": "修改品牌",
+  "model.create": "新增型号",
+  "model.update": "修改型号",
+  "sku.create": "新增商品",
+  "sku.update": "修改商品",
+  "sku.activate": "启用商品",
+  "sku.deactivate": "停用商品",
+  "price.set": "设置门店售价",
+  "price.reset": "恢复指导价",
 };
 
 export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   region: "区域",
   store: "门店",
   user: "员工",
+  category: "品类",
+  brand: "品牌",
+  model: "型号",
+  sku: "商品",
 };
 
 export function auditActionLabel(action: string): string {

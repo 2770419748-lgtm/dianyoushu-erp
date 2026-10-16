@@ -5,6 +5,9 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/org": "组织管理",
   "/stores": "门店",
   "/logs": "操作日志",
+  "/products": "商品",
+  "/products/catalog": "品类与品牌",
+  "/products/prices": "门店售价",
 };
 
 export interface BreadcrumbEntry {
