@@ -80,3 +80,11 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## 登录与权限的实现约定（第 6 到 7 天）
+
+- 会话：`src/server/auth/token.ts` 用 jose 签 JWT（HS256，密钥 `SESSION_SECRET`），`session.ts` 写进 httpOnly cookie `erp_session`，7 天过期；登出删 cookie。
+- `src/proxy.ts`（Next 16 的 Proxy，原 Middleware）只做乐观检查：没 cookie 去 `/login`，有 cookie 不进 `/login`。真正的用户状态由 `src/server/auth/current-user.ts` 的 `requireUser()` 查库确认，页面和服务层都要调它，不要信前端。
+- 密码：`password.ts` bcryptjs 10 轮；登录限流 `rate-limit.ts` 内存计数，同账号同 IP 15 分钟错 5 次锁 15 分钟。
+- 数据范围：`permissions.ts` 的 `getDataScope` / `canAccessStore` 是纯函数，所有按门店过滤的查询都从这里取范围；单元测试在 `tests/`。
+- 页面表单提交用 Server Function（文件顶部 `"use server"`，客户端用 `useActionState`），不另写 API 路由。
