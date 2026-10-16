@@ -20,7 +20,7 @@ Next.js（App Router）+ Prisma + PostgreSQL + Ant Design，TypeScript 全栈，
 2. 把 `.env.example` 复制一份改名 `.env`，填上数据库密码。
 3. `pnpm install`（装完会自动生成 Prisma 客户端）。
 4. `pnpm db:migrate` 建表。
-5. `pnpm db:seed` 灌入演示账号和示范门店。
+5. `pnpm db:seed` 灌入模拟数据（3 个区域、10 家门店、100 个员工，含演示账号）；想清空重来用 `pnpm db:reset`。
 6. `pnpm dev`，浏览器打开 http://localhost:3000 。
 
 常用命令见 `PROJECT_STATE.md`，开发规则见 `AGENTS.md`。

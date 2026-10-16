@@ -14,6 +14,8 @@
 - 第 8 天：组织管理页 `/org`：左侧组织树（总部 / 区域 → 门店 → 员工），右侧区域、门店、员工三个页签的列表、新增、编辑、停用/启用、重置密码；服务层 `src/server/org/org-service.ts`，每次写入记操作日志 `audit_logs`；登录、登出也记日志。菜单项变成真链接，当前页高亮。验收通过：界面上新建 1 个区域、2 家店、3 个员工，树上都能看到，停用/启用正常。
 - 第 9 天：数据权限落到查询上。`src/server/auth/scope.ts` 按角色给出 where 条件（`storeScopeWhere` 给带 store_id 的表、`storeTableWhere` 给门店表）和越权拒绝 `assertStoreAccess`（抛 `PermissionError`）；只读门店页 `/stores`、`/stores/[id]` 走这层。验收通过：店员账号直接打开别家店的地址显示"没有权限"，列表只有本店。单元测试 20 条。
 - 第 10 天：通用布局补面包屑（`src/lib/routes.ts` 路由标题表），手机宽度下侧栏收起、顶栏只留姓名和退出、内容区缩小留白；操作日志页 `/logs`（总部，分页 20 条/页，动作显示成中文 `src/lib/audit-labels.ts`）。时间显示统一走 `src/lib/format.ts` 固定北京时间。验收通过：375 宽度下页面不横向滚动（scrollWidth = clientWidth），日志页能看到登录、组织变更记录。
+- 第 11 天：CI 工作流 `.github/workflows/ci.yml`（推送和 PR 跑 lint、typecheck、test），README 加徽章。**GitHub 未开始跑**：提示账号付款失败或需提高消费上限（私有仓库的 Actions 要计分钟数）。已请坤总选：A 改公开仓库（推荐，方案本来就定公开）或 B 自己处理付款。
+- 第 12 天：模拟数据 v0。`prisma/seed.ts` 生成 3 区域、10 门店、100 员工（固定随机种子，每次一样；4 个演示账号不变）；一键重置 `pnpm db:reset` = `prisma/reset.ts` 清空全部业务表 + 重新跑种子。没用 `prisma migrate reset`，因为 Prisma 7 检测到 AI 调用会拒绝，而且自写脚本带了"只允许本机库"的安全阀。验收通过：重置后登录，组织树 10 家店、100 个员工。
 
 ## 进行中
 
@@ -21,9 +23,9 @@
 
 ## 下一步
 
-1. 第 11 天 CI：GitHub Actions 每次推送跑 `pnpm typecheck` 和 `pnpm test`，README 加徽章。
-2. 第 12 天模拟数据 v0：3 区域、10 门店、100 员工，一键重置脚本。
-3. 第 13 到 14 天收尾：PROJECT_STATE 更新到第 2 周完成，写一页“第 1 到 2 周学到什么”。
+1. 等坤总定 CI 的 A / B，然后推一次验证绿勾。
+2. 第 13 到 14 天收尾：PROJECT_STATE 更新到第 2 周完成，写一页“第 1 到 2 周学到什么”（给坤总自己写，AI 列提纲）。
+3. 第 3 周：商品主数据。
 
 ## 卡在哪
 
@@ -57,7 +59,8 @@ code/
 - `pnpm typecheck`：先生成路由类型再做 TypeScript 检查
 - `pnpm lint`：ESLint
 - `pnpm db:migrate`：改了 schema.prisma 后生成并执行迁移
-- `pnpm db:seed`：灌演示账号与示范门店（可重复跑）
+- `pnpm db:seed`：灌模拟数据（3 区域、10 门店、100 员工，可重复跑）
+- `pnpm db:reset`：清空全部业务表再重新灌（只允许本机库）
 - `pnpm db:studio`：Prisma 自带的看表界面
 
 ## 已定的环境事实
