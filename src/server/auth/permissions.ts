@@ -124,6 +124,7 @@ const MENU_STAFF: MenuEntry[] = [
 
 // 菜单 key 与 docs/页面清单.md 的路由一一对应，后面逐页做成真链接。
 const MENU_STORE_MANAGER: MenuEntry[] = [
+  { key: "dashboard", label: "看板", href: "/dashboard" },
   ...MENU_STAFF.filter((m) => m.key !== "sales-list" && m.key !== "stocktakes" && m.key !== "trade-ins"),
   { key: "sales-list", label: "门店订单", href: "/sales" },
   { key: "transfers", label: "调拨", href: "/transfers" },
@@ -135,14 +136,14 @@ const MENU_STORE_MANAGER: MenuEntry[] = [
 ];
 
 const MENU_REGIONAL: MenuEntry[] = [
-  { key: "dashboard", label: "看板" },
+  { key: "dashboard", label: "看板", href: "/dashboard" },
   { key: "stores", label: "辖区门店", href: "/stores" },
   { key: "stock", label: "库存", href: "/stock" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
 ];
 
 const MENU_HQ: MenuEntry[] = [
-  { key: "dashboard", label: "看板" },
+  { key: "dashboard", label: "看板", href: "/dashboard" },
   { key: "org", label: "组织管理", href: "/org" },
   { key: "products", label: "商品", href: "/products" },
   { key: "prices", label: "门店售价", href: "/products/prices" },

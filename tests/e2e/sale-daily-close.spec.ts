@@ -44,6 +44,7 @@ test("登录 → 开单 → 库存减 → 日结对得上（最后作废还原�
 
   // 开单：选配件、加入、默认微信收全款、提交
   await page.goto(`/sales/new?storeId=${STORE_ID}`);
+  await page.waitForLoadState("networkidle");
   await page.locator(".ant-select", { hasText: "选配件" }).click();
   await page.keyboard.type("钢化膜（高清）");
   await page.keyboard.press("Enter");
@@ -65,7 +66,11 @@ test("登录 → 开单 → 库存减 → 日结对得上（最后作废还原�
 
   // 作废还原（店长能作废）
   await page.goto(orderUrl);
-  await page.getByRole("button", { name: /^作\s?废$/ }).click();
+  // 页面刚出来时按钮可能还没接上点击事件（前端还在加载），点到弹出确认框为止
+  await expect(async () => {
+    await page.getByRole("button", { name: /^作\s?废$/ }).click();
+    await expect(page.getByPlaceholder("作废原因")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
   await page.getByPlaceholder("作废原因").fill("端到端测试还原");
   await page.locator(".ant-popconfirm").getByRole("button", { name: /^确\s?定$/ }).click();
   await expect(page.getByText("已作废").first()).toBeVisible();

@@ -25,6 +25,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/daily-close": "日结",
   "/reports": "报表",
   "/reports/cashier": "收银日报",
+  "/dashboard": "看板",
 };
 
 /** 路径里通用的最后一段（如 /sales/12/return） */
