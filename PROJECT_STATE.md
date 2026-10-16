@@ -11,6 +11,7 @@
 - 第 2 天：坤总决定先按默认口径推进，整理成 `docs/业务口径.md` v0（角色权限矩阵、组织、商品、串号状态机、单据状态、支付方式、以旧换新、KPI）。
 - 第 3 天：完整数据表 `prisma/schema.prisma`，迁移 `business_tables` 建了 31 张表；中文说明 `docs/数据模型.md`。
 - 第 4 天：`docs/页面清单.md`（30 页）；AGENTS.md 补了库存服务层规则。
+- 第 8 天：组织管理页 `/org`：左侧组织树（总部 / 区域 → 门店 → 员工），右侧区域、门店、员工三个页签的列表、新增、编辑、停用/启用、重置密码；服务层 `src/server/org/org-service.ts`，每次写入记操作日志 `audit_logs`；登录、登出也记日志。菜单项变成真链接，当前页高亮。验收通过：界面上新建 1 个区域、2 家店、3 个员工，树上都能看到，停用/启用正常。
 
 ## 进行中
 
@@ -18,9 +19,8 @@
 
 ## 下一步
 
-1. 第 8 天组织管理：区域、门店、员工的列表、新增、编辑、停用；左侧组织树。
-2. 第 9 天数据权限：服务端统一范围过滤接到每个查询，四种角色各一条测试。
-3. 第 10 天通用布局与操作日志；第 11 天 CI；第 12 天模拟数据 v0。
+1. 第 9 天数据权限：服务端统一范围过滤接到每个查询，四种角色各一条测试。
+2. 第 10 天通用布局（面包屑、手机端侧栏收起）与操作日志页；第 11 天 CI；第 12 天模拟数据 v0。
 
 ## 卡在哪
 
@@ -63,3 +63,5 @@ code/
 - `psql` 不在 PATH，用全路径 `C:\Program Files\PostgreSQL\17\bin\psql.exe`；图形界面用开始菜单的 pgAdmin 4。
 - Prisma 7：`.env` 不会被 Prisma CLI 自动读，靠 `prisma.config.ts` 里的 `import "dotenv/config"`；Next.js 运行时自己会读 `.env`。
 - 演示账号见 README，密码 `demo1234`。
+- 改了 `schema.prisma` 后：`pnpm db:migrate`（已带 generate），然后**重启 `pnpm dev`**。开发服务器把 Prisma 客户端缓存在进程里，不重启会报 `Cannot read properties of undefined (reading 'create')`。
+- antd `Modal` 不要加 `forceRender`：弹窗内容会在服务端预渲染，客户端又走 Portal，导致 hydration 不一致报错。

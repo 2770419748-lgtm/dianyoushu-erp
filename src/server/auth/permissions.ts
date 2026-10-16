@@ -51,9 +51,15 @@ export function canAccessStore(actor: Actor, store: { id: number; regionId: numb
   }
 }
 
+/** 谁能管理组织（区域、门店、员工） */
+export function canManageOrg(role: Role): boolean {
+  return role === "HQ";
+}
+
 export interface MenuEntry {
   key: string;
   label: string;
+  href?: string; // 没有 href 的还没做成页面，先显示为灰字
 }
 
 const MENU_STAFF: MenuEntry[] = [
@@ -83,7 +89,7 @@ const MENU_REGIONAL: MenuEntry[] = [
 
 const MENU_HQ: MenuEntry[] = [
   { key: "dashboard", label: "看板" },
-  { key: "org", label: "组织管理" },
+  { key: "org", label: "组织管理", href: "/org" },
   { key: "products", label: "商品" },
   { key: "purchase", label: "采购入库" },
   { key: "stock", label: "库存" },

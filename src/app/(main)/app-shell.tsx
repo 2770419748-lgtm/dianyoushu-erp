@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Button, Layout, Menu, Space, Tag, Typography } from "antd";
 import type { MenuEntry } from "@/server/auth/permissions";
 import { logout } from "@/app/(auth)/login/actions";
@@ -22,11 +24,28 @@ export function AppShell({
   menu: MenuEntry[];
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
+  // 当前页高亮：取 href 和路径前缀匹配最长的那一项
+  const selectedKey = menu
+    .filter((m) => m.href && (pathname === m.href || pathname.startsWith(m.href + "/")))
+    .sort((a, b) => (b.href?.length ?? 0) - (a.href?.length ?? 0))[0]?.key;
+
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Sider breakpoint="lg" collapsedWidth={0} theme="dark">
-        <div style={{ color: "#fff", fontSize: 18, fontWeight: 600, padding: "16px 24px" }}>店有数 ERP</div>
-        <Menu theme="dark" mode="inline" items={menu.map((m) => ({ key: m.key, label: m.label }))} />
+        <Link href="/" style={{ display: "block", color: "#fff", fontSize: 18, fontWeight: 600, padding: "16px 24px" }}>
+          店有数 ERP
+        </Link>
+        <Menu
+          theme="dark"
+          mode="inline"
+          selectedKeys={selectedKey ? [selectedKey] : []}
+          items={menu.map((m) => ({
+            key: m.key,
+            label: m.href ? <Link href={m.href}>{m.label}</Link> : m.label,
+            disabled: !m.href,
+          }))}
+        />
       </Sider>
       <Layout>
         <Header

@@ -3,6 +3,8 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { writeAudit } from "@/server/audit";
+import { getCurrentUser } from "@/server/auth/current-user";
 import { verifyPassword } from "@/server/auth/password";
 import { loginLimiter } from "@/server/auth/rate-limit";
 import { createSession, destroySession } from "@/server/auth/session";
@@ -28,15 +30,19 @@ export async function login(_prev: LoginState, formData: FormData): Promise<Logi
   const ok = user !== null && user.isActive && (await verifyPassword(password, user.passwordHash));
   if (!ok) {
     loginLimiter.recordFailure(limiterKey);
+    await writeAudit({ userId: user?.id ?? null, action: "login_failed", detail: { username }, ip });
     return { error: "账号或密码不对" };
   }
 
   loginLimiter.reset(limiterKey);
   await createSession(user.id);
+  await writeAudit({ userId: user.id, action: "login", ip });
   redirect("/");
 }
 
 export async function logout(): Promise<void> {
+  const user = await getCurrentUser();
   await destroySession();
+  if (user) await writeAudit({ userId: user.id, action: "logout" });
   redirect("/login");
 }

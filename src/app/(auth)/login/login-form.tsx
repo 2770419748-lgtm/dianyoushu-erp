@@ -25,7 +25,7 @@ export function LoginForm() {
           </Form.Item>
           {state.error ? (
             <Form.Item>
-              <Alert type="error" message={state.error} showIcon />
+              <Alert type="error" title={state.error} showIcon />
             </Form.Item>
           ) : null}
           <Button type="primary" htmlType="submit" size="large" block loading={pending}>

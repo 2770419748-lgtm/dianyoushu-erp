@@ -96,3 +96,13 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - 单号用 `doc_counters` 在事务里自增：`前缀 + yyyyMMdd + 4 位`。
 - 所有列表和详情查询先用 `getDataScope(user)` 取范围，再按 `store_id` 过滤；跨店访问返回无权限，不要只在前端隐藏。
 - 金额列一律 `xxxFen` 整数；汇总在数据库里 `SUM` 出 bigint 再转数字。
+
+## 保留升级成 App 的路径（2026-10-16 坤总要求）
+
+目标：以后用 Capacitor 一类工具把现有网页打包成安卓 / iOS 应用，不重写。为此一直守住：
+
+1. 业务逻辑只放 `src/server/` 的服务层；页面里的 Server Function 和以后的 `/api` 路由都只是薄薄一层调用，不写规则。App 要独立接口时，给同一套服务层加 `src/app/api/` 的 Route Handler 即可。
+2. 登录令牌是 JWT（`src/server/auth/token.ts`），签发和校验不依赖 cookie；App 版改为请求头 `Authorization: Bearer` 时复用同一份校验代码。
+3. 用到设备能力的功能（扫码、拍照、定位）封装成独立模块放 `src/lib/device/`，对外只暴露接口，网页版用浏览器 API 实现，App 版换原生插件实现，调用方不改。
+4. 手机端页面按 PWA 做（第 10 周加 `manifest`、图标、可安装），界面不依赖鼠标悬停，触控优先。
+5. 不做的：React Native / Flutter 独立工程、离线同步、应用商店上架流程。这些等真要上架时再做，不进当前清单。
