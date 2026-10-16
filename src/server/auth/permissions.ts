@@ -82,7 +82,7 @@ const MENU_STORE_MANAGER: MenuEntry[] = [
 
 const MENU_REGIONAL: MenuEntry[] = [
   { key: "dashboard", label: "看板" },
-  { key: "stores", label: "辖区门店" },
+  { key: "stores", label: "辖区门店", href: "/stores" },
   { key: "stock", label: "库存" },
   { key: "reports", label: "报表" },
 ];
