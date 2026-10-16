@@ -5,7 +5,7 @@ import { assertStoreAccess, canAccessStoreSafe, storeTableWhere } from "@/server
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { nextDocNo } from "@/server/stock/doc-no";
-import { parseImeiList } from "@/server/stock/imei";
+import { parseCodeList } from "@/server/stock/imei";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { DeviceStateError } from "@/server/stock/device-state";
 
@@ -82,7 +82,7 @@ export async function getTransfer(user: CurrentUser, id: number) {
         orderBy: { id: "asc" },
         include: {
           sku: { select: { name: true, model: { select: { name: true, brand: { select: { name: true } }, category: { select: { kind: true } } } } } },
-          device: { select: { id: true, imei: true, status: true } },
+          device: { select: { id: true, code: true, sn: true, imei1: true, imei2: true, status: true } },
         },
       },
     },
@@ -105,11 +105,13 @@ export async function listDevicesForTransfer(user: CurrentUser, storeId: number,
     where: {
       storeId,
       status: { in: ["IN_STOCK", "REFURBISHED"] },
-      ...(text ? { OR: [{ imei: { contains: text } }, { sku: { name: { contains: text, mode: "insensitive" } } }] } : {}),
+      ...(text
+        ? { OR: [{ code: { contains: text } }, { sn: { contains: text } }, { imei2: { contains: text } }, { sku: { name: { contains: text, mode: "insensitive" } } }] }
+        : {}),
     },
-    orderBy: [{ skuId: "asc" }, { imei: "asc" }],
+    orderBy: [{ skuId: "asc" }, { code: "asc" }],
     take: 300,
-    select: { id: true, imei: true, status: true, sku: { select: { name: true } } },
+    select: { id: true, code: true, sn: true, imei1: true, imei2: true, status: true, sku: { select: { name: true } } },
   });
 }
 
@@ -227,19 +229,23 @@ export async function receiveTransfer(user: CurrentUser, id: number, input: Rece
   assertCanManage(user);
   const order = await prisma.transferOrder.findUnique({
     where: { id },
-    include: { toStore: true, items: { include: { device: { select: { imei: true } }, sku: { select: { name: true } } } } },
+    include: { toStore: true, items: { include: { device: { select: { code: true, sn: true, imei1: true, imei2: true } }, sku: { select: { name: true } } } } },
   });
   if (!order) throw new TransferError("调拨单不存在");
   if (order.status !== "SHIPPED") throw new TransferError("只有已发出的调拨单能收货");
   assertStoreAccess(user, order.toStore);
 
-  const parsed = parseImeiList(typeof input.imeiText === "string" ? input.imeiText : "");
-  if (parsed.invalid.length > 0) throw new TransferError(`有不是 15 位数字的串号：${parsed.invalid.slice(0, 3).join("、")}`);
+  // 收到的码：SN、IMEI1、IMEI2 哪个都行，对上同一台算一台
+  const parsed = parseCodeList(typeof input.imeiText === "string" ? input.imeiText : "");
+  if (parsed.invalid.length > 0) throw new TransferError(`有格式不对的码：${parsed.invalid.slice(0, 3).join("、")}`);
   const pendingDeviceItems = order.items.filter((i) => i.deviceId && i.receivedQty < i.qty);
-  const byImei = new Map(pendingDeviceItems.map((i) => [i.device!.imei, i]));
-  const unknown = parsed.valid.filter((imei) => !byImei.has(imei));
-  if (unknown.length > 0) throw new TransferError(`这些串号不在这张调拨单的待收清单里：${unknown.slice(0, 3).join("、")}`);
-  const deviceItems = parsed.valid.map((imei) => byImei.get(imei)!);
+  const byCode = new Map<string, (typeof pendingDeviceItems)[number]>();
+  for (const item of pendingDeviceItems) {
+    for (const c of [item.device!.code, item.device!.sn, item.device!.imei1, item.device!.imei2]) if (c) byCode.set(c, item);
+  }
+  const unknown = parsed.valid.filter((c) => !byCode.has(c));
+  if (unknown.length > 0) throw new TransferError(`这些码不在这张调拨单的待收清单里：${unknown.slice(0, 3).join("、")}`);
+  const deviceItems = Array.from(new Set(parsed.valid.map((c) => byCode.get(c)!)));
 
   const accessoryPlans: { itemId: number; qty: number }[] = [];
   for (const line of input.accessoryLines ?? []) {

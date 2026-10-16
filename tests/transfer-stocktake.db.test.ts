@@ -32,6 +32,10 @@ function fakeImeis(count: number, seed: number): string[] {
   return Array.from({ length: count }, (_, i) => String(910000000000000 + seed * 1000 + i).padStart(15, "0"));
 }
 
+function fakeDevices(count: number, seed: number) {
+  return fakeImeis(count, seed).map((imei1) => ({ sn: null, imei1, imei2: null }));
+}
+
 beforeAll(async () => {
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -59,7 +63,7 @@ describe("调拨链路（连本机库，事务回滚）", () => {
     if (!dbReady || !fixture) return ctx.skip();
     const f = fixture;
     await inRolledBackTx(async (tx) => {
-      const [id] = await receiveDevices(tx, { storeId: f.fromStoreId, skuId: f.deviceSkuId, imeis: fakeImeis(1, 1), costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-T-1", operatorId: f.userId });
+      const [id] = await receiveDevices(tx, { storeId: f.fromStoreId, skuId: f.deviceSkuId, devices: fakeDevices(1, 1), costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-T-1", operatorId: f.userId });
       const base = { deviceId: id!, operatorId: f.userId, docNo: "TR-T-1" };
 
       const locked = await applyDeviceAction(tx, { ...base, action: "LOCK_FOR_TRANSFER", docType: "TRANSFER_LOCK" });
@@ -92,7 +96,7 @@ describe("调拨链路（连本机库，事务回滚）", () => {
     if (!dbReady || !fixture) return ctx.skip();
     const f = fixture;
     await inRolledBackTx(async (tx) => {
-      const [id] = await receiveDevices(tx, { storeId: f.fromStoreId, skuId: f.deviceSkuId, imeis: fakeImeis(1, 2), costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-T-2", operatorId: f.userId });
+      const [id] = await receiveDevices(tx, { storeId: f.fromStoreId, skuId: f.deviceSkuId, devices: fakeDevices(1, 2), costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-T-2", operatorId: f.userId });
       await applyDeviceAction(tx, { deviceId: id!, action: "LOCK_FOR_TRANSFER", docType: "TRANSFER_LOCK", docNo: "TR-T-2", operatorId: f.userId });
       const unlocked = await applyDeviceAction(tx, { deviceId: id!, action: "UNLOCK", docType: "TRANSFER_UNLOCK", docNo: "TR-T-2", operatorId: f.userId });
       expect(unlocked.status).toBe("IN_STOCK");
@@ -107,7 +111,7 @@ describe("盘点差异（连本机库，事务回滚）", () => {
     if (!dbReady || !fixture) return ctx.skip();
     const f = fixture;
     await inRolledBackTx(async (tx) => {
-      const ids = await receiveDevices(tx, { storeId: f.fromStoreId, skuId: f.deviceSkuId, imeis: fakeImeis(2, 3), costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-T-3", operatorId: f.userId });
+      const ids = await receiveDevices(tx, { storeId: f.fromStoreId, skuId: f.deviceSkuId, devices: fakeDevices(2, 3), costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-T-3", operatorId: f.userId });
       const before = await tx.device.count({ where: { storeId: f.fromStoreId, status: "IN_STOCK" } });
       const lost = await applyDeviceAction(tx, { deviceId: ids[1]!, action: "STOCKTAKE_LOSS", docType: "STOCKTAKE_LOSS", docNo: "ST-T-1", operatorId: f.userId });
       expect(lost.status).toBe("LOST");

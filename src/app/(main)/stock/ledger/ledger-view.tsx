@@ -38,7 +38,7 @@ export function LedgerView({
     { title: "单号", dataIndex: "docNo" },
     { title: "门店", render: (_, r) => `${r.store.code} ${r.store.name}` },
     { title: "商品", render: (_, r) => r.sku.name },
-    { title: "串号", render: (_, r) => (r.device ? <Link href={`/stock/devices/${r.device.imei}`}>{r.device.imei}</Link> : "-") },
+    { title: "机器", render: (_, r) => (r.device ? <Link href={`/stock/devices/${r.device.code}`}>{r.device.code}</Link> : "-") },
     {
       title: "数量",
       dataIndex: "qtyDelta",

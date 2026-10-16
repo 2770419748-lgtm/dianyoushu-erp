@@ -6,7 +6,7 @@ import { App, Button, Card, Descriptions, Form, Input, InputNumber, Popconfirm, 
 import type { TableColumnsType } from "antd";
 import { formatDateTime } from "@/lib/format";
 import { STOCKTAKE_STATUS_COLORS, STOCKTAKE_STATUS_LABELS } from "@/lib/stock-labels";
-import { parseImeiList } from "@/server/stock/imei";
+import { parseCodeList } from "@/server/stock/imei";
 import type { StocktakeDetail } from "@/server/stocktake/stocktake-service";
 import { confirmStocktakeAction, enterCountsAction, voidStocktakeAction, type StocktakeActionResult } from "../actions";
 
@@ -29,7 +29,7 @@ export function StocktakeDetailView({ stocktake, canEnter, canConfirm }: { stock
   const inProgress = stocktake.status === "IN_PROGRESS";
   const notCounted = stocktake.items.filter((i) => i.countedQty === null).length;
   const diffs = stocktake.items.filter((i) => (i.diffQty ?? 0) !== 0);
-  const parsed = parseImeiList(imeiText);
+  const parsed = parseCodeList(imeiText);
 
   function run(fn: () => Promise<StocktakeActionResult>, success: string) {
     startTransition(async () => {
@@ -40,7 +40,7 @@ export function StocktakeDetailView({ stocktake, canEnter, canConfirm }: { stock
   }
 
   const deviceColumns: TableColumnsType<Item> = [
-    { title: "串号", render: (_, i) => <Link href={`/stock/devices/${i.device!.imei}`}>{i.device!.imei}</Link> },
+    { title: "主码", render: (_, i) => <Link href={`/stock/devices/${i.device!.code}`}>{i.device!.code}</Link> },
     { title: "商品", render: (_, i) => i.sku.name },
     { title: "应有", dataIndex: "expectedQty", align: "right" },
     { title: "实盘", dataIndex: "countedQty", align: "right", render: (v: number | null) => (v === null ? "-" : v) },

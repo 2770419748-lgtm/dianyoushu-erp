@@ -26,7 +26,9 @@ export async function listDevices(user: CurrentUser, query: DeviceQuery) {
       text
         ? {
             OR: [
-              { imei: { contains: text } },
+              { code: { contains: text } },
+              { sn: { contains: text } },
+              { imei2: { contains: text } },
               { sku: { name: { contains: text, mode: "insensitive" as const } } },
               { sku: { model: { name: { contains: text, mode: "insensitive" as const } } } },
             ],
@@ -90,7 +92,7 @@ export async function listLedger(user: CurrentUser, query: { storeId?: number; q
         ? {
             OR: [
               { docNo: { contains: text, mode: "insensitive" as const } },
-              { device: { imei: { contains: text } } },
+              { device: { OR: [{ code: { contains: text } }, { sn: { contains: text } }, { imei2: { contains: text } }] } },
               { sku: { name: { contains: text, mode: "insensitive" as const } } },
             ],
           }
@@ -105,7 +107,7 @@ export async function listLedger(user: CurrentUser, query: { storeId?: number; q
       take: STOCK_PAGE_SIZE,
       include: {
         sku: { select: { name: true } },
-        device: { select: { imei: true } },
+        device: { select: { code: true } },
         store: { select: { code: true, name: true } },
         operator: { select: { name: true } },
       },
@@ -117,10 +119,10 @@ export async function listLedger(user: CurrentUser, query: { storeId?: number; q
 
 export type LedgerRow = Awaited<ReturnType<typeof listLedger>>["rows"][number];
 
-/** 串号详情 + 全程流水；越权抛 PermissionError */
-export async function getDeviceByImei(user: CurrentUser, imei: string) {
-  const device = await prisma.device.findUnique({
-    where: { imei },
+/** 按任意一个码（主码、SN、IMEI1、IMEI2）查机器详情 + 全程流水；越权抛 PermissionError */
+export async function getDeviceByCode(user: CurrentUser, code: string) {
+  const device = await prisma.device.findFirst({
+    where: { OR: [{ code }, { sn: code }, { imei1: code }, { imei2: code }] },
     include: {
       sku: { include: { model: { include: { brand: true, category: true } } } },
       store: { select: { id: true, code: true, name: true, regionId: true } },
@@ -136,7 +138,7 @@ export async function getDeviceByImei(user: CurrentUser, imei: string) {
   return device;
 }
 
-export type DeviceDetail = NonNullable<Awaited<ReturnType<typeof getDeviceByImei>>>;
+export type DeviceDetail = NonNullable<Awaited<ReturnType<typeof getDeviceByCode>>>;
 
 /** 门店库存汇总：每个状态多少台、配件多少件 */
 export async function stockSummary(user: CurrentUser, storeId?: number) {

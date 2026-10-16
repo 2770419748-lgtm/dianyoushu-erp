@@ -6,7 +6,7 @@ import { App, Button, Card, Descriptions, Form, Input, InputNumber, Popconfirm, 
 import type { TableColumnsType } from "antd";
 import { formatDateTime } from "@/lib/format";
 import { DEVICE_STATUS_COLORS, DEVICE_STATUS_LABELS, TRANSFER_STATUS_COLORS, TRANSFER_STATUS_LABELS } from "@/lib/stock-labels";
-import { parseImeiList } from "@/server/stock/imei";
+import { parseCodeList } from "@/server/stock/imei";
 import type { TransferDetail } from "@/server/transfer/transfer-service";
 import { receiveTransferAction, shipTransferAction, voidTransferAction, type TransferActionResult } from "../actions";
 
@@ -22,9 +22,10 @@ export function TransferDetailView({ order, canManage }: { order: TransferDetail
   const accessoryItems = order.items.filter((i) => !i.deviceId);
   const pendingDevices = deviceItems.filter((i) => i.receivedQty < i.qty);
   const pendingAccessories = accessoryItems.filter((i) => i.receivedQty < i.qty);
-  const parsed = parseImeiList(imeiText);
-  const pendingImeis = new Set(pendingDevices.map((i) => i.device!.imei));
-  const unknown = parsed.valid.filter((imei) => !pendingImeis.has(imei));
+  const parsed = parseCodeList(imeiText);
+  const pendingCodes = new Set<string>();
+  for (const i of pendingDevices) for (const c of [i.device!.code, i.device!.sn, i.device!.imei1, i.device!.imei2]) if (c) pendingCodes.add(c);
+  const unknown = parsed.valid.filter((c) => !pendingCodes.has(c));
 
   function run(fn: () => Promise<TransferActionResult>, success: string) {
     startTransition(async () => {
@@ -39,7 +40,7 @@ export function TransferDetailView({ order, canManage }: { order: TransferDetail
   }
 
   const deviceColumns: TableColumnsType<Item> = [
-    { title: "串号", render: (_, i) => <Link href={`/stock/devices/${i.device!.imei}`}>{i.device!.imei}</Link> },
+    { title: "主码", render: (_, i) => <Link href={`/stock/devices/${i.device!.code}`}>{i.device!.code}</Link> },
     { title: "商品", render: (_, i) => i.sku.name },
     { title: "机器状态", render: (_, i) => <Tag color={DEVICE_STATUS_COLORS[i.device!.status]}>{DEVICE_STATUS_LABELS[i.device!.status]}</Tag> },
     { title: "收货", render: (_, i) => (i.receivedQty >= i.qty ? <Tag color="green">已收{i.receivedAt ? ` ${formatDateTime(i.receivedAt)}` : ""}</Tag> : <Tag>未收</Tag>) },

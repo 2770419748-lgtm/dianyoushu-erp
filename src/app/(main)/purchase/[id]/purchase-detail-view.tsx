@@ -6,7 +6,7 @@ import { App, Button, Card, Descriptions, Form, Input, InputNumber, Popconfirm, 
 import type { TableColumnsType } from "antd";
 import { formatDateTime, formatFen } from "@/lib/format";
 import { PURCHASE_STATUS_COLORS, PURCHASE_STATUS_LABELS } from "@/lib/stock-labels";
-import { parseImeiList } from "@/server/stock/imei";
+import { parseDeviceCodeLines } from "@/server/stock/imei";
 import type { PurchaseOrderDetail } from "@/server/purchase/purchase-service";
 import { receiveGoodsAction, submitPurchaseOrderAction, voidPurchaseOrderAction, type PurchaseActionResult } from "../actions";
 
@@ -120,19 +120,18 @@ export function PurchaseDetailView({ order, canManage }: { order: PurchaseOrderD
             {pendingItems.map((item) => {
               const remaining = item.qty - item.receivedQty;
               const isDevice = item.sku.model.category.kind === "DEVICE";
-              const parsed = isDevice ? parseImeiList(lines[item.id]?.imeiText ?? "") : null;
+              const parsed = isDevice ? parseDeviceCodeLines(lines[item.id]?.imeiText ?? "") : null;
               return (
                 <Card key={item.id} size="small" style={{ marginBottom: 12 }} title={`${item.sku.name}（还差 ${remaining} ${isDevice ? "台" : "件"}）`}>
                   {isDevice ? (
                     <>
                       <Form.Item name={["lines", item.id, "imeiText"]} style={{ marginBottom: 4 }}>
-                        <Input.TextArea rows={4} placeholder={"粘贴串号，例如：\n867530012345678\n867530012345679"} />
+                        <Input.TextArea rows={4} placeholder={"一行一台，每行 SN、IMEI1、IMEI2 任意 1 到 3 个，用空格或逗号隔开，例如：\nSN8F2K1X9Q 867530012345678 867530012345679\n867530012345680"} />
                       </Form.Item>
-                      <Typography.Text type={parsed && (parsed.invalid.length || parsed.duplicates.length || parsed.valid.length > remaining) ? "danger" : "secondary"}>
-                        已识别 {parsed?.valid.length ?? 0} 个
-                        {parsed && parsed.invalid.length > 0 ? `，${parsed.invalid.length} 个格式不对` : ""}
-                        {parsed && parsed.duplicates.length > 0 ? `，${parsed.duplicates.length} 个重复` : ""}
-                        {parsed && parsed.valid.length > remaining ? `，超过还差的 ${remaining} 台` : ""}
+                      <Typography.Text type={parsed && (parsed.errors.length || parsed.devices.length > remaining) ? "danger" : "secondary"}>
+                        已识别 {parsed?.devices.length ?? 0} 台
+                        {parsed && parsed.errors.length > 0 ? `；${parsed.errors[0]}` : ""}
+                        {parsed && parsed.devices.length > remaining ? `；超过还差的 ${remaining} 台` : ""}
                       </Typography.Text>
                     </>
                   ) : (
@@ -155,7 +154,7 @@ export function PurchaseDetailView({ order, canManage }: { order: PurchaseOrderD
           {order.receipts.map((receipt) => (
             <Card key={receipt.id} size="small" style={{ marginBottom: 12 }} title={`${receipt.receiptNo} · ${formatDateTime(receipt.createdAt)} · ${receipt.receivedBy.name}`}>
               {receipt.items.map((line) => {
-                const imeis = receipt.devices.filter((d) => d.skuId === line.skuId).map((d) => d.imei);
+                const imeis = receipt.devices.filter((d) => d.skuId === line.skuId).map((d) => d.code);
                 return (
                   <div key={line.id} style={{ marginBottom: 8 }}>
                     <Typography.Text strong>{line.sku.name}</Typography.Text> × {line.qty}

@@ -1,7 +1,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { LedgerDocType } from "@/generated/prisma/enums";
 import { ACTION_QTY_DELTA, nextDeviceStatus, type DeviceAction } from "./device-state";
-import { isValidImei } from "./imei";
+import { isValidImei, isValidSn, primaryCode, type DeviceCodes } from "./imei";
 
 // 库存服务层：全系统唯一能改库存的地方。
 // 规则（docs/业务口径.md 第 11 节）：每次变动写一条 stock_ledgers；小件余额表在同一事务里更新并记 balance_after；
@@ -12,7 +12,7 @@ export class StockError extends Error {}
 export interface ReceiveDevicesInput {
   storeId: number;
   skuId: number;
-  imeis: string[]; // 已经解析过的合法串号
+  devices: DeviceCodes[]; // 每台 1 到 3 个码（SN / IMEI1 / IMEI2），至少一个
   costFen: number;
   docType: LedgerDocType;
   docNo: string;
@@ -23,25 +23,48 @@ export interface ReceiveDevicesInput {
   note?: string;
 }
 
-/** 新机器入库：一台一条 devices + 一条流水。串号必须 15 位数字且全局唯一。 */
+/** 新机器入库：一台一条 devices + 一条流水。三个码各自全局唯一。 */
 export async function receiveDevices(tx: Prisma.TransactionClient, input: ReceiveDevicesInput): Promise<number[]> {
-  if (input.imeis.length === 0) throw new StockError("没有要入库的串号");
-  const bad = input.imeis.filter((i) => !isValidImei(i));
-  if (bad.length > 0) throw new StockError(`串号格式不对（要 15 位数字）：${bad.slice(0, 5).join("、")}`);
-  const unique = new Set(input.imeis);
-  if (unique.size !== input.imeis.length) throw new StockError("这批串号里有重复的");
+  if (input.devices.length === 0) throw new StockError("没有要入库的机器");
 
-  const existing = await tx.device.findMany({ where: { imei: { in: input.imeis } }, select: { imei: true } });
+  const seen = new Set<string>();
+  const prepared = input.devices.map((d, index) => {
+    const codes: DeviceCodes = { sn: d.sn || null, imei1: d.imei1 || null, imei2: d.imei2 || null };
+    for (const imei of [codes.imei1, codes.imei2]) {
+      if (imei !== null && !isValidImei(imei)) throw new StockError(`第 ${index + 1} 台：IMEI “${imei}” 要 15 位数字`);
+    }
+    if (codes.sn !== null && !isValidSn(codes.sn)) throw new StockError(`第 ${index + 1} 台：SN “${codes.sn}” 格式不对（6 到 30 位字母数字）`);
+    const code = primaryCode(codes);
+    if (!code) throw new StockError(`第 ${index + 1} 台：SN、IMEI1、IMEI2 至少填一个`);
+    for (const c of [codes.sn, codes.imei1, codes.imei2]) {
+      if (c === null) continue;
+      if (seen.has(c)) throw new StockError(`这批里 ${c} 出现了两次`);
+      seen.add(c);
+    }
+    return { ...codes, code };
+  });
+
+  const allCodes = Array.from(seen);
+  const existing = await tx.device.findMany({
+    where: { OR: [{ code: { in: allCodes } }, { sn: { in: allCodes } }, { imei1: { in: allCodes } }, { imei2: { in: allCodes } }] },
+    select: { code: true, sn: true, imei1: true, imei2: true },
+  });
   if (existing.length > 0) {
-    throw new StockError(`这些串号已经在系统里了，不能重复入库：${existing.map((e) => e.imei).slice(0, 5).join("、")}${existing.length > 5 ? " 等" : ""}`);
+    const hit = new Set<string>();
+    for (const e of existing) for (const c of [e.code, e.sn, e.imei1, e.imei2]) if (c && seen.has(c)) hit.add(c);
+    const list = Array.from(hit);
+    throw new StockError(`这些码已经在系统里了，不能重复入库：${list.slice(0, 5).join("、")}${list.length > 5 ? " 等" : ""}`);
   }
 
   const status = nextDeviceStatus(input.tradeInOrderId ? "TRADE_IN" : "RECEIVE", null);
   const ids: number[] = [];
-  for (const imei of input.imeis) {
+  for (const d of prepared) {
     const device = await tx.device.create({
       data: {
-        imei,
+        code: d.code,
+        sn: d.sn,
+        imei1: d.imei1,
+        imei2: d.imei2,
         skuId: input.skuId,
         storeId: input.storeId,
         status,
@@ -68,6 +91,11 @@ export async function receiveDevices(tx: Prisma.TransactionClient, input: Receiv
     ids.push(device.id);
   }
   return ids;
+}
+
+/** 按任意一个码找机器（扫码、盘点、收货都用它） */
+export function deviceCodeWhere(code: string): Prisma.DeviceWhereInput {
+  return { OR: [{ code }, { sn: code }, { imei1: code }, { imei2: code }] };
 }
 
 export interface AccessoryDeltaInput {

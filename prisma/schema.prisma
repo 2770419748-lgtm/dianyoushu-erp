@@ -311,10 +311,14 @@ model StorePrice {
 // 库存
 // ============================================================
 
-/// 串号机器：一台一条
+/// 串号机器：一台一条。大件最多三个码：SN、IMEI1、IMEI2，至少填一个，各自全局唯一；
+/// code 是主码（有 IMEI1 用 IMEI1，否则 SN，否则 IMEI2），链接、显示、默认查询都用它。
 model Device {
   id             Int          @id @default(autoincrement())
-  imei           String       @unique // 15 位数字
+  code           String       @unique // 主码
+  sn             String?      @unique // 序列号（机身/包装盒）
+  imei1          String?      @unique // 15 位数字
+  imei2          String?      @unique // 15 位数字，双卡机第二个
   skuId          Int          @map("sku_id")
   storeId        Int          @map("store_id") // 当前归属门店；在途时仍是发出店
   status         DeviceStatus

@@ -31,7 +31,10 @@ export function DeviceView({ device, showCost }: { device: DeviceDetail; showCos
   ];
 
   const items = [
-    { key: "imei", label: "串号", children: device.imei },
+    { key: "code", label: "主码", children: device.code },
+    { key: "sn", label: "SN", children: device.sn ?? "-" },
+    { key: "imei1", label: "IMEI1", children: device.imei1 ?? "-" },
+    { key: "imei2", label: "IMEI2", children: device.imei2 ?? "-" },
     { key: "sku", label: "商品", children: device.sku.name },
     { key: "model", label: "品牌 / 型号", children: `${device.sku.model.brand.name} ${device.sku.model.name}` },
     { key: "store", label: "当前归属", children: `${device.store.code} ${device.store.name}` },
@@ -44,7 +47,7 @@ export function DeviceView({ device, showCost }: { device: DeviceDetail; showCos
   return (
     <Space orientation="vertical" size="large" style={{ width: "100%" }}>
       <Card
-        title={`串号 ${device.imei}`}
+        title={`机器 ${device.code}`}
         extra={
           <Link href="/stock">
             <Button size="small">返回库存</Button>

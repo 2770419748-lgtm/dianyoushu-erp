@@ -6,7 +6,7 @@ import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { nextDocNo } from "@/server/stock/doc-no";
-import { parseImeiList } from "@/server/stock/imei";
+import { parseDeviceCodeLines, type DeviceCodes } from "@/server/stock/imei";
 import { changeAccessoryStock, receiveDevices, StockError } from "@/server/stock/stock-service";
 
 // 采购入库服务层：采购单（草稿 → 已提交 → 已到货，可作废）和到货入库。
@@ -102,7 +102,7 @@ export async function getPurchaseOrder(user: CurrentUser, id: number) {
         include: {
           receivedBy: { select: { name: true } },
           items: { include: { sku: { select: { name: true } } } },
-          devices: { select: { imei: true, skuId: true } },
+          devices: { select: { code: true, sn: true, imei1: true, imei2: true, skuId: true } },
         },
       },
     },
@@ -220,7 +220,7 @@ export async function receiveGoods(actor: Actor, input: ReceiveGoodsInput) {
   if (order.status !== "SUBMITTED") throw new PurchaseError("只有已提交的采购单能到货入库");
 
   // 先把每一行校验好，再进事务
-  const plans: { item: (typeof order.items)[number]; imeis: string[]; qty: number }[] = [];
+  const plans: { item: (typeof order.items)[number]; devices: DeviceCodes[]; qty: number }[] = [];
   for (const line of input.lines) {
     const itemId = requireId(line.itemId, "采购明细");
     const item = order.items.find((i) => i.id === itemId);
@@ -229,18 +229,18 @@ export async function receiveGoods(actor: Actor, input: ReceiveGoodsInput) {
     if (remaining <= 0) continue;
 
     if (item.sku.model.category.kind === "DEVICE") {
-      const parsed = parseImeiList(typeof line.imeiText === "string" ? line.imeiText : "");
-      if (parsed.valid.length === 0) continue;
-      if (parsed.invalid.length > 0) throw new PurchaseError(`${item.sku.name}：有不是 15 位数字的串号：${parsed.invalid.slice(0, 3).join("、")}`);
-      if (parsed.duplicates.length > 0) throw new PurchaseError(`${item.sku.name}：粘贴的串号里有重复：${parsed.duplicates.slice(0, 3).join("、")}`);
-      if (parsed.valid.length > remaining) throw new PurchaseError(`${item.sku.name}：还差 ${remaining} 台，但录了 ${parsed.valid.length} 个串号`);
-      plans.push({ item, imeis: parsed.valid, qty: parsed.valid.length });
+      // 一行一台，每行 SN / IMEI1 / IMEI2 任意 1 到 3 个
+      const parsed = parseDeviceCodeLines(typeof line.imeiText === "string" ? line.imeiText : "");
+      if (parsed.errors.length > 0) throw new PurchaseError(`${item.sku.name}：${parsed.errors[0]}`);
+      if (parsed.devices.length === 0) continue;
+      if (parsed.devices.length > remaining) throw new PurchaseError(`${item.sku.name}：还差 ${remaining} 台，但录了 ${parsed.devices.length} 台`);
+      plans.push({ item, devices: parsed.devices, qty: parsed.devices.length });
     } else {
       const qty = Number(line.qty ?? 0);
       if (qty === 0) continue;
       if (!Number.isInteger(qty) || qty < 0) throw new PurchaseError(`${item.sku.name}：数量必须是正整数`);
       if (qty > remaining) throw new PurchaseError(`${item.sku.name}：还差 ${remaining} 件，但录了 ${qty} 件`);
-      plans.push({ item, imeis: [], qty });
+      plans.push({ item, devices: [], qty });
     }
   }
   if (plans.length === 0) throw new PurchaseError("没有填任何串号或数量");
@@ -255,11 +255,11 @@ export async function receiveGoods(actor: Actor, input: ReceiveGoodsInput) {
         await tx.goodsReceiptItem.create({
           data: { receiptId: created.id, skuId: plan.item.skuId, qty: plan.qty, unitCostFen: plan.item.unitCostFen },
         });
-        if (plan.imeis.length > 0) {
+        if (plan.devices.length > 0) {
           await receiveDevices(tx, {
             storeId: order.storeId,
             skuId: plan.item.skuId,
-            imeis: plan.imeis,
+            devices: plan.devices,
             costFen: plan.item.unitCostFen,
             docType: "PURCHASE_RECEIPT",
             docNo: receiptNo,

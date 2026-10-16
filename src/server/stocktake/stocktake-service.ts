@@ -5,7 +5,7 @@ import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { nextDocNo } from "@/server/stock/doc-no";
-import { parseImeiList } from "@/server/stock/imei";
+import { parseCodeList } from "@/server/stock/imei";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { DeviceStateError } from "@/server/stock/device-state";
 
@@ -68,7 +68,7 @@ export async function getStocktake(user: CurrentUser, id: number) {
         orderBy: { id: "asc" },
         include: {
           sku: { select: { name: true, model: { select: { name: true, brand: { select: { name: true } } } } } },
-          device: { select: { imei: true, status: true } },
+          device: { select: { code: true, sn: true, imei1: true, imei2: true, status: true } },
         },
       },
     },
@@ -125,18 +125,22 @@ export async function enterCounts(user: CurrentUser, id: number, input: EnterCou
   if (!canEnterStocktake(user.role)) throw new StocktakeError("你的角色不能录盘点");
   const stocktake = await prisma.stocktake.findUnique({
     where: { id },
-    include: { store: true, items: { include: { device: { select: { imei: true } } } } },
+    include: { store: true, items: { include: { device: { select: { code: true, sn: true, imei1: true, imei2: true } } } } },
   });
   if (!stocktake) throw new StocktakeError("盘点单不存在");
   if (stocktake.status !== "IN_PROGRESS") throw new StocktakeError("这张盘点单已经结束");
   assertStoreAccess(user, stocktake.store);
 
-  const parsed = parseImeiList(typeof input.imeiText === "string" ? input.imeiText : "");
-  if (parsed.invalid.length > 0) throw new StocktakeError(`有不是 15 位数字的串号：${parsed.invalid.slice(0, 3).join("、")}`);
-  const counted = new Set(parsed.valid);
+  // 实盘的码：SN、IMEI1、IMEI2 哪个都行
+  const parsed = parseCodeList(typeof input.imeiText === "string" ? input.imeiText : "");
+  if (parsed.invalid.length > 0) throw new StocktakeError(`有格式不对的码：${parsed.invalid.slice(0, 3).join("、")}`);
+  const scanned = new Set(parsed.valid);
   const deviceItems = stocktake.items.filter((i) => i.deviceId);
-  const known = new Set(deviceItems.map((i) => i.device!.imei));
-  const unexpected = parsed.valid.filter((imei) => !known.has(imei));
+  const known = new Set<string>();
+  for (const i of deviceItems) for (const c of [i.device!.code, i.device!.sn, i.device!.imei1, i.device!.imei2]) if (c) known.add(c);
+  const unexpected = parsed.valid.filter((c) => !known.has(c));
+  const counted = (item: (typeof deviceItems)[number]) =>
+    [item.device!.code, item.device!.sn, item.device!.imei1, item.device!.imei2].some((c) => c && scanned.has(c));
 
   const accessoryUpdates: { itemId: number; countedQty: number }[] = [];
   for (const line of input.accessoryCounts ?? []) {
@@ -151,7 +155,7 @@ export async function enterCounts(user: CurrentUser, id: number, input: EnterCou
 
   await prisma.$transaction(async (tx) => {
     for (const item of deviceItems) {
-      const countedQty = counted.has(item.device!.imei) ? 1 : 0;
+      const countedQty = counted(item) ? 1 : 0;
       await tx.stocktakeItem.update({ where: { id: item.id }, data: { countedQty, diffQty: countedQty - item.expectedQty } });
     }
     for (const u of accessoryUpdates) {

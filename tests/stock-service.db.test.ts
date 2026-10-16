@@ -32,6 +32,11 @@ function fakeImeis(count: number, seed: number): string[] {
   return Array.from({ length: count }, (_, i) => String(900000000000000 + seed * 1000 + i).padStart(15, "0"));
 }
 
+// 只带 IMEI1 的机器（SN、IMEI2 为空）
+function fakeDevices(count: number, seed: number) {
+  return fakeImeis(count, seed).map((imei1) => ({ sn: null, imei1, imei2: null }));
+}
+
 beforeAll(async () => {
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -60,11 +65,11 @@ describe("库存服务层（连本机库，事务回滚）", () => {
     const f = fixture;
     await inRolledBackTx(async (tx) => {
       const before = await tx.device.count({ where: { storeId: f.storeId, status: "IN_STOCK" } });
-      const imeis = fakeImeis(10, 1);
+      const devices = fakeDevices(10, 1);
       const ids = await receiveDevices(tx, {
         storeId: f.storeId,
         skuId: f.deviceSkuId,
-        imeis,
+        devices,
         costFen: 499900,
         docType: "PURCHASE_RECEIPT",
         docNo: "RI-TEST-0001",
@@ -84,13 +89,21 @@ describe("库存服务层（连本机库，事务回滚）", () => {
     const f = fixture;
     await inRolledBackTx(async (tx) => {
       const imeis = fakeImeis(3, 2);
-      await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, imeis, costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-TEST-0002", operatorId: f.userId });
-      // 再入一批，其中一个和已入的重复
+      await receiveDevices(tx, {
+        storeId: f.storeId,
+        skuId: f.deviceSkuId,
+        devices: [{ sn: "SNTEST000001", imei1: imeis[0]!, imei2: imeis[1]! }, { sn: null, imei1: imeis[2]!, imei2: null }],
+        costFen: 1,
+        docType: "PURCHASE_RECEIPT",
+        docNo: "RI-TEST-0002",
+        operatorId: f.userId,
+      });
+      // 再入一批，其中一台的 IMEI1 和已入机器的 IMEI2 重复
       await expect(
         receiveDevices(tx, {
           storeId: f.storeId,
           skuId: f.deviceSkuId,
-          imeis: [imeis[0]!, ...fakeImeis(2, 3)],
+          devices: [{ sn: null, imei1: imeis[1]!, imei2: null }, ...fakeDevices(2, 3)],
           costFen: 1,
           docType: "PURCHASE_RECEIPT",
           docNo: "RI-TEST-0003",
@@ -98,9 +111,16 @@ describe("库存服务层（连本机库，事务回滚）", () => {
         }),
       ).rejects.toThrow(StockError);
       expect(await tx.stockLedger.count({ where: { docNo: "RI-TEST-0003" } })).toBe(0);
-      // 串号格式不对也拒绝
+      // SN 重复也拒绝
       await expect(
-        receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, imeis: ["12345"], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-TEST-0004", operatorId: f.userId }),
+        receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: [{ sn: "SNTEST000001", imei1: null, imei2: null }], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-TEST-0005", operatorId: f.userId }),
+      ).rejects.toThrow(StockError);
+      // 串号格式不对也拒绝；三个码都空也拒绝
+      await expect(
+        receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: [{ sn: null, imei1: "12345", imei2: null }], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-TEST-0004", operatorId: f.userId }),
+      ).rejects.toThrow(StockError);
+      await expect(
+        receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: [{ sn: null, imei1: null, imei2: null }], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-TEST-0006", operatorId: f.userId }),
       ).rejects.toThrow(StockError);
     });
   });
@@ -129,7 +149,7 @@ describe("库存服务层（连本机库，事务回滚）", () => {
     if (!dbReady || !fixture) return ctx.skip();
     const f = fixture;
     await inRolledBackTx(async (tx) => {
-      const [id] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, imeis: fakeImeis(1, 4), costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-TEST-0006", operatorId: f.userId });
+      const [id] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: fakeDevices(1, 4), costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-TEST-0006", operatorId: f.userId });
       const sold = await applyDeviceAction(tx, { deviceId: id!, action: "SELL", docType: "SALE", docNo: "SO-TEST-0003", operatorId: f.userId });
       expect(sold.status).toBe("SOLD");
       const ledger = await tx.stockLedger.findFirst({ where: { docNo: "SO-TEST-0003" } });

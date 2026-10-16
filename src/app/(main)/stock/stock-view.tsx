@@ -48,7 +48,12 @@ export function StockView({
   }
 
   const deviceColumns: TableColumnsType<DeviceRow> = [
-    { title: "串号", dataIndex: "imei", fixed: "left", render: (imei: string) => <Link href={`/stock/devices/${imei}`}>{imei}</Link> },
+    { title: "主码", dataIndex: "code", fixed: "left", render: (code: string) => <Link href={`/stock/devices/${code}`}>{code}</Link> },
+    {
+      title: "其他码",
+      render: (_, d) =>
+        [d.sn && d.sn !== d.code ? `SN ${d.sn}` : null, d.imei2 ? `IMEI2 ${d.imei2}` : null].filter(Boolean).join(" / ") || "-",
+    },
     { title: "商品", render: (_, d) => d.sku.name },
     { title: "品牌 / 型号", render: (_, d) => `${d.sku.model.brand.name} ${d.sku.model.name}` },
     { title: "门店", render: (_, d) => `${d.store.code} ${d.store.name}` },

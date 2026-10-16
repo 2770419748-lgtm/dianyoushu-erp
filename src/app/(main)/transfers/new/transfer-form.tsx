@@ -35,10 +35,15 @@ export function TransferForm({
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<number[]>([]);
   const [deviceFilter, setDeviceFilter] = useState("");
 
-  const visibleDevices = devices.filter((d) => !deviceFilter || d.imei.includes(deviceFilter) || d.sku.name.toLowerCase().includes(deviceFilter.toLowerCase()));
+  const visibleDevices = devices.filter(
+    (d) =>
+      !deviceFilter ||
+      [d.code, d.sn, d.imei1, d.imei2].some((c) => c && c.includes(deviceFilter)) ||
+      d.sku.name.toLowerCase().includes(deviceFilter.toLowerCase()),
+  );
 
   const deviceColumns: TableColumnsType<TransferDeviceOption> = [
-    { title: "串号", dataIndex: "imei" },
+    { title: "主码", dataIndex: "code" },
     { title: "商品", render: (_, d) => d.sku.name },
     { title: "状态", dataIndex: "status", render: (s: TransferDeviceOption["status"]) => <Tag>{DEVICE_STATUS_LABELS[s]}</Tag> },
   ];
