@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { App, Button, Card, Input, InputNumber, Modal, Radio, Result, Select, Space, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Input, InputNumber, Modal, Radio, Result, Select, Space, Tag, Typography } from "antd";
 import type { InputRef } from "antd";
 import type { PaymentMethod } from "@/generated/prisma/enums";
 import { ScanButton } from "@/components/scan-button";
@@ -49,11 +49,13 @@ export function MobileSaleView({
   storeId,
   availableTradeIns,
   tradeInSkuOptions,
+  dayClosed,
 }: {
   stores: { id: number; label: string }[];
   storeId: number;
   availableTradeIns: AvailableTradeIn[];
   tradeInSkuOptions: TradeInSkuOption[];
+  dayClosed: boolean; // 这家店今天已经日结确认：一进来就提示，不用等到提交才报错
 }) {
   const router = useRouter();
   const { message } = App.useApp();
@@ -67,12 +69,17 @@ export function MobileSaleView({
   const [customer, setCustomer] = useState<CustomerPick | null>(null);
   const [customerResults, setCustomerResults] = useState<CustomerPick[]>([]);
   const [tradeIn, setTradeIn] = useState<TradeInPick | null>(null);
-  const [tradeInOptions, setTradeInOptions] = useState<TradeInPick[]>(availableTradeIns);
+  const [createdTradeIns, setCreatedTradeIns] = useState<TradeInPick[]>([]);
+  const [usedTradeInIds, setUsedTradeInIds] = useState<number[]>([]);
+  const tradeInOptions = useMemo(() => {
+    const seen = new Set<number>();
+    return [...createdTradeIns, ...availableTradeIns].filter((t) => !usedTradeInIds.includes(t.id) && !seen.has(t.id) && seen.add(t.id));
+  }, [createdTradeIns, availableTradeIns, usedTradeInIds]);
   const [tradeInModalOpen, setTradeInModalOpen] = useState(false);
   const [method, setMethod] = useState<PaymentMethod>("WECHAT");
   // 拆两种收款：第二种填金额，主收款方式收剩下的（演示路径“微信 + 现金”就是这样）
   const [split, setSplit] = useState<{ method: PaymentMethod; amountYuan: number | null } | null>(null);
-  const [done, setDone] = useState<{ id: number; orderNo: string; totalFen: number; payText: string } | null>(null);
+  const [done, setDone] = useState<{ id: number; orderNo: string; totalFen: number; tradeInFen: number; paidFen: number; payText: string } | null>(null);
 
   useEffect(() => {
     linesRef.current = lines;
@@ -128,7 +135,7 @@ export function MobileSaleView({
 
   function onTradeInCreated(t: CreatedTradeIn) {
     const pick = { id: t.id, orderNo: t.orderNo, modelName: t.modelName, appraisedFen: t.appraisedFen };
-    setTradeInOptions((prev) => [pick, ...prev]);
+    setCreatedTradeIns((prev) => [pick, ...prev]);
     setTradeIn(pick);
     setTradeInModalOpen(false);
   }
@@ -159,11 +166,11 @@ export function MobileSaleView({
         message.error(result.error);
         return;
       }
-      if (tradeIn) setTradeInOptions((prev) => prev.filter((t) => t.id !== tradeIn.id));
+      if (tradeIn) setUsedTradeInIds((prev) => [...prev, tradeIn.id]);
       const payText = split
         ? `${PAYMENT_METHOD_LABELS[method]} ${formatFen(mainFen)} + ${PAYMENT_METHOD_LABELS[split.method]} ${formatFen(splitFen)}`
         : `${PAYMENT_METHOD_LABELS[method]} ${formatFen(Math.max(needFen, 0))}`;
-      setDone({ id: result.id!, orderNo: result.orderNo!, totalFen: Math.max(needFen, 0), payText });
+      setDone({ id: result.id!, orderNo: result.orderNo!, totalFen, tradeInFen, paidFen: Math.max(needFen, 0), payText });
     });
   }
 
@@ -173,8 +180,14 @@ export function MobileSaleView({
         <Card>
           <Result
             status="success"
-            title={`开单成功，收 ${formatFen(done.totalFen)} 元`}
-            subTitle={`${done.orderNo} · ${done.payText}`}
+            title={`开单成功，应收 ${formatFen(done.totalFen)} 元`}
+            subTitle={
+              <>
+                {done.tradeInFen > 0 ? `旧机抵 ${formatFen(done.tradeInFen)} 元，实收 ${formatFen(done.paidFen)} 元` : `实收 ${formatFen(done.paidFen)} 元`}
+                <br />
+                {done.payText} · {done.orderNo}
+              </>
+            }
             extra={
               <Space orientation="vertical" style={{ width: "100%" }}>
                 <Button type="primary" block style={BIG} onClick={reset}>
@@ -194,8 +207,9 @@ export function MobileSaleView({
   }
 
   return (
-    <div style={{ maxWidth: 560, margin: "0 auto", paddingBottom: 96 }}>
+    <div style={{ maxWidth: 560, margin: "0 auto", paddingBottom: 120 }}>
       <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+        {dayClosed ? <Alert type="warning" showIcon title="这家店今天已经日结确认了，不能再开单；确实要补单请总部先撤销日结。" /> : null}
         {stores.length > 1 ? (
           <Select value={storeId} style={{ width: "100%" }} size="large" showSearch optionFilterProp="label" options={stores.map((s) => ({ value: s.id, label: s.label }))} onChange={(v) => router.push(`/m/sale?storeId=${v}`)} />
         ) : (
@@ -276,7 +290,7 @@ export function MobileSaleView({
             </Space>
           ) : (
             <Space orientation="vertical" style={{ width: "100%" }}>
-              <Input.Search placeholder="输手机号找老客户" inputMode="tel" allowClear onSearch={async (q) => setCustomerResults(q.trim() ? await searchCustomersAction(q) : [])} />
+              <Input.Search placeholder="输完整手机号或姓名找老客户" inputMode="tel" allowClear onSearch={async (q) => setCustomerResults(q.trim() ? await searchCustomersAction(q) : [])} />
               {customerResults.length > 0 ? (
                 <Space wrap>
                   {customerResults.map((c) => (
@@ -399,13 +413,17 @@ export function MobileSaleView({
       >
         <div style={{ maxWidth: 560, margin: "0 auto", display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div style={{ fontSize: 12, color: "#888" }}>
               共 {itemCount} 件{tradeIn ? `，旧机抵 ${formatFen(tradeInFen)}` : ""}
-              {split && !splitInvalid ? `，${PAYMENT_METHOD_LABELS[method]} ${formatFen(mainFen)} + ${PAYMENT_METHOD_LABELS[split.method]} ${formatFen(splitFen)}` : ""}
             </div>
             <div style={{ fontSize: 20, fontWeight: 600 }}>¥{formatFen(Math.max(needFen, 0))}</div>
+            {split && !splitInvalid ? (
+              <div style={{ fontSize: 12, color: "#888" }}>
+                {PAYMENT_METHOD_LABELS[method]} {formatFen(mainFen)} + {PAYMENT_METHOD_LABELS[split.method]} {formatFen(splitFen)}
+              </div>
+            ) : null}
           </div>
-          <Button type="primary" size="large" style={{ ...BIG, minWidth: 150 }} loading={pending} disabled={lines.length === 0 || tradeInFen > totalFen || splitInvalid} onClick={submit}>
+          <Button type="primary" size="large" style={{ ...BIG, minWidth: 150 }} loading={pending} disabled={dayClosed || lines.length === 0 || tradeInFen > totalFen || splitInvalid} onClick={submit}>
             {split ? "收款并提交" : `${PAYMENT_METHOD_LABELS[method]}收款并提交`}
           </Button>
         </div>

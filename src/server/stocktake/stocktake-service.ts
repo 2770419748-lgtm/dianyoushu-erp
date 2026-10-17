@@ -1,4 +1,5 @@
 import "server-only";
+import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import { canConfirmStocktake, canEnterStocktake } from "@/server/auth/permissions";
 import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
@@ -37,7 +38,7 @@ function wrapStockError(error: unknown): never {
 export const STOCKTAKE_PAGE_SIZE = 20;
 
 export async function listStocktakes(user: CurrentUser, page = 1) {
-  const current = Math.max(1, Math.floor(page) || 1);
+  const current = clampPage(page);
   const where = storeScopeWhere(user);
   const [rows, total] = await Promise.all([
     prisma.stocktake.findMany({

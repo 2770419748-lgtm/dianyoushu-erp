@@ -1,8 +1,7 @@
-import { prisma } from "@/lib/prisma";
 import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { canManageTransfer } from "@/server/auth/permissions";
-import { listStoresInScope } from "@/server/org/store-query";
+import { listActiveStoreOptions, listStoresInScope } from "@/server/org/store-query";
 import { listAccessoriesForTransfer, listDevicesForTransfer } from "@/server/transfer/transfer-service";
 import { TransferForm } from "./transfer-form";
 
@@ -18,10 +17,9 @@ export default async function NewTransferPage({ searchParams }: PageProps<"/tran
   if (!canManageTransfer(user.role)) return <NoAccess />;
   const params = await searchParams;
 
-  const [fromStores, allStores] = await Promise.all([
-    listStoresInScope(user),
-    prisma.store.findMany({ where: { isActive: true }, orderBy: { code: "asc" }, select: { id: true, code: true, name: true } }),
-  ]);
+  // 发出店只列营业中的（停用门店不能再调拨，选了会报错）
+  const [scope, toStores] = await Promise.all([listStoresInScope(user), listActiveStoreOptions()]);
+  const fromStores = scope.filter((s) => s.isActive);
   if (fromStores.length === 0) return <NoAccess title="你没有可发出的门店" />;
 
   const requested = Number(one(params.fromStoreId));
@@ -33,7 +31,7 @@ export default async function NewTransferPage({ searchParams }: PageProps<"/tran
     <TransferForm
       key={fromStoreId}
       fromStores={fromStores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))}
-      toStores={allStores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))}
+      toStores={toStores}
       fromStoreId={fromStoreId}
       devices={devices}
       accessories={accessories}

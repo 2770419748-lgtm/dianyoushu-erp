@@ -76,7 +76,7 @@ export function CustomersView({ rows, total, page, pageSize, q }: { rows: Custom
       }
     >
       <Space style={{ marginBottom: 12 }}>
-        <Input.Search allowClear placeholder="输手机号或姓名" defaultValue={q} style={{ width: 280 }} onSearch={(value) => navigate({ q: value, page: 1 })} />
+        <Input.Search allowClear placeholder="输完整 11 位手机号，或姓名" defaultValue={q} style={{ width: "min(280px, 100%)" }} onSearch={(value) => navigate({ q: value, page: 1 })} />
         <Typography.Text type="secondary">手机号脱敏显示；开单时按完整手机号能搜到。</Typography.Text>
       </Space>
       <Table

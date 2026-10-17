@@ -1,19 +1,10 @@
-import { prisma } from "@/lib/prisma";
 import type { Role } from "@/generated/prisma/enums";
 import { requireUser } from "@/server/auth/current-user";
 import { ROLE_LABELS } from "@/server/auth/permissions";
-import { HomeView, type DbStatus, type QuickEntry } from "./home-view";
+import { getSystemStatus } from "@/server/system-status";
+import { HomeView, type QuickEntry } from "./home-view";
 
 export const dynamic = "force-dynamic";
-
-async function checkDatabase(): Promise<DbStatus> {
-  try {
-    const [stores, users] = await Promise.all([prisma.store.count(), prisma.user.count()]);
-    return { ok: true, stores, users };
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
-  }
-}
 
 const E = {
   mSale: { href: "/m/sale", title: "手机开单", desc: "扫码加商品，一屏收款", primary: true },
@@ -39,6 +30,6 @@ const ENTRIES: Record<Role, QuickEntry[]> = {
 
 export default async function HomePage() {
   const user = await requireUser();
-  const db = await checkDatabase();
+  const db = await getSystemStatus(user);
   return <HomeView db={db} greeting={`你好，${user.name}（${ROLE_LABELS[user.role]}）`} entries={ENTRIES[user.role]} />;
 }

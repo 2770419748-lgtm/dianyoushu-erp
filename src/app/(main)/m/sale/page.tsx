@@ -2,6 +2,7 @@ import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { canSell } from "@/server/auth/permissions";
 import { listStoresInScope } from "@/server/org/store-query";
+import { isStoreClosedToday } from "@/server/sales/sales-service";
 import { listAvailableTradeIns, listTradeInSkuOptions } from "@/server/tradein/trade-in-service";
 import { MobileSaleView } from "./mobile-sale-view";
 
@@ -20,7 +21,7 @@ export default async function MobileSalePage({ searchParams }: PageProps<"/m/sal
   if (stores.length === 0) return <NoAccess title="你没有可开单的门店" />;
   const requested = Number(one(params.storeId));
   const storeId = stores.some((s) => s.id === requested) ? requested : (user.storeId ?? stores[0]!.id);
-  const [tradeIns, tradeInSkuOptions] = await Promise.all([listAvailableTradeIns(user, storeId), listTradeInSkuOptions()]);
+  const [tradeIns, tradeInSkuOptions, dayClosed] = await Promise.all([listAvailableTradeIns(user, storeId), listTradeInSkuOptions(), isStoreClosedToday(user, storeId)]);
   return (
     <MobileSaleView
       key={storeId}
@@ -28,6 +29,7 @@ export default async function MobileSalePage({ searchParams }: PageProps<"/m/sal
       storeId={storeId}
       availableTradeIns={tradeIns}
       tradeInSkuOptions={tradeInSkuOptions}
+      dayClosed={dayClosed}
     />
   );
 }

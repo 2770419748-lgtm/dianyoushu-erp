@@ -1,4 +1,5 @@
 import "server-only";
+import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { SkuKind } from "@/generated/prisma/enums";
 import { canManageProducts } from "@/server/auth/permissions";
@@ -82,7 +83,7 @@ export interface SkuQuery {
 }
 
 export async function searchSkus(query: SkuQuery) {
-  const page = Math.max(1, Math.floor(query.page ?? 1) || 1);
+  const page = clampPage(query.page);
   const where = {
     AND: [
       skuSearchWhere(query.q ?? ""),

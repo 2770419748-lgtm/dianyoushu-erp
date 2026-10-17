@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { Card, Col, Row, Space, Tag, Typography } from "antd";
 
-const { Title, Paragraph } = Typography;
+import type { SystemStatus as DbStatus } from "@/server/system-status";
 
-export type DbStatus = { ok: true; stores: number; users: number } | { ok: false; message: string };
+const { Title, Paragraph } = Typography;
 
 export interface QuickEntry {
   href: string;
@@ -39,7 +39,7 @@ export function HomeView({ db, greeting, entries }: { db: DbStatus; greeting: st
       </Row>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         数据库：{db.ok ? <Tag color="green">已连接</Tag> : <Tag color="red">连不上</Tag>}
-        {db.ok ? `门店 ${db.stores} 家，用户 ${db.users} 个` : db.message}
+        {db.ok ? (db.counts ? `门店 ${db.counts.stores} 家，用户 ${db.counts.users} 个` : "") : "暂时连不上，请稍后刷新；一直连不上请联系管理员"}
       </Typography.Text>
     </Space>
   );

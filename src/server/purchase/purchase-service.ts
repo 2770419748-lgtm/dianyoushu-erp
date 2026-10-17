@@ -1,4 +1,5 @@
 import "server-only";
+import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import { canManagePurchase } from "@/server/auth/permissions";
@@ -73,7 +74,7 @@ function assertCanViewPurchase(user: CurrentUser) {
 
 export async function listPurchaseOrders(user: CurrentUser, page = 1) {
   assertCanViewPurchase(user);
-  const current = Math.max(1, Math.min(Math.floor(page) || 1, 100000));
+  const current = clampPage(page);
   const where = storeScopeWhere(user);
   const [rows, total] = await Promise.all([
     prisma.purchaseOrder.findMany({
@@ -121,6 +122,15 @@ export async function getPurchaseOrder(user: CurrentUser, id: number) {
 }
 
 export type PurchaseOrderDetail = NonNullable<Awaited<ReturnType<typeof getPurchaseOrder>>>;
+
+/** 编辑页要的采购单（只取表单字段）；不存在返回 null */
+export async function getPurchaseOrderForEdit(user: CurrentUser, id: number) {
+  assertCanViewPurchase(user);
+  return prisma.purchaseOrder.findUnique({
+    where: { id },
+    select: { id: true, status: true, storeId: true, supplierName: true, note: true, items: { select: { skuId: true, qty: true, unitCostFen: true } } },
+  });
+}
 
 /** 新建采购单时要选的商品：在售 SKU（带品类大件/小件） */
 export async function listSkuOptions() {

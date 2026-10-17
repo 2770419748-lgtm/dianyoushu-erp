@@ -1,11 +1,12 @@
 import "server-only";
+import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 
 export const AUDIT_PAGE_SIZE = 20;
 
 // 操作日志只给总部看（页面层检查角色），这里只管分页查询。
 export async function listAuditLogs(page: number) {
-  const current = Math.max(1, Math.floor(page) || 1);
+  const current = clampPage(page);
   const [rows, total] = await Promise.all([
     prisma.auditLog.findMany({
       orderBy: { id: "desc" },

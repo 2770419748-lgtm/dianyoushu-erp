@@ -65,7 +65,8 @@ export function CashierReportView({
         <Select
           allowClear={stores.length > 1}
           placeholder="全部门店"
-          value={storeId}
+          // 只能看一家店的人（店员、店长）直接显示这家店，别显示成“全部门店”
+          value={stores.length === 1 ? stores[0]!.id : storeId}
           style={{ width: 220 }}
           showSearch
           optionFilterProp="label"

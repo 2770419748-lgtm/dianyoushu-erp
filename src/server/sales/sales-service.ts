@@ -1,4 +1,5 @@
 import "server-only";
+import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import { maskPhone } from "@/lib/sales-labels";
@@ -190,6 +191,14 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   return { id: order.id, orderNo };
 }
 
+/** 开单页一进来就提示“今天已日结”，不用等到提交才报错 */
+export async function isStoreClosedToday(user: CurrentUser, storeId: number): Promise<boolean> {
+  const store = await prisma.store.findUnique({ where: { id: storeId }, select: { id: true, regionId: true } });
+  if (!store) return false;
+  assertStoreAccess(user, store);
+  return isDayClosed(prisma, storeId, todayBizDate());
+}
+
 export async function createSalesOrder(user: CurrentUser, input: SalesOrderInput) {
   return prisma.$transaction((tx) => createSalesOrderTx(tx, user, input));
 }
@@ -238,7 +247,7 @@ export async function voidSalesOrder(user: CurrentUser, orderId: number, reason:
 export const SALES_PAGE_SIZE = 20;
 
 export async function listSalesOrders(user: CurrentUser, query: { storeId?: number; page?: number }) {
-  const page = Math.max(1, Math.floor(query.page ?? 1) || 1);
+  const page = clampPage(query.page);
   const where = {
     AND: [storeScopeWhere(user), user.role === "STAFF" ? { salespersonId: user.id } : {}, query.storeId ? { storeId: query.storeId } : {}],
   };

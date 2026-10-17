@@ -23,6 +23,12 @@ export async function listStoresInScope(user: CurrentUser) {
 
 export type StoreListItem = Awaited<ReturnType<typeof listStoresInScope>>[number];
 
+/** 营业中的全部门店（采购收货门店、调拨收货门店的下拉选项；只有编码和名称） */
+export async function listActiveStoreOptions() {
+  const stores = await prisma.store.findMany({ where: { isActive: true }, orderBy: { code: "asc" }, select: { id: true, code: true, name: true } });
+  return stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }));
+}
+
 /** 查不到返回 null；查得到但不在范围内抛 PermissionError */
 export async function getStoreInScope(user: CurrentUser, id: number) {
   const store = await prisma.store.findUnique({

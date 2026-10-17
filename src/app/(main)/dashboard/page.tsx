@@ -14,8 +14,9 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
   const user = await requireUser();
   if (user.role === "STAFF") return <NoAccess title="看板给店长、区域经理和总部看" />;
   const params = await searchParams;
-  const storeId = Number(one(params.storeId)) || undefined;
+  const requested = Number(one(params.storeId));
+  const storeId = Number.isInteger(requested) && requested > 0 && requested <= 2147483647 ? requested : undefined;
   const data = await getDashboard(user, storeId);
-  if (!data) return <NoAccess title="你没有可看的门店" />;
+  if (!data) return storeId ? <NoAccess title="没有权限看这家门店" subTitle="这家店不在你能看的范围里。" /> : <NoAccess title="你没有可看的门店" />;
   return <DashboardView data={data} storeId={storeId} />;
 }

@@ -42,8 +42,8 @@ async function loadStore(user: CurrentUser, storeId: number) {
 
 
 async function loadDay(tx: Tx | typeof prisma, storeId: number, bizDate: Date) {
-  const [orders, returns, close] = await Promise.all([
-    tx.salesOrder.findMany({
+  // 依次查，不用 Promise.all：在事务里时 tx 只有一条连接，并发发查询 pg 会报弃用警告
+  const orders = await tx.salesOrder.findMany({
       where: { storeId, bizDate },
       orderBy: { id: "asc" },
       include: {
@@ -51,14 +51,13 @@ async function loadDay(tx: Tx | typeof prisma, storeId: number, bizDate: Date) {
         customer: { select: { name: true, phone: true } },
         salesperson: { select: { name: true } },
       },
-    }),
-    tx.returnOrder.findMany({
+    });
+  const returns = await tx.returnOrder.findMany({
       where: { storeId, bizDate },
       orderBy: { id: "asc" },
       include: { payments: { select: { method: true, amountFen: true } }, salesOrder: { select: { orderNo: true } }, handledBy: { select: { name: true } } },
-    }),
-    tx.dailyClose.findUnique({ where: { storeId_bizDate: { storeId, bizDate } }, include: { lines: true, confirmedBy: { select: { name: true } } } }),
-  ]);
+    });
+  const close = await tx.dailyClose.findUnique({ where: { storeId_bizDate: { storeId, bizDate } }, include: { lines: true, confirmedBy: { select: { name: true } } } });
   const completed = orders.filter((o) => o.status === "COMPLETED");
   const system = summarizeByMethod([...completed.flatMap((o) => o.payments), ...returns.flatMap((r) => r.payments)]);
   return { orders, completed, returns, close, system };

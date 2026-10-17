@@ -116,7 +116,7 @@ export function PurchaseDetailView({ order, canManage }: { order: PurchaseOrderD
       {canManage && order.status === "SUBMITTED" && pendingItems.length > 0 ? (
         <Card title="到货入库">
           <Typography.Paragraph type="secondary">
-            大件：把串号粘贴进去，一行一个或用空格、逗号隔开，15 位数字；小件：填本次到货数量。可以分多次到货，全部到齐采购单自动变“已到货”。
+            大件：一行一台，每行填 SN、IMEI1、IMEI2 任意 1 到 3 个（用空格或逗号隔开，IMEI 是 15 位数字），也可以点“扫码录入”一台台扫；小件：填本次到货数量。可以分多次到货，全部到齐采购单自动变“已到货”。
           </Typography.Paragraph>
           <Form form={receiveForm} name="receive" layout="vertical" onFinish={onReceive}>
             {pendingItems.map((item) => {

@@ -1,4 +1,5 @@
 import "server-only";
+import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import { maskPhone } from "@/lib/sales-labels";
 import { canSell } from "@/server/auth/permissions";
@@ -20,8 +21,9 @@ export const CUSTOMER_PAGE_SIZE = 20;
 export async function searchCustomers(user: CurrentUser, q = "", page = 1) {
   assertCanUse(user);
   const text = q.trim();
-  const current = Math.max(1, Math.floor(page) || 1);
-  const where = text ? { OR: [{ phone: { contains: text } }, { name: { contains: text, mode: "insensitive" as const } }] } : {};
+  const current = clampPage(page);
+  // 手机号必须输全 11 位才匹配（精确查找）；只输几位不按手机号匹配，否则一位一位地试，几十次就能猜出被脱敏的中间 4 位。姓名照样模糊搜
+  const where = !text ? {} : PHONE_PATTERN.test(text) ? { phone: text } : { name: { contains: text, mode: "insensitive" as const } };
   const [rows, total] = await Promise.all([
     prisma.customer.findMany({
       where,

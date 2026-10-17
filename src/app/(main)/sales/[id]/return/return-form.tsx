@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { App, Button, Card, Checkbox, Input, InputNumber, Select, Space, Table, Typography } from "antd";
+import { Alert, App, Button, Card, Checkbox, Input, InputNumber, Select, Space, Table, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import type { PaymentMethod } from "@/generated/prisma/enums";
 import { formatFen, yuanToFen } from "@/lib/format";
@@ -73,6 +73,7 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
         </Link>
       }
     >
+      {ctx.todayClosed ? <Alert type="warning" showIcon title="这家店今天已经日结确认了，不能再退货；确实要退请总部先撤销今天的日结。" style={{ marginBottom: 16 }} /> : null}
       <Typography.Paragraph type="secondary">
         勾选要退的机器、填配件数量。退回后机器回在库（回收机回良品）、配件加回数量。退款走原单用过的收款方式；以旧换新抵扣的 {formatFen(ctx.tradeInFen)} 元不退（旧机已回收）。
       </Typography.Paragraph>
@@ -91,7 +92,7 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
           <Select style={{ width: 140 }} value={method} onChange={setMethod} options={ctx.refundMethods.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] }))} placeholder={ctx.refundMethods.length ? "选择" : "原单全是抵扣，不用退钱"} disabled={ctx.refundMethods.length === 0} />
         </Space>
         <Input placeholder="退货原因" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)} style={{ width: 360 }} />
-        <Button type="primary" danger loading={pending} disabled={selectedCount === 0 || overCap || (refundFen > 0 && !method)} onClick={submit}>
+        <Button type="primary" danger loading={pending} disabled={ctx.todayClosed || selectedCount === 0 || overCap || (refundFen > 0 && !method)} onClick={submit}>
           确认退货（退 {formatFen(refundFen)} 元）
         </Button>
       </Space>

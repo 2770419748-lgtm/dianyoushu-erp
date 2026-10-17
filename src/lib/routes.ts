@@ -45,6 +45,14 @@ export interface BreadcrumbEntry {
   title: string;
 }
 
+function safeDecode(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
 /** 由当前路径算出面包屑：首页 / 一级 / 详情 */
 export function breadcrumbFor(pathname: string): BreadcrumbEntry[] {
   const items: BreadcrumbEntry[] = [{ href: "/", title: ROUTE_TITLES["/"] }];
@@ -56,7 +64,9 @@ export function breadcrumbFor(pathname: string): BreadcrumbEntry[] {
     acc += `/${segment}`;
     const isLast = index === segments.length - 1;
     const known = ROUTE_TITLES[acc];
-    const title = known ?? SEGMENT_TITLES[segment] ?? (/^\d+$/.test(segment) ? "详情" : segment);
+    const parent = acc.slice(0, acc.length - segment.length - 1);
+    // 机器详情的最后一段是码本身（IMEI 全是数字、SN 有字母），统一显示码，不把 IMEI 显示成“详情”
+    const title = known ?? SEGMENT_TITLES[segment] ?? (parent === "/stock/devices" ? safeDecode(segment) : /^\d+$/.test(segment) ? "详情" : segment);
     items.push(isLast || NO_PAGE.has(acc) ? { title } : { href: acc, title });
   });
   return items;

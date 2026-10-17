@@ -25,7 +25,12 @@ async function load(user: CurrentUser, code: string): Promise<Loaded> {
 // 机器详情：地址里的码可以是主码、SN、IMEI1、IMEI2 任意一个（扫码跳转也走这里）。
 export default async function DevicePage({ params }: PageProps<"/stock/devices/[code]">) {
   const { code } = await params;
-  const decoded = decodeURIComponent(code);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(code);
+  } catch {
+    notFound(); // 手拼的地址里有坏的 % 编码
+  }
   if (!isValidCode(decoded)) notFound();
   const user = await requireUser();
   const loaded = await load(user, decoded);

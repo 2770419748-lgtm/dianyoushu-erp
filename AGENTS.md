@@ -102,6 +102,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 - 改机器状态、配件数量一律走 `stock-service`：机器用“状态没变才更新”的条件写入，配件用原子增减，不要自己先读再写回。
 - 新写的单据操作如果会影响某店某天的收银（开单、作废、退货、日结），事务一开始先调 `lockStoreDay(tx, storeId, bizDate)`，拿到锁之后再读数据做检查。
+- 会改库存或改单据状态的操作（发出、收货、入库、确认、作废）：事务里先 `lockRow(tx, 表, id)` 锁住单据行，再重新读单据和明细做检查；只改状态的也可以用 `updateMany({ where: { id, status: 旧状态 } })`，改到 0 行就报“刚被别人处理过”。
+- 页面（page.tsx）不直接用 prisma，查询都放 `src/server/` 的服务函数里（权限和范围也在那里检查）。
 - 唯一约束、检查约束是兜底，业务代码仍要先检查给出好懂的提示；撞上约束时用 `src/server/db-errors.ts` 认出来换成人话。
 
 ## 保留升级成 App 的路径（2026-10-16 坤总要求）

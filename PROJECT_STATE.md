@@ -32,6 +32,7 @@
 - 第 12 周：README 终版；`docs/取舍记录.md`；`docs/业务口径.md` v1（对着代码核了一遍，修了调拨候选混进良品、看板旧机回收按回收单台数）；本机 `pnpm build` 通过，生产版本跑端到端两条都过。
 - 代码审查修复（2026-10-17）：机器状态条件写入、配件原子增减 + CHECK 约束、门店 × 营业日咨询锁（`lockStoreDay`）、迁移 `integrity_checks`（配件余额 ≥ 0、收款二选一、已退数量范围）、重复码友好提示、CSV 防公式注入（`src/lib/csv.ts`）、新建调拨服务端搜索分页；并发测试 `tests/concurrency.db.test.ts`。测试 84 条 + 端到端 2 条。
 - 复查后补（2026-10-17）：盘点明细、调拨明细加“一台机器只能一行”唯一约束（迁移 `item_device_unique`）；生产启动配置检查 `src/instrumentation.ts`（弱密钥、占位值、没配数据库就拒绝启动，本机实测过）；README / 部署文档写清演示密码；测试文件改为依次跑（`vitest.config.mts` 的 `fileParallelism: false`）。测试 87 条 + 端到端 2 条。
+- 全面自检修复（2026-10-17）：另一个会话从头查了一遍，报告的 11 + 5 + 4 条和十几处小毛病都修了；单据级防并发 `src/server/db-lock.ts`；盘点按录入时的系统数算差异；退款上限 `returnRefundCapFen`；销售明细原价 `list_price_fen`；采购单只给总部、成本按角色去掉；登录 `src/server/auth/login-service.ts`（按用户名限流）；cookie Secure 按协议；停用账号清 cookie `/api/session/clear`；CI 起 PostgreSQL 跑全部测试和构建；回归测试 `tests/regression.db.test.ts`（`RUN_DESTRUCTIVE_TESTS=1` 才跑）。测试 100 条（含回归 7 条）+ 端到端 2 条。
 
 ## 进行中
 
@@ -88,6 +89,7 @@ code/
 - `pnpm dev:https`：本机临时 HTTPS，手机连同一个 Wi-Fi 能打开并扫码（和 `pnpm dev` 二选一）
 - `pnpm db:backup`：备份到代码目录旁边的“备份”文件夹，留 14 份；`pnpm db:restore-check`：恢复进临时库逐表对行数再删掉
 - `pnpm test`：Vitest 单元测试（含连本机库的核心链路测试，跑完回滚）
+- 回归测试会写库：本机要跑先建副本库，`DATABASE_URL=副本 RUN_DESTRUCTIVE_TESTS=1 pnpm vitest run tests/regression.db.test.ts`，别在日常用的库上跑；CI 每次都是全新库，默认就跑。
 - `pnpm test:e2e`：Playwright 端到端两条：电脑开单到日结、手机尺寸开单（用本机 Edge，开发服务器开着就复用）
 - `pnpm typecheck`：先生成路由类型再做 TypeScript 检查
 - `pnpm lint`：ESLint

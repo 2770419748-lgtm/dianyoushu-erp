@@ -1,4 +1,5 @@
 import "server-only";
+import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { DeviceStatus } from "@/generated/prisma/enums";
 import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
@@ -16,7 +17,7 @@ export interface DeviceQuery {
 }
 
 export async function listDevices(user: CurrentUser, query: DeviceQuery) {
-  const page = Math.max(1, Math.floor(query.page ?? 1) || 1);
+  const page = clampPage(query.page);
   const text = (query.q ?? "").trim();
   const where = {
     AND: [
@@ -91,7 +92,7 @@ export async function listAccessoryStocks(user: CurrentUser, query: { storeId?: 
 export type AccessoryStockRow = Awaited<ReturnType<typeof listAccessoryStocks>>[number];
 
 export async function listLedger(user: CurrentUser, query: { storeId?: number; q?: string; page?: number }) {
-  const page = Math.max(1, Math.floor(query.page ?? 1) || 1);
+  const page = clampPage(query.page);
   const text = (query.q ?? "").trim();
   const where = {
     AND: [

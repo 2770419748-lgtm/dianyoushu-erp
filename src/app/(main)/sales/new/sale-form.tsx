@@ -212,7 +212,7 @@ export function SaleForm({
   return (
     <Row gutter={[16, 16]}>
       <Col xs={24} lg={14}>
-        <Card title="开单" extra={<Select value={storeId} style={{ width: 200 }} showSearch optionFilterProp="label" options={stores.map((s) => ({ value: s.id, label: s.label }))} onChange={(v) => router.push(`/sales/new?storeId=${v}`)} disabled={stores.length === 1} />}>
+        <Card title="开单" extra={<Select value={storeId} style={{ width: "min(200px, 45vw)" }} showSearch optionFilterProp="label" options={stores.map((s) => ({ value: s.id, label: s.label }))} onChange={(v) => router.push(`/sales/new?storeId=${v}`)} disabled={stores.length === 1} />}>
           <Typography.Title level={5}>客户</Typography.Title>
           {customer ? (
             <Space style={{ marginBottom: 16 }}>
@@ -222,7 +222,7 @@ export function SaleForm({
           ) : (
             <Space orientation="vertical" style={{ width: "100%", marginBottom: 16 }}>
               <Space>
-                <Input.Search placeholder="输手机号或姓名找客户" style={{ width: 280 }} onSearch={searchCustomers} allowClear />
+                <Input.Search placeholder="输完整手机号或姓名找客户" style={{ width: "min(280px, 100%)" }} onSearch={searchCustomers} allowClear />
                 <Button onClick={() => { customerForm.resetFields(); setCustomerModalOpen(true); }}>新客户</Button>
                 <Typography.Text type="secondary">不选就是散客</Typography.Text>
               </Space>
@@ -238,7 +238,7 @@ export function SaleForm({
 
           <Typography.Title level={5}>机器</Typography.Title>
           <Space wrap style={{ marginBottom: 8 }}>
-            <Input.Search placeholder="输串号、SN 或型号搜本店在库机器" style={{ width: 320 }} loading={searching} onSearch={searchDevices} enterButton="搜" />
+            <Input.Search placeholder="输串号、SN 或型号搜本店在库机器" style={{ width: "min(320px, calc(100vw - 72px))" }} loading={searching} onSearch={searchDevices} enterButton="搜" />
             <ScanButton continuous label="扫码加商品" onCode={(c) => void addScanned(c)} />
           </Space>
           {deviceResults.length > 0 ? <Table rowKey="id" size="small" pagination={{ pageSize: 5, showSizeChanger: false }} columns={deviceColumns} dataSource={deviceResults} /> : null}
@@ -249,7 +249,7 @@ export function SaleForm({
               showSearch
               optionFilterProp="label"
               placeholder="选配件"
-              style={{ width: 320 }}
+              style={{ width: "min(320px, calc(100vw - 72px))" }}
               value={accessorySkuId}
               onChange={setAccessorySkuId}
               options={accessories.map((a) => ({ value: a.skuId, label: `${a.name}（${formatFen(a.priceFen)} 元，有 ${a.qty}）` }))}

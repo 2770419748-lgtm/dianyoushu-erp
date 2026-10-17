@@ -1,4 +1,5 @@
 import "server-only";
+import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import { canManageTransfer } from "@/server/auth/permissions";
@@ -48,7 +49,7 @@ function wrapStockError(error: unknown): never {
 export const TRANSFER_PAGE_SIZE = 20;
 
 export async function listTransfers(user: CurrentUser, page = 1) {
-  const current = Math.max(1, Math.floor(page) || 1);
+  const current = clampPage(page);
   const scope = storeTableWhere(user);
   const where = { OR: [{ fromStore: scope }, { toStore: scope }] };
   const [rows, total] = await Promise.all([
@@ -105,7 +106,7 @@ export async function listDevicesForTransfer(user: CurrentUser, storeId: number,
   const store = await loadStore(storeId);
   assertStoreAccess(user, store);
   const text = (query.q ?? "").trim();
-  const page = Math.max(1, Math.floor(query.page ?? 1) || 1);
+  const page = clampPage(query.page);
   const where: Prisma.DeviceWhereInput = {
     storeId,
     status: "IN_STOCK", // 只调在库的；良品（回收转良品）留在本店卖，状态机也不允许它锁定

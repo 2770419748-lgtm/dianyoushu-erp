@@ -23,7 +23,9 @@ export async function GET(request: NextRequest) {
     if (error instanceof DailyCloseError) return new Response(error.message, { status: 400 });
     throw error;
   }
-  const storeId = Number(params.get("storeId")) || undefined;
+  const storeText = params.get("storeId");
+  const storeId = storeText ? Number(storeText) : undefined;
+  if (storeId !== undefined && (!Number.isInteger(storeId) || storeId <= 0 || storeId > 2147483647)) return new Response("门店参数不对", { status: 400 });
   const rows = await cashierReport(user, { from: range.from, to: range.to, storeId });
 
   const header = ["营业日", "门店", ...DAILY_CLOSE_METHODS.map((m) => `${PAYMENT_METHOD_LABELS[m]}（元）`), "实收不含抵扣（元）", "日结状态"];

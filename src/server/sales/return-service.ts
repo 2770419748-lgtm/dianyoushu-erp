@@ -45,7 +45,8 @@ export async function getReturnContext(user: CurrentUser, salesOrderId: number) 
   const refunded = order.returnOrders.reduce((s, r) => s + r.refundFen, 0);
   const salePayments = order.payments.filter((p) => p.salesOrderId === order.id && p.amountFen > 0);
   return {
-    order: { id: order.id, orderNo: order.orderNo, status: order.status, subtotalFen: order.subtotalFen, totalFen: order.totalFen, store: order.store, dailyClosed: order.dailyCloseId !== null },
+    order: { id: order.id, orderNo: order.orderNo, status: order.status, subtotalFen: order.subtotalFen, totalFen: order.totalFen, store: order.store },
+    todayClosed: await isDayClosed(prisma, order.storeId, todayBizDate()), // 退货记在今天：今天已日结就不能退
     items: order.items.map((i) => ({
       id: i.id,
       name: i.sku.name,

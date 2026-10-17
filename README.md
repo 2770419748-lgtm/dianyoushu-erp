@@ -41,7 +41,7 @@
 
 ## 技术
 
-Next.js 16（App Router）+ TypeScript + Prisma 7 + PostgreSQL 17 + Ant Design 6 + ECharts；单仓库单进程，业务规则全部在 `src/server/` 服务层。测试：Vitest（单元测试和连库测试，跑完回滚）+ Playwright（电脑开单到日结、手机开单两条端到端）；GitHub Actions 跑 lint、类型检查和单元测试。部署用 Docker Compose（PostgreSQL + 应用 + Caddy 自动 HTTPS），写好了还没上线。
+Next.js 16（App Router）+ TypeScript + Prisma 7 + PostgreSQL 17 + Ant Design 6 + ECharts；单仓库单进程，业务规则全部在 `src/server/` 服务层。测试：Vitest（单元测试和连库测试，跑完回滚）+ Playwright（电脑开单到日结、手机开单两条端到端）；GitHub Actions 起一个临时 PostgreSQL，跑 lint、类型检查、全部测试（含连库、并发、回归）和生产构建。部署用 Docker Compose（PostgreSQL + 应用 + Caddy 自动 HTTPS），写好了还没上线。
 
 为什么这么选、为什么不做 App 和人事：`docs/取舍记录.md`。
 

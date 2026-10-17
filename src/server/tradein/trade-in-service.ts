@@ -1,4 +1,5 @@
 import "server-only";
+import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import type { DeviceStatus } from "@/generated/prisma/enums";
@@ -127,7 +128,7 @@ export async function refurbish(user: CurrentUser, deviceId: number) {
 export const TRADE_IN_PAGE_SIZE = 20;
 
 export async function listTradeIns(user: CurrentUser, page = 1) {
-  const current = Math.max(1, Math.floor(page) || 1);
+  const current = clampPage(page);
   const where = storeScopeWhere(user);
   const [rows, total] = await Promise.all([
     prisma.tradeInOrder.findMany({
@@ -160,7 +161,7 @@ export const RECYCLED_PAGE_SIZE = 20;
 /** 回收库存：本范围内状态为"回收"（等待检测）和"良品"的机器，分页（总部能看到几百台） */
 export async function listRecycledDevices(user: CurrentUser, page = 1) {
   const where = { AND: [storeScopeWhere(user), { status: { in: ["RECYCLED", "REFURBISHED"] as DeviceStatus[] } }] };
-  const current = Math.max(1, Math.floor(page) || 1);
+  const current = clampPage(page);
   const [rows, total] = await Promise.all([
     prisma.device.findMany({
       where,

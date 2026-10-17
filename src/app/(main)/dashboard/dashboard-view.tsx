@@ -22,8 +22,8 @@ export function DashboardView({ data, storeId }: { data: Dashboard; storeId?: nu
   const trendOption = useMemo<EChartOption>(
     () => ({
       tooltip: { trigger: "axis" },
-      legend: { data: ["销售额（元）", "毛利（元）", "单数"] },
-      grid: { left: 60, right: 50, top: 40, bottom: 30 },
+      legend: { type: "scroll", top: 0, data: ["销售额（元）", "毛利（元）", "单数"] },
+      grid: { left: 8, right: 16, top: 48, bottom: 8, containLabel: true },
       xAxis: { type: "category", data: data.trend.map((t) => t.date.slice(5)) },
       yAxis: [
         { type: "value", name: "元" },
@@ -42,7 +42,7 @@ export function DashboardView({ data, storeId }: { data: Dashboard; storeId?: nu
     () => ({
       tooltip: { trigger: "axis", valueFormatter: (v: number) => `${v} 万元` },
       legend: { data: data.months.map((m) => `${Number(m.slice(5))} 月`) },
-      grid: { left: 50, right: 20, top: 40, bottom: 60 },
+      grid: { left: 8, right: 16, top: 48, bottom: 8, containLabel: true },
       xAxis: { type: "category", data: data.storeMonth.map((s) => s.label.split(" ")[1]), axisLabel: { rotate: 30 } },
       yAxis: { type: "value", name: "万元" },
       series: data.months.map((m, i) => ({ name: `${Number(m.slice(5))} 月`, type: "bar", data: data.storeMonth.map((s) => Number(wan(s.months[i] ?? 0))) })),
@@ -53,8 +53,8 @@ export function DashboardView({ data, storeId }: { data: Dashboard; storeId?: nu
   const staffOption = useMemo<EChartOption>(
     () => ({
       tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-      legend: { data: ["销售额（元）", "毛利（元）"] },
-      grid: { left: 110, right: 30, top: 40, bottom: 20 },
+      legend: { type: "scroll", top: 0, data: ["销售额（元）", "毛利（元）"] },
+      grid: { left: 8, right: 16, top: 48, bottom: 8, containLabel: true },
       xAxis: { type: "value" },
       yAxis: { type: "category", inverse: true, data: data.staff.map((s) => `${s.name}·${s.store}`) },
       series: [
@@ -68,7 +68,7 @@ export function DashboardView({ data, storeId }: { data: Dashboard; storeId?: nu
   const hotOption = useMemo<EChartOption>(
     () => ({
       tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-      grid: { left: 140, right: 40, top: 10, bottom: 20 },
+      grid: { left: 8, right: 16, top: 10, bottom: 8, containLabel: true },
       xAxis: { type: "value", name: "台" },
       yAxis: { type: "category", inverse: true, data: data.hot.map((h) => h.model) },
       series: [{ name: "台数", type: "bar", data: data.hot.map((h) => h.qty), label: { show: true, position: "right" } }],
@@ -79,8 +79,8 @@ export function DashboardView({ data, storeId }: { data: Dashboard; storeId?: nu
   const kpiOption = useMemo<EChartOption>(
     () => ({
       tooltip: { trigger: "axis", valueFormatter: (v: number) => `${v}%` },
-      legend: { data: ["销售额完成率", "毛利完成率", "主机量完成率"] },
-      grid: { left: 50, right: 20, top: 40, bottom: 60 },
+      legend: { type: "scroll", top: 0, data: ["销售额完成率", "毛利完成率", "主机量完成率"] },
+      grid: { left: 8, right: 16, top: 48, bottom: 8, containLabel: true },
       xAxis: { type: "category", data: data.kpi.map((k) => k.label.split(" ")[1]), axisLabel: { rotate: 30 } },
       yAxis: { type: "value", name: "%", max: (v: { max: number }) => Math.max(110, Math.ceil(v.max / 10) * 10) },
       series: [
@@ -88,7 +88,7 @@ export function DashboardView({ data, storeId }: { data: Dashboard; storeId?: nu
           name: "销售额完成率",
           type: "bar",
           data: data.kpi.map((k) => (k.salesRate === null ? 0 : Math.round(k.salesRate * 100))),
-          markLine: { symbol: "none", data: [{ yAxis: Math.round(data.progress * 100), name: "时间进度" }], label: { formatter: `时间进度 ${Math.round(data.progress * 100)}%` }, lineStyle: { color: "#fa541c", type: "dashed" } },
+          markLine: { symbol: "none", data: [{ yAxis: Math.round(data.progress * 100), name: "时间进度" }], label: { formatter: `时间进度 ${Math.round(data.progress * 100)}%`, position: "insideEndTop" }, lineStyle: { color: "#fa541c", type: "dashed" } },
         },
         { name: "毛利完成率", type: "bar", data: data.kpi.map((k) => (k.profitRate === null ? 0 : Math.round(k.profitRate * 100))) },
         { name: "主机量完成率", type: "bar", data: data.kpi.map((k) => (k.deviceRate === null ? 0 : Math.round(k.deviceRate * 100))) },
@@ -100,8 +100,8 @@ export function DashboardView({ data, storeId }: { data: Dashboard; storeId?: nu
   const stockOption = useMemo<EChartOption>(
     () => ({
       tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-      legend: { data: ["在库", "近 30 天卖出", "在库超 30 天"] },
-      grid: { left: 40, right: 20, top: 40, bottom: 60 },
+      legend: { type: "scroll", top: 0, data: ["在库", "近 30 天卖出", "在库超 30 天"] },
+      grid: { left: 8, right: 16, top: 48, bottom: 8, containLabel: true },
       xAxis: { type: "category", data: data.stock.map((s) => s.label.split(" ")[1]), axisLabel: { rotate: 30 } },
       yAxis: { type: "value", name: "台" },
       series: [
