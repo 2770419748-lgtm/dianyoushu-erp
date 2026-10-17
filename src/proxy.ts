@@ -5,6 +5,12 @@ import { COOKIE_NAME, verifySessionToken } from "@/server/auth/token";
 // 这只是"乐观检查"，真正的用户有效性（是否停用、角色）在页面和服务层再查库确认。
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  // 手拼的地址里有坏的 % 编码（如 /sales/%ZZ）：Next 进页面前解码会失败、报 500，这里先拦下回 404
+  try {
+    decodeURIComponent(pathname);
+  } catch {
+    return new NextResponse(null, { status: 404 });
+  }
   const session = await verifySessionToken(request.cookies.get(COOKIE_NAME)?.value);
 
   if (pathname.startsWith("/login")) {

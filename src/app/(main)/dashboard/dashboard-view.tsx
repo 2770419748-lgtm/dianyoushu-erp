@@ -41,7 +41,7 @@ export function DashboardView({ data, storeId }: { data: Dashboard; storeId?: nu
   const monthOption = useMemo<EChartOption>(
     () => ({
       tooltip: { trigger: "axis", valueFormatter: (v: number) => `${v} 万元` },
-      legend: { data: data.months.map((m) => `${Number(m.slice(5))} 月`) },
+      legend: { type: "scroll", top: 0, data: data.months.map((m) => `${Number(m.slice(5))} 月`) },
       grid: { left: 8, right: 16, top: 48, bottom: 8, containLabel: true },
       xAxis: { type: "category", data: data.storeMonth.map((s) => s.label.split(" ")[1]), axisLabel: { rotate: 30 } },
       yAxis: { type: "value", name: "万元" },
