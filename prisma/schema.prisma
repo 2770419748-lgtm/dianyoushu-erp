@@ -350,7 +350,7 @@ model AccessoryStock {
   id        Int      @id @default(autoincrement())
   storeId   Int      @map("store_id")
   skuId     Int      @map("sku_id")
-  qty       Int      @default(0)
+  qty       Int      @default(0) // 数据库 CHECK qty >= 0（迁移 integrity_checks）
   updatedAt DateTime @updatedAt @map("updated_at")
 
   store Store @relation(fields: [storeId], references: [id])
@@ -628,7 +628,7 @@ model SalesOrderItem {
   discountFen  Int  @default(0) @map("discount_fen") // 行优惠
   lineTotalFen Int  @map("line_total_fen") // 单价 × 数量 − 行优惠
   costFen      Int  @map("cost_fen") // 成本快照合计，算毛利用
-  returnedQty  Int  @default(0) @map("returned_qty")
+  returnedQty  Int  @default(0) @map("returned_qty") // 数据库 CHECK 0 <= returned_qty <= qty
 
   order  SalesOrder @relation(fields: [orderId], references: [id])
   sku    Sku        @relation(fields: [skuId], references: [id])
@@ -642,6 +642,7 @@ model SalesOrderItem {
 }
 
 /// 支付明细：收款为正，退款为负；一张单可拆多种方式
+/// 数据库 CHECK：sales_order_id 和 return_order_id 必须且只能填一个（迁移 integrity_checks）
 model Payment {
   id             Int           @id @default(autoincrement())
   salesOrderId   Int?          @map("sales_order_id")

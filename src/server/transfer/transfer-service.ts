@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@/generated/prisma/client";
 import { canManageTransfer } from "@/server/auth/permissions";
 import { assertStoreAccess, canAccessStoreSafe, storeTableWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
@@ -96,26 +97,37 @@ export async function getTransfer(user: CurrentUser, id: number) {
 
 export type TransferDetail = NonNullable<Awaited<ReturnType<typeof getTransfer>>>;
 
-/** 新建调拨时可选的机器：发出店在库或良品的 */
-export async function listDevicesForTransfer(user: CurrentUser, storeId: number, q = "") {
+export const TRANSFER_DEVICE_PAGE_SIZE = 20;
+
+/** 新建调拨时可选的机器：发出店在库的；按任意码或商品名在服务端搜，分页（新进的排前面） */
+export async function listDevicesForTransfer(user: CurrentUser, storeId: number, query: { q?: string; page?: number } = {}) {
   const store = await loadStore(storeId);
   assertStoreAccess(user, store);
-  const text = q.trim();
-  return prisma.device.findMany({
-    where: {
-      storeId,
-      status: "IN_STOCK", // 只调在库的；良品（回收转良品）留在本店卖，状态机也不允许它锁定
-      ...(text
-        ? { OR: [{ code: { contains: text } }, { sn: { contains: text } }, { imei2: { contains: text } }, { sku: { name: { contains: text, mode: "insensitive" } } }] }
-        : {}),
-    },
-    orderBy: [{ skuId: "asc" }, { code: "asc" }],
-    take: 2000, // 一家店的在库机器一般几百台；全列出来，前端按串号或商品名筛（新进的机器也一定在里面）
-    select: { id: true, code: true, sn: true, imei1: true, imei2: true, status: true, sku: { select: { name: true } } },
-  });
+  const text = (query.q ?? "").trim();
+  const page = Math.max(1, Math.floor(query.page ?? 1) || 1);
+  const where: Prisma.DeviceWhereInput = {
+    storeId,
+    status: "IN_STOCK", // 只调在库的；良品（回收转良品）留在本店卖，状态机也不允许它锁定
+    ...(text
+      ? { OR: [{ code: { contains: text } }, { sn: { contains: text } }, { imei1: { contains: text } }, { imei2: { contains: text } }, { sku: { name: { contains: text, mode: "insensitive" } } }] }
+      : {}),
+  };
+  const [rows, total] = await Promise.all([
+    prisma.device.findMany({
+      where,
+      orderBy: { id: "desc" },
+      skip: (page - 1) * TRANSFER_DEVICE_PAGE_SIZE,
+      take: TRANSFER_DEVICE_PAGE_SIZE,
+      select: { id: true, code: true, sn: true, imei1: true, imei2: true, status: true, sku: { select: { name: true } } },
+    }),
+    prisma.device.count({ where }),
+  ]);
+  return { rows, total, page, pageSize: TRANSFER_DEVICE_PAGE_SIZE };
 }
 
-export type TransferDeviceOption = Awaited<ReturnType<typeof listDevicesForTransfer>>[number];
+export type TransferDevicePage = Awaited<ReturnType<typeof listDevicesForTransfer>>;
+
+export type TransferDeviceOption = TransferDevicePage["rows"][number];
 
 export async function listAccessoriesForTransfer(user: CurrentUser, storeId: number) {
   const store = await loadStore(storeId);

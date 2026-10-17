@@ -3,14 +3,10 @@ import { getCurrentUser } from "@/server/auth/current-user";
 import { cashierReport, DailyCloseError } from "@/server/dailyclose/daily-close-service";
 import { parseReportRange } from "@/server/dailyclose/report-query";
 import { DAILY_CLOSE_METHODS } from "@/server/dailyclose/summary";
+import { toCsv } from "@/lib/csv";
 import { PAYMENT_METHOD_LABELS } from "@/lib/sales-labels";
 
 // 收银日报导出：CSV（带 BOM，Excel 双击直接打开不乱码）。权限和页面一样：店员不能导。
-
-function csvCell(value: string | number): string {
-  const s = String(value);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
 
 const yuan = (fen: number) => (fen / 100).toFixed(2);
 
@@ -38,7 +34,7 @@ export async function GET(request: NextRequest) {
     yuan(r.cashFen),
     r.closeStatus === "CONFIRMED" ? (r.hasDiff ? "已确认（有差异）" : "已确认") : r.closeStatus === "PENDING" ? "未确认" : "未日结",
   ]);
-  const csv = "﻿" + [header, ...lines].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  const csv = toCsv([header, ...lines]);
   const filename = `收银日报_${range.fromText}_${range.toText}.csv`;
 
   return new Response(csv, {

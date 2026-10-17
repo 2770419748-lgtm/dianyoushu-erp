@@ -1,0 +1,113 @@
+import "dotenv/config";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { prisma } from "@/lib/prisma";
+import { lockStoreDay } from "@/server/dailyclose/guard";
+import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
+
+// 并发测试（连本机库）：两个事务真的同时跑，验证“两人同时卖同一台 / 同时卖最后几件 / 同店同日排队”。
+// 做法：事务 A 改完先不提交、停一会儿；事务 B 这时开始，读到的还是旧数据，按老写法会两个都成功。
+// 这里会真的提交一次，所以每个用例最后都把测试写的流水删掉、把状态和数量改回原样（只动选中的那一台、那一行）。
+// 连不上库（比如 CI）自动跳过。
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+let ready = false;
+let operatorId = 0;
+let device: { id: number; status: "IN_STOCK" } | null = null;
+let stock: { storeId: number; skuId: number; qty: number } | null = null;
+
+beforeAll(async () => {
+  try {
+    const hq = await prisma.user.findFirst({ where: { role: "HQ" }, select: { id: true } });
+    const d = await prisma.device.findFirst({ where: { status: "IN_STOCK" }, orderBy: { id: "asc" }, select: { id: true } });
+    const s = await prisma.accessoryStock.findFirst({ where: { qty: { gte: 1, lte: 50 } }, orderBy: { id: "asc" }, select: { storeId: true, skuId: true, qty: true } });
+    if (!hq || !d || !s) return;
+    operatorId = hq.id;
+    device = { id: d.id, status: "IN_STOCK" };
+    stock = s;
+    ready = true;
+  } catch {
+    ready = false;
+  }
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
+});
+
+describe("并发（连本机库）", () => {
+  it("两个人同时卖同一台机器：只有先提交的成功，后一个报“刚被别人操作过”", async (ctx) => {
+    if (!ready || !device) return ctx.skip();
+    const id = device.id;
+    const docNo = "RACE-TEST-DEVICE";
+    try {
+      const first = prisma.$transaction(async (tx) => {
+        await applyDeviceAction(tx, { deviceId: id, action: "SELL", docType: "SALE", docNo, operatorId });
+        await sleep(600); // 改完先不提交，让第二个事务读到旧状态
+      });
+      await sleep(150);
+      const second = prisma.$transaction((tx) => applyDeviceAction(tx, { deviceId: id, action: "SELL", docType: "SALE", docNo, operatorId }));
+      const [a, b] = await Promise.allSettled([first, second]);
+      expect(a.status).toBe("fulfilled");
+      expect(b.status).toBe("rejected");
+      if (b.status === "rejected") expect(b.reason).toBeInstanceOf(StockError);
+      expect(await prisma.stockLedger.count({ where: { docNo } })).toBe(1);
+    } finally {
+      await prisma.stockLedger.deleteMany({ where: { docNo } });
+      await prisma.device.update({ where: { id }, data: { status: device.status } });
+    }
+  });
+
+  it("两个人同时把最后几件配件全卖掉：只有一个成功，余额不会被扣成负数或少扣", async (ctx) => {
+    if (!ready || !stock) return ctx.skip();
+    const { storeId, skuId, qty } = stock;
+    const docNo = "RACE-TEST-ACCESSORY";
+    try {
+      const first = prisma.$transaction(async (tx) => {
+        await changeAccessoryStock(tx, { storeId, skuId, qtyDelta: -qty, docType: "SALE", docNo, operatorId });
+        await sleep(600);
+      });
+      await sleep(150);
+      const second = prisma.$transaction((tx) => changeAccessoryStock(tx, { storeId, skuId, qtyDelta: -qty, docType: "SALE", docNo, operatorId }));
+      const [a, b] = await Promise.allSettled([first, second]);
+      expect(a.status).toBe("fulfilled");
+      expect(b.status).toBe("rejected");
+      if (b.status === "rejected") expect(b.reason).toBeInstanceOf(StockError);
+      const after = await prisma.accessoryStock.findUniqueOrThrow({ where: { storeId_skuId: { storeId, skuId } } });
+      expect(after.qty).toBe(0);
+    } finally {
+      await prisma.stockLedger.deleteMany({ where: { docNo } });
+      await prisma.accessoryStock.update({ where: { storeId_skuId: { storeId, skuId } }, data: { qty } });
+    }
+  });
+
+  it("配件余额数据库层面也不能是负数（检查约束兜底）", async (ctx) => {
+    if (!ready || !stock) return ctx.skip();
+    const { storeId, skuId } = stock;
+    await expect(prisma.accessoryStock.update({ where: { storeId_skuId: { storeId, skuId } }, data: { qty: -1 } })).rejects.toThrow();
+  });
+
+  it("同一家店同一营业日的锁：后来的事务要等前一个结束才能拿到", async (ctx) => {
+    if (!ready) return ctx.skip();
+    const day = new Date("2099-01-01"); // 用不会有真实单据的日子，只测排队
+    const events: string[] = [];
+    const first = prisma.$transaction(async (tx) => {
+      await lockStoreDay(tx, 1, day);
+      events.push("A 拿到锁");
+      await sleep(500);
+      events.push("A 结束");
+    });
+    await sleep(100);
+    const second = prisma.$transaction(async (tx) => {
+      await lockStoreDay(tx, 1, day);
+      events.push("B 拿到锁");
+    });
+    const other = prisma.$transaction(async (tx) => {
+      await lockStoreDay(tx, 2, day); // 别的门店不受影响
+      events.push("别店拿到锁");
+    });
+    await Promise.all([first, second, other]);
+    expect(events.indexOf("B 拿到锁")).toBeGreaterThan(events.indexOf("A 结束"));
+    expect(events.indexOf("别店拿到锁")).toBeLessThan(events.indexOf("A 结束"));
+  });
+});

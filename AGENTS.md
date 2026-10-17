@@ -98,6 +98,12 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - 所有列表和详情查询先用 `getDataScope(user)` 取范围，再按 `store_id` 过滤；跨店访问返回无权限，不要只在前端隐藏。
 - 金额列一律 `xxxFen` 整数；汇总在数据库里 `SUM` 出 bigint 再转数字。
 
+## 并发（2026-10-17 补）
+
+- 改机器状态、配件数量一律走 `stock-service`：机器用“状态没变才更新”的条件写入，配件用原子增减，不要自己先读再写回。
+- 新写的单据操作如果会影响某店某天的收银（开单、作废、退货、日结），事务一开始先调 `lockStoreDay(tx, storeId, bizDate)`，拿到锁之后再读数据做检查。
+- 唯一约束、检查约束是兜底，业务代码仍要先检查给出好懂的提示；撞上约束时用 `src/server/db-errors.ts` 认出来换成人话。
+
 ## 保留升级成 App 的路径（2026-10-16 坤总要求）
 
 目标：以后用 Capacitor 一类工具把现有网页打包成安卓 / iOS 应用，不重写。为此一直守住：

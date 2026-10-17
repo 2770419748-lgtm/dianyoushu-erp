@@ -10,7 +10,7 @@ import { DeviceStateError } from "@/server/stock/device-state";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { maxRefundableFen, MANUAL_PAYMENT_METHODS } from "./payments";
-import { DAY_CLOSED_MESSAGE, isDayClosed } from "@/server/dailyclose/guard";
+import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
 
 // 退货（口径第 5、6 节）：选原销售单的明细退回 → 串号回在库（回收机回良品）、配件加回数量；
 // 退款记负数、记在原单用过的一种收款方式上；以旧换新抵扣部分不退，只退实付。退货单不作废，退错了再开一单。
@@ -65,6 +65,12 @@ export type ReturnContext = NonNullable<Awaited<ReturnType<typeof getReturnConte
 export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInput) {
   if (!canSell(user.role)) throw new ReturnError("你的角色不能退货");
   const salesOrderId = Number(input.salesOrderId);
+  const head = await tx.salesOrder.findUnique({ where: { id: salesOrderId }, select: { storeId: true, store: { select: { id: true, regionId: true } } } });
+  if (!head) throw new ReturnError("原销售单不存在");
+  assertStoreAccess(user, head.store);
+  // 退货记在原单门店的今天：先排队拿锁，再读原单的已退数量（防止同一行被两个人同时退）
+  const bizDate = todayBizDate();
+  await lockStoreDay(tx, head.storeId, bizDate);
   const order = await tx.salesOrder.findUnique({
     where: { id: salesOrderId },
     include: { store: true, items: true, payments: true, returnOrders: { select: { refundFen: true } } },
@@ -72,7 +78,7 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
   if (!order) throw new ReturnError("原销售单不存在");
   assertStoreAccess(user, order.store);
   if (order.status !== "COMPLETED") throw new ReturnError("作废的单不能退货");
-  if (await isDayClosed(tx, order.storeId, todayBizDate())) throw new ReturnError(DAY_CLOSED_MESSAGE);
+  if (await isDayClosed(tx, order.storeId, bizDate)) throw new ReturnError(DAY_CLOSED_MESSAGE);
 
   // 退哪些
   const plans: { item: (typeof order.items)[number]; qty: number }[] = [];
@@ -109,7 +115,7 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
       salesOrderId: order.id,
       customerId: order.customerId,
       handledById: user.id,
-      bizDate: todayBizDate(),
+      bizDate,
       refundFen,
       reason,
       items: {

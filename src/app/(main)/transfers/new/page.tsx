@@ -26,7 +26,7 @@ export default async function NewTransferPage({ searchParams }: PageProps<"/tran
 
   const requested = Number(one(params.fromStoreId));
   const fromStoreId = fromStores.some((s) => s.id === requested) ? requested : (user.storeId ?? fromStores[0]!.id);
-  const [devices, accessories] = await Promise.all([listDevicesForTransfer(user, fromStoreId), listAccessoriesForTransfer(user, fromStoreId)]);
+  const [devices, accessories] = await Promise.all([listDevicesForTransfer(user, fromStoreId, { page: 1 }), listAccessoriesForTransfer(user, fromStoreId)]);
 
   return (
     <TransferForm

@@ -30,6 +30,7 @@
 - 第 10 周：手机开单 `/m/sale`（扫码或输码加商品，查找逻辑 `src/server/sales/lookup.ts`：先认 SN / IMEI1 / IMEI2，再认配件条码，只认本店能卖的；改价、旧机抵扣、一种收款、底部一键提交，下单走和电脑版同一个 `createSalesOrderAction`）；手机查库存 `/m/stock`；扫码 `src/lib/device/scanner.ts`（html5-qrcode）+ 共用按钮 `src/components/scan-button.tsx`，接进手机开单、电脑开单、到货入库、盘点、回收；本机临时 HTTPS `scripts/dev-https.mjs`（openssl 自签证书，放用户目录）；KPI 目标录入 `/kpi`（`src/server/kpi/kpi-service.ts`，门店 × 月四个数、复制上月、写日志）；后续规划 `/roadmap`；PWA（`src/app/manifest.ts`、`public/icons/`）；首页改成按角色的大按钮；本机备份 `scripts/backup-db.mjs` 与恢复演练 `scripts/restore-check.mjs`（已实际恢复一次，32 张表约 13 万行全对上）。顺手修了 `robots.txt` 被登录拦截、手机首屏侧栏闪一下。仓库改公开，CI 第一次绿。测试 73 条 + 端到端 2 条。
 - 第 11 周：手机开单补“拆成两种收”；个人信息页 `/me`（改自己密码，旧密码错 5 次锁 15 分钟）；4 个演示账号受保护（`src/server/auth/demo-accounts.ts`，不能被改密码、停用、改角色）；全站安全响应头（`next.config.ts`）；安全基线逐项核对 `docs/安全基线.md`；回收库存改服务端分页、新建调拨可选机器上限 300 → 2000；库存流水单号能点开原单（`src/server/stock/doc-links.ts`）；调拨收货加扫码；按方案第 12 节演示路径完整走通一遍，写了 `docs/演示脚本.md`（含要粘贴的数据和每步用时）。各页服务端耗时实测 0.5 秒内，没加索引。测试 76 条 + 端到端 2 条。
 - 第 12 周：README 终版；`docs/取舍记录.md`；`docs/业务口径.md` v1（对着代码核了一遍，修了调拨候选混进良品、看板旧机回收按回收单台数）；本机 `pnpm build` 通过，生产版本跑端到端两条都过。
+- 代码审查修复（2026-10-17）：机器状态条件写入、配件原子增减 + CHECK 约束、门店 × 营业日咨询锁（`lockStoreDay`）、迁移 `integrity_checks`（配件余额 ≥ 0、收款二选一、已退数量范围）、重复码友好提示、CSV 防公式注入（`src/lib/csv.ts`）、新建调拨服务端搜索分页；并发测试 `tests/concurrency.db.test.ts`。测试 84 条 + 端到端 2 条。
 
 ## 进行中
 
@@ -42,6 +43,7 @@
 ## 踩坑
 
 - 页面不停自动刷新（日志里同一路由 GET 连发）：Turbopack 缓存坏了，停掉 dev、删 `.next`、重启即可。
+- 测并发不能在一个回滚事务里测：要两个事务真的同时跑并提交，测完把测试流水删掉、状态改回（见 `tests/concurrency.db.test.ts`）。
 - 改了布局类组件后页面报 hydration 不一致、而且服务端 HTML 还是旧样子：开发服务器没收到文件变化，重启 `pnpm dev` 即可。
 - `gh` 报找不到仓库：环境变量 `GITHUB_TOKEN` 盖住了本机登录，用 `env -u GITHUB_TOKEN gh …`。
 

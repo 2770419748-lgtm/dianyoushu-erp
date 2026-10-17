@@ -1,4 +1,5 @@
 import "server-only";
+import { lockStoreDay } from "./guard";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import type { PaymentMethod } from "@/generated/prisma/enums";
@@ -156,6 +157,7 @@ function parseInput(user: CurrentUser, input: CloseInput) {
 export async function saveDailyCloseTx(tx: Tx, user: CurrentUser, input: CloseInput) {
   const data = parseInput(user, input);
   await loadStore(user, data.storeId);
+  await lockStoreDay(tx, data.storeId, data.bizDate);
   const day = await loadDay(tx, data.storeId, data.bizDate);
   await upsertClose(tx, user, data.storeId, data.bizDate, data.actuals, data.note, day.system);
 }
@@ -163,6 +165,8 @@ export async function saveDailyCloseTx(tx: Tx, user: CurrentUser, input: CloseIn
 export async function confirmDailyCloseTx(tx: Tx, user: CurrentUser, input: CloseInput) {
   const data = parseInput(user, input);
   await loadStore(user, data.storeId);
+  // 和开单、作废、退货排队：拿到锁之后读到的当天单据就是最终的，算完账、锁单之前不会再有变化
+  await lockStoreDay(tx, data.storeId, data.bizDate);
   const day = await loadDay(tx, data.storeId, data.bizDate);
   const mismatched = day.completed.filter((o) => orderMismatchFen(o.totalFen, o.payments) !== 0).length;
   const { close, lines } = await upsertClose(tx, user, data.storeId, data.bizDate, data.actuals, data.note, day.system);
@@ -184,6 +188,7 @@ export async function confirmDailyCloseTx(tx: Tx, user: CurrentUser, input: Clos
 /** 撤销日结（只有总部）：回到未确认，当天单据解锁 */
 export async function reopenDailyCloseTx(tx: Tx, user: CurrentUser, storeId: number, bizDate: Date, reason: unknown) {
   if (user.role !== "HQ") throw new DailyCloseError("只有总部能撤销日结");
+  await lockStoreDay(tx, storeId, bizDate);
   const close = await tx.dailyClose.findUnique({ where: { storeId_bizDate: { storeId, bizDate } } });
   if (!close || close.status !== "CONFIRMED") throw new DailyCloseError("这一天还没确认，不用撤销");
   const text = typeof reason === "string" ? reason.trim().slice(0, 200) : "";

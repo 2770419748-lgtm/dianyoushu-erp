@@ -1,6 +1,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import type { LedgerDocType } from "@/generated/prisma/enums";
 import { ACTION_QTY_DELTA, nextDeviceStatus, type DeviceAction } from "./device-state";
+import { isUniqueViolation } from "@/server/db-errors";
 import { isValidImei, isValidSn, primaryCode, type DeviceCodes } from "./imei";
 
 // 库存服务层：全系统唯一能改库存的地方。
@@ -59,21 +60,28 @@ export async function receiveDevices(tx: Prisma.TransactionClient, input: Receiv
   const status = nextDeviceStatus(input.tradeInOrderId ? "TRADE_IN" : "RECEIVE", null);
   const ids: number[] = [];
   for (const d of prepared) {
-    const device = await tx.device.create({
-      data: {
-        code: d.code,
-        sn: d.sn,
-        imei1: d.imei1,
-        imei2: d.imei2,
-        skuId: input.skuId,
-        storeId: input.storeId,
-        status,
-        costFen: input.costFen,
-        condition: input.condition,
-        goodsReceiptId: input.goodsReceiptId,
-        tradeInOrderId: input.tradeInOrderId,
-      },
-    });
+    let device;
+    try {
+      device = await tx.device.create({
+        data: {
+          code: d.code,
+          sn: d.sn,
+          imei1: d.imei1,
+          imei2: d.imei2,
+          skuId: input.skuId,
+          storeId: input.storeId,
+          status,
+          costFen: input.costFen,
+          condition: input.condition,
+          goodsReceiptId: input.goodsReceiptId,
+          tradeInOrderId: input.tradeInOrderId,
+        },
+      });
+    } catch (error) {
+      // 上面已经查过重复；还撞上唯一约束，说明同一时间别人也在入这台机器
+      if (isUniqueViolation(error)) throw new StockError(`${d.code} 已经在系统里了（可能刚被别人入库），不能重复入库`);
+      throw error;
+    }
     await tx.stockLedger.create({
       data: {
         docType: input.docType,
@@ -108,19 +116,35 @@ export interface AccessoryDeltaInput {
   note?: string;
 }
 
-/** 小件库存增减：余额表 + 流水在同一事务里；出库不能把余额扣成负数。 */
+/**
+ * 小件库存增减：余额表 + 流水在同一事务里；出库不能把余额扣成负数。
+ * 并发安全：不“先读余额、算好再写回”（两个人同时卖最后一件会都读到 1、都写 0），
+ * 而是让数据库原子地加减：出库用“余额够才减”的条件更新，入库用 increment；
+ * 数据库上还有 qty >= 0 的检查约束兜底（迁移 integrity_checks）。
+ */
 export async function changeAccessoryStock(tx: Prisma.TransactionClient, input: AccessoryDeltaInput): Promise<number> {
   if (!Number.isInteger(input.qtyDelta) || input.qtyDelta === 0) throw new StockError("数量必须是非 0 整数");
-  const current = await tx.accessoryStock.findUnique({ where: { storeId_skuId: { storeId: input.storeId, skuId: input.skuId } } });
-  const before = current?.qty ?? 0;
-  const after = before + input.qtyDelta;
-  if (after < 0) throw new StockError(`库存不够：现有 ${before}，要出 ${-input.qtyDelta}`);
-
-  await tx.accessoryStock.upsert({
-    where: { storeId_skuId: { storeId: input.storeId, skuId: input.skuId } },
-    update: { qty: after },
-    create: { storeId: input.storeId, skuId: input.skuId, qty: after },
-  });
+  const key = { storeId_skuId: { storeId: input.storeId, skuId: input.skuId } };
+  let after: number;
+  if (input.qtyDelta < 0) {
+    const need = -input.qtyDelta;
+    const changed = await tx.accessoryStock.updateMany({
+      where: { storeId: input.storeId, skuId: input.skuId, qty: { gte: need } },
+      data: { qty: { decrement: need } },
+    });
+    if (changed.count === 0) {
+      const current = await tx.accessoryStock.findUnique({ where: key, select: { qty: true } });
+      throw new StockError(`库存不够：现有 ${current?.qty ?? 0}，要出 ${need}`);
+    }
+    after = (await tx.accessoryStock.findUniqueOrThrow({ where: key, select: { qty: true } })).qty;
+  } else {
+    const row = await tx.accessoryStock.upsert({
+      where: key,
+      update: { qty: { increment: input.qtyDelta } },
+      create: { storeId: input.storeId, skuId: input.skuId, qty: input.qtyDelta },
+    });
+    after = row.qty;
+  }
   await tx.stockLedger.create({
     data: {
       docType: input.docType,
@@ -155,10 +179,14 @@ export async function applyDeviceAction(tx: Prisma.TransactionClient, input: Dev
   // 发出记在发出店，收货记在收货店；其余记在当前归属店
   const ledgerStoreId = input.action === "TRANSFER_RECEIVE" ? (input.newStoreId ?? device.storeId) : device.storeId;
 
-  const updated = await tx.device.update({
-    where: { id: device.id },
+  // 并发安全：条件写入。只有状态还是刚才读到的那个才改，否则说明这期间别人已经动了这台机器
+  // （比如两个店员同时卖同一台：都读到“在库”，但只有先提交的那个能改成“已售”，后一个改 0 行、整单回滚）。
+  const changed = await tx.device.updateMany({
+    where: { id: device.id, status: device.status },
     data: { status: statusAfter, ...(input.newStoreId ? { storeId: input.newStoreId } : {}) },
   });
+  if (changed.count === 0) throw new StockError(`${device.code} 刚被别人操作过（状态已经变了），刷新后再试`);
+  const updated = await tx.device.findUniqueOrThrow({ where: { id: device.id } });
   await tx.stockLedger.create({
     data: {
       docType: input.docType,

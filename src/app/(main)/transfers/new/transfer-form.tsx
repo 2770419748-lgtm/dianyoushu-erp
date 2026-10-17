@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { App, Button, Card, Form, Input, InputNumber, Select, Space, Table, Tag, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import { DEVICE_STATUS_LABELS } from "@/lib/stock-labels";
-import type { TransferAccessoryOption, TransferDeviceOption } from "@/server/transfer/transfer-service";
-import { createTransferAction } from "../actions";
+import type { TransferAccessoryOption, TransferDeviceOption, TransferDevicePage } from "@/server/transfer/transfer-service";
+import { createTransferAction, listTransferDevicesAction } from "../actions";
 
 interface FormValues {
   toStoreId: number;
@@ -14,7 +14,7 @@ interface FormValues {
   accessories: Record<number, number | undefined>;
 }
 
-// 新建调拨：在发出店的在库/良品机器里勾选，配件填数量。提交后机器立刻锁定，不能再卖。
+// 新建调拨：在发出店的在库机器里勾选（服务端按码或商品名搜、分页，翻页和换搜索词时已勾的保留），配件填数量。提交后机器立刻锁定，不能再卖。
 export function TransferForm({
   fromStores,
   toStores,
@@ -25,22 +25,40 @@ export function TransferForm({
   fromStores: { id: number; label: string }[];
   toStores: { id: number; label: string }[];
   fromStoreId: number;
-  devices: TransferDeviceOption[];
+  devices: TransferDevicePage;
   accessories: TransferAccessoryOption[];
 }) {
   const router = useRouter();
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [form] = Form.useForm<FormValues>();
-  const [selectedDeviceIds, setSelectedDeviceIds] = useState<number[]>([]);
-  const [deviceFilter, setDeviceFilter] = useState("");
+  const [devicePage, setDevicePage] = useState<TransferDevicePage>(devices);
+  const [deviceQuery, setDeviceQuery] = useState("");
+  const [loadingDevices, setLoadingDevices] = useState(false);
+  // 已勾选的机器按 id 记下整行，换页、换搜索词后还能显示和提交
+  const [selected, setSelected] = useState<Map<number, TransferDeviceOption>>(new Map());
+  const selectedDeviceIds = [...selected.keys()];
 
-  const visibleDevices = devices.filter(
-    (d) =>
-      !deviceFilter ||
-      [d.code, d.sn, d.imei1, d.imei2].some((c) => c && c.includes(deviceFilter)) ||
-      d.sku.name.toLowerCase().includes(deviceFilter.toLowerCase()),
-  );
+  async function loadDevices(q: string, page: number) {
+    setLoadingDevices(true);
+    try {
+      setDevicePage(await listTransferDevicesAction(fromStoreId, q, page));
+      setDeviceQuery(q);
+    } finally {
+      setLoadingDevices(false);
+    }
+  }
+
+  function toggleRows(rows: TransferDeviceOption[], checked: boolean) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      for (const r of rows) {
+        if (checked) next.set(r.id, r);
+        else next.delete(r.id);
+      }
+      return next;
+    });
+  }
 
   const deviceColumns: TableColumnsType<TransferDeviceOption> = [
     { title: "主码", dataIndex: "code" },
@@ -107,14 +125,41 @@ export function TransferForm({
         </Form.Item>
 
         <Typography.Title level={5}>机器（勾选要调出的，已选 {selectedDeviceIds.length} 台）</Typography.Title>
-        <Input.Search allowClear placeholder="按串号或商品名筛" style={{ width: 280, marginBottom: 8 }} onSearch={setDeviceFilter} onChange={(e) => !e.target.value && setDeviceFilter("")} />
+        <Input.Search
+          allowClear
+          placeholder="按 SN、IMEI 或商品名搜"
+          style={{ width: 280, marginBottom: 8 }}
+          loading={loadingDevices}
+          onSearch={(q) => void loadDevices(q.trim(), 1)}
+        />
+        {selected.size > 0 ? (
+          <div style={{ marginBottom: 8 }}>
+            {[...selected.values()].map((d) => (
+              <Tag key={d.id} closable onClose={() => toggleRows([d], false)} style={{ marginBottom: 4 }}>
+                {d.code} {d.sku.name}
+              </Tag>
+            ))}
+          </div>
+        ) : null}
         <Table
           rowKey="id"
           size="small"
           columns={deviceColumns}
-          dataSource={visibleDevices}
-          pagination={{ pageSize: 10, showSizeChanger: false }}
-          rowSelection={{ selectedRowKeys: selectedDeviceIds, onChange: (keys) => setSelectedDeviceIds(keys.map(Number)), preserveSelectedRowKeys: true }}
+          dataSource={devicePage.rows}
+          loading={loadingDevices}
+          pagination={{
+            current: devicePage.page,
+            pageSize: devicePage.pageSize,
+            total: devicePage.total,
+            showSizeChanger: false,
+            showTotal: (t) => `在库 ${t} 台`,
+            onChange: (p) => void loadDevices(deviceQuery, p),
+          }}
+          rowSelection={{
+            selectedRowKeys: selectedDeviceIds,
+            onSelect: (row, checked) => toggleRows([row], checked),
+            onSelectAll: (checked, _rows, changeRows) => toggleRows(changeRows, checked),
+          }}
         />
 
         <Typography.Title level={5} style={{ marginTop: 16 }}>

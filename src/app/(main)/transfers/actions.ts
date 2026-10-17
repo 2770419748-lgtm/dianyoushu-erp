@@ -42,3 +42,13 @@ export async function voidTransferAction(id: number) {
   const user = await requireUser();
   return run(() => transfer.voidTransfer(user, id));
 }
+
+/** 新建调拨时按码或商品名搜发出店的在库机器（分页） */
+export async function listTransferDevicesAction(storeId: number, q: string, page: number) {
+  const user = await requireUser();
+  try {
+    return await transfer.listDevicesForTransfer(user, storeId, { q, page });
+  } catch {
+    return { rows: [], total: 0, page: 1, pageSize: transfer.TRANSFER_DEVICE_PAGE_SIZE };
+  }
+}

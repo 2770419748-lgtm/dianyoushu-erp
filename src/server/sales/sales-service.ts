@@ -11,7 +11,7 @@ import { canSell as deviceCanSell, DeviceStateError } from "@/server/stock/devic
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { effectivePriceFen } from "@/server/products/search";
 import { buildSalePayments, PaymentError } from "./payments";
-import { DAY_CLOSED_MESSAGE, isDayClosed } from "@/server/dailyclose/guard";
+import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
 
 // 开单服务层：选机器和配件、改价优惠、以旧换新抵扣（关联回收单）、多种收款拆分（合计必须等于应收）。
 // 口径第 11 节第 3 条：销售单、明细、收款、扣库存、写流水在一个事务里，失败全部回滚。
@@ -93,7 +93,10 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   const store = await tx.store.findUnique({ where: { id: data.storeId }, select: { id: true, regionId: true, isActive: true } });
   if (!store || !store.isActive) throw new SalesError("门店不存在或已停用");
   assertStoreAccess(user, store);
-  if (await isDayClosed(tx, data.storeId, todayBizDate())) throw new SalesError(DAY_CLOSED_MESSAGE);
+  const bizDate = todayBizDate();
+  // 先排队拿“本店今天”的锁，再查日结：保证不会在日结确认算账的同时插进一张新单
+  await lockStoreDay(tx, data.storeId, bizDate);
+  if (await isDayClosed(tx, data.storeId, bizDate)) throw new SalesError(DAY_CLOSED_MESSAGE);
   if (data.customerId) {
     const customer = await tx.customer.findUnique({ where: { id: data.customerId }, select: { id: true } });
     if (!customer) throw new SalesError("客户不存在");
@@ -152,7 +155,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
       storeId: data.storeId,
       customerId: data.customerId ?? tradeIn?.customerId ?? null,
       salespersonId: user.id,
-      bizDate: todayBizDate(),
+      bizDate,
       subtotalFen,
       discountFen: data.discountFen,
       totalFen,
@@ -191,9 +194,12 @@ export async function createSalesOrder(user: CurrentUser, input: SalesOrderInput
 
 export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: number, reason: unknown) {
   if (!canVoidSales(user.role)) throw new SalesError("只有店长和总部能作废销售单");
-  const order = await tx.salesOrder.findUnique({ where: { id: orderId }, include: { store: true, items: true, _count: { select: { returnOrders: true } } } });
-  if (!order) throw new SalesError("销售单不存在");
-  assertStoreAccess(user, order.store);
+  const head = await tx.salesOrder.findUnique({ where: { id: orderId }, select: { storeId: true, bizDate: true, store: { select: { id: true, regionId: true } } } });
+  if (!head) throw new SalesError("销售单不存在");
+  assertStoreAccess(user, head.store);
+  // 拿到这家店这一天的锁之后再读整张单做检查：两个人同时点作废，后一个会看到“已经作废了”；日结确认和作废也不会交错
+  await lockStoreDay(tx, head.storeId, head.bizDate);
+  const order = await tx.salesOrder.findUniqueOrThrow({ where: { id: orderId }, include: { store: true, items: true, _count: { select: { returnOrders: true } } } });
   if (order.status !== "COMPLETED") throw new SalesError("这张单已经作废了");
   if (order.dailyCloseId) throw new SalesError("当日已日结确认，不能作废");
   if (order._count.returnOrders > 0) throw new SalesError("这张单已经有退货记录，不能作废，剩下的继续走退货");
