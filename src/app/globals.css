@@ -20,3 +20,10 @@ body {
 .row-danger > td {
   background: #fff1f0 !important;
 }
+
+/* 窄屏首屏：页面 JS 还没接管前，侧边菜单先藏起来，免得手机上一打开先闪出整列菜单再收回 */
+@media (max-width: 991.98px) {
+  .sider-before-hydration {
+    display: none;
+  }
+}

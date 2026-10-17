@@ -1,5 +1,6 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Breadcrumb, Button, Grid, Layout, Menu, Space, Tag, Typography } from "antd";
@@ -16,6 +17,8 @@ export interface ShellUser {
 }
 
 // 登录后的外壳：左侧菜单、顶部用户信息、中间内容。第 10 天再做面包屑和手机端收起细节。
+const noopSubscribe = () => () => {};
+
 export function AppShell({
   user,
   menu,
@@ -26,6 +29,8 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  // 服务端渲染和首次注水时是 false，浏览器接管后变 true（用来避免手机上菜单闪一下）
+  const hydrated = useSyncExternalStore(noopSubscribe, () => true, () => false);
   const screens = Grid.useBreakpoint();
   const compact = !screens.md; // 手机宽度：顶栏只留姓名和退出，内容区缩小留白
   // 当前页高亮：取 href 和路径前缀匹配最长的那一项
@@ -38,7 +43,8 @@ export function AppShell({
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider breakpoint="lg" collapsedWidth={0} theme="dark">
+      {/* 窄屏时菜单收起成左上角的按钮，放进顶栏（顶栏左边留了 56px），不挡内容 */}
+      <Sider breakpoint="lg" collapsedWidth={0} theme="dark" zeroWidthTriggerStyle={{ top: 12 }} className={hydrated ? undefined : "sider-before-hydration"}>
         <Link href="/" style={{ display: "block", color: "#fff", fontSize: 18, fontWeight: 600, padding: "16px 24px" }}>
           店有数 ERP
         </Link>
@@ -77,7 +83,8 @@ export function AppShell({
           </form>
         </Header>
         <Content style={{ padding: compact ? 12 : 24, minWidth: 0 }}>
-          <Breadcrumb items={crumbs} style={{ marginBottom: compact ? 12 : 16 }} />
+          {/* 手机端页面要一屏放下，不显示面包屑 */}
+          {pathname.startsWith("/m/") ? null : <Breadcrumb items={crumbs} style={{ marginBottom: compact ? 12 : 16 }} />}
           {children}
         </Content>
       </Layout>

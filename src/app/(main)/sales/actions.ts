@@ -5,6 +5,7 @@ import { requireUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
 import * as sales from "@/server/sales/sales-service";
 import { createReturn, ReturnError, type ReturnInput } from "@/server/sales/return-service";
+import { lookupForSale, type SaleLookup } from "@/server/sales/lookup";
 
 export type SalesActionResult = { ok: true; id?: number; orderNo?: string } | { ok: false; error: string };
 
@@ -40,6 +41,18 @@ export async function searchSellableDevicesAction(storeId: number, q: string) {
     return await sales.searchSellableDevices(user, storeId, q);
   } catch {
     return [];
+  }
+}
+
+/** 扫码 / 输码加商品：先认机器串号，再认配件条码 */
+export async function lookupForSaleAction(storeId: number, code: string): Promise<SaleLookup> {
+  const user = await requireUser();
+  try {
+    return await lookupForSale(user, storeId, code);
+  } catch (error) {
+    if (error instanceof PermissionError) return { kind: "error", message: error.message };
+    console.error(error);
+    return { kind: "error", message: "查找失败，请稍后再试" };
   }
 }
 

@@ -34,6 +34,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "purchase.submit": "提交采购单",
   "purchase.void": "作废采购单",
   "purchase.receive": "到货入库",
+  "kpi.set": "设置 KPI 目标",
   "transfer.create": "申请调拨",
   "transfer.ship": "调拨发出",
   "transfer.receive": "调拨收货",

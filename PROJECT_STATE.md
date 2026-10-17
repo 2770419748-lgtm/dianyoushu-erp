@@ -1,11 +1,11 @@
 # 项目状态（PROJECT_STATE.md）
 
-- 更新：2026-10-16
-- 阶段：第 9 周开发完成（模拟数据 v1、看板），服务器相关挪到“找工作前再做”；下一步第 10 周手机端、扫码、KPI 录入、后续规划页、PWA
+- 更新：2026-10-17
+- 阶段：第 10 周开发完成（手机开单、手机查库存、扫码、KPI 目标录入、后续规划页、PWA、本机备份），仓库已公开、CI 绿；下一步第 11 周安全基线、分页与索引、演示排练
 
 ## 做完了什么
 
-- 第 1 天：仓库 `dianyoushu-erp`（私有，等像样了改公开）、本机 pnpm 12、PostgreSQL 17、数据库 `dianyoushu_erp` 建好并验证连接。
+- 第 1 天：仓库 `dianyoushu-erp`（2026-10-17 已改公开）、本机 pnpm 12、PostgreSQL 17、数据库 `dianyoushu_erp` 建好并验证连接。
 - 第 5 天（提前做）：Next.js 16.4 + Ant Design 6 + Prisma 7 脚手架；首个迁移 `init_org_users` 建了 `regions`、`stores`、`users`（临时版，第 3 天按口径调整）。
 - 第 6 到 7 天（提前做）：登录页、bcrypt 密码、JWT cookie 会话、错 5 次限流、退出；种子数据 4 个演示账号 + 1 区域 2 门店；登录后按角色显示不同菜单（假菜单）；单元测试 11 条（权限判断、限流）。`pnpm test`、`pnpm typecheck`、`pnpm lint` 全过。
 - 第 2 天：坤总决定先按默认口径推进，整理成 `docs/业务口径.md` v0（角色权限矩阵、组织、商品、串号状态机、单据状态、支付方式、以旧换新、KPI）。
@@ -27,21 +27,24 @@
 - 第 7 周：回收单 `src/server/tradein/trade-in-service.ts`（收旧机进回收库、成本 = 估价，转良品）；收款拆分与退款分摊纯函数 `src/server/sales/payments.ts`；开单接入以旧换新抵扣 + 多种收款（合计必须等于应收）；退货 `src/server/sales/return-service.ts`（退回库存、负数退款记在原单收款方式、抵扣不退、有退货不能作废）；页面 `/trade-ins`、`/trade-ins/new`、`/trade-ins/stock`、`/sales/[id]/return`，开单页加“以旧换新”和“再加一种收款”。迁移 `trade_in_device_code`；种子加“回收机（其他机型）”SKU。验收通过：开单现场收 iPhone 12 抵 1200 + 微信 3000 + 现金 1328 → 退掉钢化膜退 29 元 → 回收机转良品 → 1599 元卖出，毛利 399。测试 58 条。
 - 第 8 周：日结 `src/server/dailyclose/`（summary 纯函数：按支付方式汇总、差异、能否确认；daily-close-service：逐笔比对、录实收、确认后当日销售单和退货单挂日结锁定、当天不能再开单退货、总部可撤销；收银日报 cashierReport）；页面 `/daily-close`、`/reports/cashier`，导出接口 `/api/reports/cashier`（CSV 带 BOM，Excel 直接打开）。端到端 `tests/e2e/sale-daily-close.spec.ts`（`pnpm test:e2e`，用本机 Edge）：店长登录 → 开单 → 配件库存少 1 → 日结微信系统数多出这单 → 作废还原。验收通过：中山路店当天现金 1328、微信 4570（3000 + 1599 − 29）、抵扣 1200，录实收确认后锁单，再撤销留给坤总试用。单元测试 63 条。
 - 第 9 周：模拟数据生成器 `prisma/generate-demo.ts`（`pnpm db:reset` = 清空 → 基础种子 → 生成）：10 店、截至昨天 92 天，约 1.2 万张有效销售单、1500 张回收单（七成检测后转良品再卖）、约 190 张退货、1% 当天作废、每天日结（6% 有现金长短款）、周末和月底高峰、KPI 目标；跑完自检库存余额 = 流水、收款 = 应收、日结 = 收款汇总，全为 0 才算过，耗时约 30 秒。今天不生成，留给现场演示。看板 `/dashboard`（`src/server/dashboard/`，ECharts 按需引入）：日销趋势、门店月销对比、员工排名、热销机型 TOP10、KPI 完成率与门店日均差额、库存周转与滞销清单。测试 67 条 + 端到端 1 条。
+- 第 10 周：手机开单 `/m/sale`（扫码或输码加商品，查找逻辑 `src/server/sales/lookup.ts`：先认 SN / IMEI1 / IMEI2，再认配件条码，只认本店能卖的；改价、旧机抵扣、一种收款、底部一键提交，下单走和电脑版同一个 `createSalesOrderAction`）；手机查库存 `/m/stock`；扫码 `src/lib/device/scanner.ts`（html5-qrcode）+ 共用按钮 `src/components/scan-button.tsx`，接进手机开单、电脑开单、到货入库、盘点、回收；本机临时 HTTPS `scripts/dev-https.mjs`（openssl 自签证书，放用户目录）；KPI 目标录入 `/kpi`（`src/server/kpi/kpi-service.ts`，门店 × 月四个数、复制上月、写日志）；后续规划 `/roadmap`；PWA（`src/app/manifest.ts`、`public/icons/`）；首页改成按角色的大按钮；本机备份 `scripts/backup-db.mjs` 与恢复演练 `scripts/restore-check.mjs`（已实际恢复一次，32 张表约 13 万行全对上）。顺手修了 `robots.txt` 被登录拦截、手机首屏侧栏闪一下。仓库改公开，CI 第一次绿。测试 73 条 + 端到端 2 条。
 
 ## 进行中
 
-- 等坤总回“改”后用 gh 把仓库改公开，CI 才会跑。
 - 服务器和域名坤总决定先不买，等找工作前约 3 周再买（任务清单“找工作前再做”）。
+- 手机真机扫码要坤总用自己的手机试一次（`pnpm dev:https`，见 README“手机上测试”）；电脑上已用手机尺寸跑通开单。
+- 每日自动备份要坤总在 Windows 任务计划里登记一次（命令在 `docs/备份与恢复.md`）。
 
 ## 踩坑
 
 - 页面不停自动刷新（日志里同一路由 GET 连发）：Turbopack 缓存坏了，停掉 dev、删 `.next`、重启即可。
+- 改了布局类组件后页面报 hydration 不一致、而且服务端 HTML 还是旧样子：开发服务器没收到文件变化，重启 `pnpm dev` 即可。
+- `gh` 报找不到仓库：环境变量 `GITHUB_TOKEN` 盖住了本机登录，用 `env -u GITHUB_TOKEN gh …`。
 
 ## 下一步
 
-1. CI 绿勾：等坤总在项目里选公开/私有后推一次验证。
-2. 第 10 周：手机端开单和查库存页、扫码组件（本机临时 HTTPS 让手机测）、KPI 目标录入、后续规划页、PWA、本机备份脚本。
-3. “第 1 到 2 周学到什么”一页纸是坤总的作业，提纲已给。
+1. 第 11 周：安全基线逐项打勾（服务器那几项在“找工作前再做”）、个人信息页 `/me` 改密码、列表全部分页、慢查询加索引、bug 清单清零、10 分钟演示路径排练。
+2. “第 1 到 2 周学到什么”一页纸是坤总的作业，提纲已给。
 
 ## 卡在哪
 
@@ -59,7 +62,8 @@ code/
 ├─ src/lib/prisma.ts           Prisma 客户端单例（pg 驱动适配器）
 ├─ src/generated/prisma        prisma generate 生成，不进仓库
 ├─ prisma/schema.prisma        表定义（31 张表）；prisma/migrations/ 迁移历史；prisma/seed.ts 演示种子
-├─ docs/                       业务口径.md（规则之源）、数据模型.md（表的中文说明）、页面清单.md
+├─ docs/                       业务口径.md（规则之源）、数据模型.md（表的中文说明）、页面清单.md、备份与恢复.md、部署.md
+├─ scripts/                    dev-https（本机临时 HTTPS）、backup-db / restore-check（备份与恢复演练）
 ├─ tests/                      Vitest 单元测试
 ├─ prisma.config.ts            Prisma 7 配置，从 .env 读 DATABASE_URL，seed 命令
 ├─ next.config.ts              Next 配置（cacheComponents 不开）
@@ -71,8 +75,10 @@ code/
 ## 常用命令
 
 - `pnpm dev`：启动开发服务器，浏览器开 http://localhost:3000 （或双击外层 `启动ERP.cmd`）
+- `pnpm dev:https`：本机临时 HTTPS，手机连同一个 Wi-Fi 能打开并扫码（和 `pnpm dev` 二选一）
+- `pnpm db:backup`：备份到代码目录旁边的“备份”文件夹，留 14 份；`pnpm db:restore-check`：恢复进临时库逐表对行数再删掉
 - `pnpm test`：Vitest 单元测试（含连本机库的核心链路测试，跑完回滚）
-- `pnpm test:e2e`：Playwright 端到端一条（用本机 Edge，开发服务器开着就复用）
+- `pnpm test:e2e`：Playwright 端到端两条：电脑开单到日结、手机尺寸开单（用本机 Edge，开发服务器开着就复用）
 - `pnpm typecheck`：先生成路由类型再做 TypeScript 检查
 - `pnpm lint`：ESLint
 - `pnpm db:migrate`：改了 schema.prisma 后生成并执行迁移

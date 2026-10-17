@@ -6,6 +6,8 @@ import { App, Button, Card, Descriptions, Form, Input, InputNumber, Popconfirm, 
 import type { TableColumnsType } from "antd";
 import { formatDateTime, formatFen } from "@/lib/format";
 import { PURCHASE_STATUS_COLORS, PURCHASE_STATUS_LABELS } from "@/lib/stock-labels";
+import { ScanButton } from "@/components/scan-button";
+import { appendScannedCode } from "@/lib/device/scanner";
 import { parseDeviceCodeLines } from "@/server/stock/imei";
 import type { PurchaseOrderDetail } from "@/server/purchase/purchase-service";
 import { receiveGoodsAction, submitPurchaseOrderAction, voidPurchaseOrderAction, type PurchaseActionResult } from "../actions";
@@ -128,6 +130,16 @@ export function PurchaseDetailView({ order, canManage }: { order: PurchaseOrderD
                       <Form.Item name={["lines", item.id, "imeiText"]} style={{ marginBottom: 4 }}>
                         <Input.TextArea rows={4} placeholder={"一行一台，每行 SN、IMEI1、IMEI2 任意 1 到 3 个，用空格或逗号隔开，例如：\nSN8F2K1X9Q 867530012345678 867530012345679\n867530012345680"} />
                       </Form.Item>
+                      <Space wrap style={{ marginBottom: 4 }}>
+                        <ScanButton
+                          continuous
+                          size="small"
+                          label="扫码录入"
+                          onCode={(code) => receiveForm.setFieldValue(["lines", item.id, "imeiText"], appendScannedCode(receiveForm.getFieldValue(["lines", item.id, "imeiText"]), code))}
+                        />
+                        <Typography.Text type="secondary">一次扫一台，每扫一个码换一行；同一台要录三个码就手动补到同一行</Typography.Text>
+                      </Space>
+                      <br />
                       <Typography.Text type={parsed && (parsed.errors.length || parsed.devices.length > remaining) ? "danger" : "secondary"}>
                         已识别 {parsed?.devices.length ?? 0} 台
                         {parsed && parsed.errors.length > 0 ? `；${parsed.errors[0]}` : ""}

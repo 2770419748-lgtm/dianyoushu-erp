@@ -26,6 +26,11 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/reports": "报表",
   "/reports/cashier": "收银日报",
   "/dashboard": "看板",
+  "/m": "手机端",
+  "/m/sale": "手机开单",
+  "/m/stock": "手机查库存",
+  "/kpi": "KPI 目标",
+  "/roadmap": "后续规划",
 };
 
 /** 路径里通用的最后一段（如 /sales/12/return） */

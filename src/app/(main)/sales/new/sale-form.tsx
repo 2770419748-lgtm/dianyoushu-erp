@@ -5,13 +5,14 @@ import { useRouter } from "next/navigation";
 import { App, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import type { PaymentMethod } from "@/generated/prisma/enums";
+import { ScanButton } from "@/components/scan-button";
 import { formatFen, yuanToFen } from "@/lib/format";
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS_FOR_SALE } from "@/lib/sales-labels";
 import type { SellableAccessory, SellableDevice } from "@/server/sales/sales-service";
 import type { AvailableTradeIn } from "@/server/tradein/trade-in-service";
 import { createCustomerAction, searchCustomersAction } from "../../customers/actions";
 import { TradeInForm, type CreatedTradeIn, type TradeInSkuOption } from "../../trade-ins/trade-in-form";
-import { createSalesOrderAction, searchSellableDevicesAction } from "../actions";
+import { createSalesOrderAction, lookupForSaleAction, searchSellableDevicesAction } from "../actions";
 
 interface Line {
   key: string;
@@ -129,6 +130,25 @@ export function SaleForm({
     setLines([...lines, { key: `d-${d.id}`, kind: "device", deviceId: d.id, skuId: d.skuId, name: d.skuName, code: d.code, qty: 1, unitPriceFen: d.priceFen, listPriceFen: d.priceFen }]);
   }
 
+  // 扫码加商品：机器按串号、配件按商品条码，和手机开单同一个查找逻辑
+  async function addScanned(code: string) {
+    const found = await lookupForSaleAction(storeId, code);
+    if (found.kind === "error") return void message.warning(found.message);
+    if (found.kind === "device") {
+      setLines((prev) =>
+        prev.some((l) => l.deviceId === found.deviceId)
+          ? prev
+          : [...prev, { key: `d-${found.deviceId}`, kind: "device", deviceId: found.deviceId, skuId: found.skuId, name: found.name, code: found.code, qty: 1, unitPriceFen: found.priceFen, listPriceFen: found.priceFen }],
+      );
+      return;
+    }
+    setLines((prev) => {
+      const existing = prev.find((l) => l.kind === "accessory" && l.skuId === found.skuId);
+      if (existing) return existing.qty >= found.stockQty ? prev : prev.map((l) => (l === existing ? { ...l, qty: l.qty + 1 } : l));
+      return [...prev, { key: `a-${found.skuId}`, kind: "accessory", skuId: found.skuId, name: found.name, qty: 1, maxQty: found.stockQty, unitPriceFen: found.priceFen, listPriceFen: found.priceFen }];
+    });
+  }
+
   function addAccessory() {
     const a = accessories.find((x) => x.skuId === accessorySkuId);
     if (!a) return message.warning("先选配件");
@@ -217,7 +237,10 @@ export function SaleForm({
           )}
 
           <Typography.Title level={5}>机器</Typography.Title>
-          <Input.Search placeholder="输串号、SN 或型号搜本店在库机器" style={{ width: 320, marginBottom: 8 }} loading={searching} onSearch={searchDevices} enterButton="搜" />
+          <Space wrap style={{ marginBottom: 8 }}>
+            <Input.Search placeholder="输串号、SN 或型号搜本店在库机器" style={{ width: 320 }} loading={searching} onSearch={searchDevices} enterButton="搜" />
+            <ScanButton continuous label="扫码加商品" onCode={(c) => void addScanned(c)} />
+          </Space>
           {deviceResults.length > 0 ? <Table rowKey="id" size="small" pagination={{ pageSize: 5, showSizeChanger: false }} columns={deviceColumns} dataSource={deviceResults} /> : null}
 
           <Typography.Title level={5} style={{ marginTop: 16 }}>配件</Typography.Title>

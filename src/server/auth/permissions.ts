@@ -101,6 +101,11 @@ export function canRefurbish(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
 }
 
+/** 谁能录 KPI 目标：只有总部（门店和区域只看完成率） */
+export function canManageKpi(role: Role): boolean {
+  return role === "HQ";
+}
+
 /** 谁能作废销售单、回收单：店长、总部 */
 export function canVoidSales(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
@@ -112,7 +117,11 @@ export interface MenuEntry {
   href?: string; // 没有 href 的还没做成页面，先显示为灰字
 }
 
+const ROADMAP: MenuEntry = { key: "roadmap", label: "后续规划", href: "/roadmap" };
+
 const MENU_STAFF: MenuEntry[] = [
+  { key: "m-sale", label: "手机开单", href: "/m/sale" },
+  { key: "m-stock", label: "手机查库存", href: "/m/stock" },
   { key: "sales-new", label: "开单", href: "/sales/new" },
   { key: "stock", label: "查库存", href: "/stock" },
   { key: "products", label: "商品查价", href: "/products" },
@@ -120,12 +129,13 @@ const MENU_STAFF: MenuEntry[] = [
   { key: "sales-list", label: "我的订单", href: "/sales" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
+  ROADMAP,
 ];
 
 // 菜单 key 与 docs/页面清单.md 的路由一一对应，后面逐页做成真链接。
 const MENU_STORE_MANAGER: MenuEntry[] = [
   { key: "dashboard", label: "看板", href: "/dashboard" },
-  ...MENU_STAFF.filter((m) => m.key !== "sales-list" && m.key !== "stocktakes" && m.key !== "trade-ins"),
+  ...MENU_STAFF.filter((m) => !["sales-list", "stocktakes", "trade-ins", "roadmap"].includes(m.key)),
   { key: "sales-list", label: "门店订单", href: "/sales" },
   { key: "transfers", label: "调拨", href: "/transfers" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
@@ -133,13 +143,16 @@ const MENU_STORE_MANAGER: MenuEntry[] = [
   { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "prices", label: "门店售价", href: "/products/prices" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
+  ROADMAP,
 ];
 
 const MENU_REGIONAL: MenuEntry[] = [
   { key: "dashboard", label: "看板", href: "/dashboard" },
   { key: "stores", label: "辖区门店", href: "/stores" },
   { key: "stock", label: "库存", href: "/stock" },
+  { key: "m-stock", label: "手机查库存", href: "/m/stock" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
+  ROADMAP,
 ];
 
 const MENU_HQ: MenuEntry[] = [
@@ -157,9 +170,9 @@ const MENU_HQ: MenuEntry[] = [
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
-  { key: "kpi", label: "KPI 目标" },
+  { key: "kpi", label: "KPI 目标", href: "/kpi" },
   { key: "logs", label: "操作日志", href: "/logs" },
-  { key: "roadmap", label: "后续规划" },
+  ROADMAP,
 ];
 
 /** 登录后左侧菜单（第 1 周先是假菜单，后面逐步换成真页面） */

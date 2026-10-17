@@ -17,5 +17,6 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // 图标、清单、robots.txt 不用登录也要能取到（浏览器装 PWA、搜索引擎读 robots 时不带登录态）
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|robots.txt|manifest.webmanifest|icons/).*)"],
 };

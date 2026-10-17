@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import { App, Button, Form, Input, InputNumber, Select, Space, Typography } from "antd";
+import { ScanButton } from "@/components/scan-button";
 import { yuanToFen } from "@/lib/format";
 import { parseDeviceCodeLines } from "@/server/stock/imei";
 import { createTradeInAction } from "./actions";
@@ -77,8 +78,20 @@ export function TradeInForm({
 
   return (
     <Form<Values> form={form} name={`trade-in-${storeId}`} layout="vertical" onFinish={onFinish} initialValues={{ condition: "9 成新" }}>
-      <Form.Item name="codesText" label="旧机的码（SN、IMEI1、IMEI2 任意 1 到 3 个，空格隔开）" rules={[{ required: true, message: "至少填一个码" }]} style={{ marginBottom: 4 }}>
-        <Input placeholder="如 SNOLD12345 867530019999991" />
+      <Form.Item label="旧机的码（SN、IMEI1、IMEI2 任意 1 到 3 个，空格隔开）" required style={{ marginBottom: 4 }}>
+        <Space.Compact style={{ width: "100%" }}>
+          <Form.Item name="codesText" noStyle rules={[{ required: true, message: "至少填一个码" }]}>
+            <Input placeholder="如 SNOLD12345 867530019999991" />
+          </Form.Item>
+          <ScanButton
+            continuous
+            onCode={(code) => {
+              const current: string = (form.getFieldValue("codesText") ?? "").trim();
+              if (current.split(/[\s,，]+/).includes(code)) return;
+              form.setFieldValue("codesText", current ? `${current} ${code}` : code);
+            }}
+          />
+        </Space.Compact>
       </Form.Item>
       <Typography.Text type={parsed.errors.length ? "danger" : "secondary"} style={{ display: "block", marginBottom: 12 }}>
         {parsed.errors.length

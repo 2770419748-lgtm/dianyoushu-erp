@@ -6,6 +6,8 @@ import { App, Button, Card, Descriptions, Form, Input, InputNumber, Popconfirm, 
 import type { TableColumnsType } from "antd";
 import { formatDateTime } from "@/lib/format";
 import { STOCKTAKE_STATUS_COLORS, STOCKTAKE_STATUS_LABELS } from "@/lib/stock-labels";
+import { ScanButton } from "@/components/scan-button";
+import { appendScannedCode } from "@/lib/device/scanner";
 import { parseCodeList } from "@/server/stock/imei";
 import type { StocktakeDetail } from "@/server/stocktake/stocktake-service";
 import { confirmStocktakeAction, enterCountsAction, voidStocktakeAction, type StocktakeActionResult } from "../actions";
@@ -135,6 +137,10 @@ export function StocktakeDetailView({ stocktake, canEnter, canConfirm }: { stock
                 <Form.Item name="imeiText" style={{ marginBottom: 4 }}>
                   <Input.TextArea rows={5} placeholder="粘贴实盘串号，一行一个" />
                 </Form.Item>
+                <Space wrap style={{ marginBottom: 4 }}>
+                  <ScanButton continuous size="small" label="扫码盘点" onCode={(code) => form.setFieldValue("imeiText", appendScannedCode(form.getFieldValue("imeiText"), code))} />
+                  <Typography.Text type="secondary">手机对着机器一台台扫，扫过的自动加进上面的框，重复的不会加两次</Typography.Text>
+                </Space>
                 <Typography.Text type={parsed.invalid.length ? "danger" : "secondary"} style={{ display: "block", marginBottom: 12 }}>
                   已识别 {parsed.valid.length} 个{parsed.invalid.length ? `，${parsed.invalid.length} 个格式不对` : ""}
                 </Typography.Text>
