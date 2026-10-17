@@ -104,7 +104,7 @@ export async function listDevicesForTransfer(user: CurrentUser, storeId: number,
   return prisma.device.findMany({
     where: {
       storeId,
-      status: { in: ["IN_STOCK", "REFURBISHED"] },
+      status: "IN_STOCK", // 只调在库的；良品（回收转良品）留在本店卖，状态机也不允许它锁定
       ...(text
         ? { OR: [{ code: { contains: text } }, { sn: { contains: text } }, { imei2: { contains: text } }, { sku: { name: { contains: text, mode: "insensitive" } } }] }
         : {}),
@@ -159,10 +159,10 @@ export async function createTransfer(user: CurrentUser, input: TransferInput) {
 
   if (deviceIds.length > 0) {
     const devices = await prisma.device.findMany({
-      where: { id: { in: deviceIds }, storeId: fromStoreId, status: { in: ["IN_STOCK", "REFURBISHED"] } },
+      where: { id: { in: deviceIds }, storeId: fromStoreId, status: "IN_STOCK" },
       select: { id: true },
     });
-    if (devices.length !== deviceIds.length) throw new TransferError("有机器不在发出店的在库/良品里，刷新后重选");
+    if (devices.length !== deviceIds.length) throw new TransferError("有机器不在发出店的在库里（良品不能调拨），刷新后重选");
   }
   for (const a of accessories) {
     const stock = await prisma.accessoryStock.findUnique({ where: { storeId_skuId: { storeId: fromStoreId, skuId: a.skuId } } });

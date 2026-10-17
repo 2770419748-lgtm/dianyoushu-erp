@@ -23,8 +23,8 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
   const from30 = formatDate(new Date(toDate(today).getTime() - 29 * DAY_MS));
   if (ids.length === 0) return null;
 
-  // 1. 门店 × 天：销售、毛利、单数、主机量、以旧换新（近 90 天）
-  const salesRows = await prisma.$queryRaw<{ store_id: number; d: string; orders: number; sales: bigint; profit: bigint; devices: number; trade_ins: number }[]>`
+  // 1. 门店 × 天：销售、毛利、单数、主机量（近 90 天）；旧机回收单独按回收单数
+  const salesRows = await prisma.$queryRaw<{ store_id: number; d: string; orders: number; sales: bigint; profit: bigint; devices: number }[]>`
     WITH o AS (
       SELECT id, store_id, biz_date, total_fen, discount_fen, trade_in_order_id FROM sales_orders
       WHERE status = 'COMPLETED' AND store_id = ANY(${ids}) AND biz_date >= ${toDate(from90)}
@@ -33,7 +33,7 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
       FROM sales_order_items WHERE order_id IN (SELECT id FROM o) GROUP BY order_id
     )
     SELECT o.store_id, to_char(o.biz_date, 'YYYY-MM-DD') AS d, COUNT(*)::int AS orders, SUM(o.total_fen)::bigint AS sales,
-           SUM(COALESCE(i.g, 0) - o.discount_fen)::bigint AS profit, SUM(COALESCE(i.dev, 0))::int AS devices, COUNT(o.trade_in_order_id)::int AS trade_ins
+           SUM(COALESCE(i.g, 0) - o.discount_fen)::bigint AS profit, SUM(COALESCE(i.dev, 0))::int AS devices
     FROM o LEFT JOIN i ON i.order_id = o.id GROUP BY 1, 2`;
   const returnRows = await prisma.$queryRaw<{ store_id: number; d: string; refund: bigint; loss: bigint; devices: number }[]>`
     SELECT r.store_id, to_char(r.biz_date, 'YYYY-MM-DD') AS d, SUM(ri.refund_fen)::bigint AS refund,
@@ -41,15 +41,26 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
            SUM(CASE WHEN ri.device_id IS NOT NULL THEN ri.qty ELSE 0 END)::int AS devices
     FROM return_orders r JOIN return_order_items ri ON ri.return_order_id = r.id JOIN sales_order_items si ON si.id = ri.sales_item_id
     WHERE r.store_id = ANY(${ids}) AND r.biz_date >= ${toDate(from90)} GROUP BY 1, 2`;
+  // 旧机回收（口径第 9 节）：按回收单的建单日期（北京时间）数台数，不管有没有被开单抵扣；作废的不算
+  const tradeInRows = await prisma.$queryRaw<{ store_id: number; d: string; n: number }[]>`
+    SELECT store_id, to_char((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS d, COUNT(*)::int AS n
+    FROM trade_in_orders
+    WHERE status = 'COMPLETED' AND store_id = ANY(${ids}) AND created_at >= ${toDate(from90)}
+    GROUP BY 1, 2`;
   const key = (storeId: number, d: string) => `${storeId}|${d}`;
   const daily = new Map<string, DayStoreRow>();
-  for (const r of salesRows) daily.set(key(r.store_id, r.d), { storeId: r.store_id, date: r.d, sales: n(r.sales), profit: n(r.profit), orders: r.orders, devices: r.devices, tradeIns: r.trade_ins });
+  for (const r of salesRows) daily.set(key(r.store_id, r.d), { storeId: r.store_id, date: r.d, sales: n(r.sales), profit: n(r.profit), orders: r.orders, devices: r.devices, tradeIns: 0 });
   for (const r of returnRows) {
     const row = daily.get(key(r.store_id, r.d)) ?? { storeId: r.store_id, date: r.d, sales: 0, profit: 0, orders: 0, devices: 0, tradeIns: 0 };
     row.sales -= n(r.refund);
     row.profit -= n(r.loss);
     row.devices -= r.devices;
     daily.set(key(r.store_id, r.d), row);
+  }
+  for (const t of tradeInRows) {
+    const row = daily.get(key(t.store_id, t.d)) ?? { storeId: t.store_id, date: t.d, sales: 0, profit: 0, orders: 0, devices: 0, tradeIns: 0 };
+    row.tradeIns = t.n;
+    daily.set(key(t.store_id, t.d), row);
   }
   const dayRows = [...daily.values()];
 
