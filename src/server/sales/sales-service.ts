@@ -12,6 +12,7 @@ import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/st
 import { effectivePriceFen } from "@/server/products/search";
 import { buildSalePayments, PaymentError } from "./payments";
 import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
+import { lockRow } from "@/server/db-lock";
 
 // 开单服务层：选机器和配件、改价优惠、以旧换新抵扣（关联回收单）、多种收款拆分（合计必须等于应收）。
 // 口径第 11 节第 3 条：销售单、明细、收款、扣库存、写流水在一个事务里，失败全部回滚。
@@ -102,22 +103,25 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     if (!customer) throw new SalesError("客户不存在");
   }
 
-  type Line = { skuId: number; deviceId: number | null; qty: number; unitPriceFen: number; lineTotalFen: number; costFen: number };
+  type Line = { skuId: number; deviceId: number | null; qty: number; listPriceFen: number; unitPriceFen: number; lineTotalFen: number; costFen: number };
   const lines: Line[] = [];
   for (const d of data.deviceLines) {
     const device = await tx.device.findUnique({ where: { id: d.deviceId }, include: { sku: { select: { id: true, name: true, guidePriceFen: true } } } });
     if (!device) throw new SalesError("机器不存在");
     if (device.storeId !== data.storeId) throw new SalesError(`${device.code} 不在本店`);
     if (!deviceCanSell(device.status)) throw new SalesError(`${device.code} 现在不能卖`);
-    const unitPriceFen = d.unitPriceFen ?? (await resolveUnitPrice(tx, data.storeId, device.skuId, device.sku.guidePriceFen));
-    lines.push({ skuId: device.skuId, deviceId: device.id, qty: 1, unitPriceFen, lineTotalFen: unitPriceFen, costFen: device.costFen });
+    // 原价 = 开单时的门店售价（没设就是指导价）；成交价可以手改，两个都存，单据和日志上能看出改过价
+    const listPriceFen = await resolveUnitPrice(tx, data.storeId, device.skuId, device.sku.guidePriceFen);
+    const unitPriceFen = d.unitPriceFen ?? listPriceFen;
+    lines.push({ skuId: device.skuId, deviceId: device.id, qty: 1, listPriceFen, unitPriceFen, lineTotalFen: unitPriceFen, costFen: device.costFen });
   }
   for (const a of data.accessoryLines) {
     const sku = await tx.sku.findUnique({ where: { id: a.skuId }, include: { model: { include: { category: true } } } });
     if (!sku || !sku.isActive) throw new SalesError("配件不存在或已停售");
     if (sku.model.category.kind !== "ACCESSORY") throw new SalesError(`${sku.name} 是大件，要按机器选`);
-    const unitPriceFen = a.unitPriceFen ?? (await resolveUnitPrice(tx, data.storeId, sku.id, sku.guidePriceFen));
-    lines.push({ skuId: sku.id, deviceId: null, qty: a.qty, unitPriceFen, lineTotalFen: unitPriceFen * a.qty, costFen: sku.costPriceFen * a.qty });
+    const listPriceFen = await resolveUnitPrice(tx, data.storeId, sku.id, sku.guidePriceFen);
+    const unitPriceFen = a.unitPriceFen ?? listPriceFen;
+    lines.push({ skuId: sku.id, deviceId: null, qty: a.qty, listPriceFen, unitPriceFen, lineTotalFen: unitPriceFen * a.qty, costFen: sku.costPriceFen * a.qty });
   }
 
   const subtotalFen = lines.reduce((s, l) => s + l.lineTotalFen, 0);
@@ -182,7 +186,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     wrapStockError(error);
   }
 
-  await writeAudit({ userId: user.id, action: "sale.create", entity: "sales_order", entityId: order.id, detail: { orderNo, totalFen, lines: lines.length, tradeIn: tradeIn?.orderNo ?? null, payments: payments.map((p) => p.method) } }, tx);
+  await writeAudit({ userId: user.id, action: "sale.create", entity: "sales_order", entityId: order.id, detail: { orderNo, totalFen, lines: lines.length, tradeIn: tradeIn?.orderNo ?? null, payments: payments.map((p) => p.method), priceChanges: lines.filter((l) => l.unitPriceFen !== l.listPriceFen).map((l) => ({ skuId: l.skuId, deviceId: l.deviceId, listPriceFen: l.listPriceFen, unitPriceFen: l.unitPriceFen })) } }, tx);
   return { id: order.id, orderNo };
 }
 
@@ -199,6 +203,7 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
   assertStoreAccess(user, head.store);
   // 拿到这家店这一天的锁之后再读整张单做检查：两个人同时点作废，后一个会看到“已经作废了”；日结确认和作废也不会交错
   await lockStoreDay(tx, head.storeId, head.bizDate);
+  await lockRow(tx, "sales_orders", orderId); // 和同时进行的退货排队（见 return-service）
   const order = await tx.salesOrder.findUniqueOrThrow({ where: { id: orderId }, include: { store: true, items: true, _count: { select: { returnOrders: true } } } });
   if (order.status !== "COMPLETED") throw new SalesError("这张单已经作废了");
   if (order.dailyCloseId) throw new SalesError("当日已日结确认，不能作废");
@@ -284,7 +289,14 @@ export async function getSalesOrder(user: CurrentUser, id: number) {
   assertStoreAccess(user, order.store);
   // 店员只能看自己开的单
   if (user.role === "STAFF" && order.salespersonId !== user.id) throw new PermissionError("店员只能看自己开的单");
-  return { ...order, customer: order.customer ? { id: order.customer.id, name: order.customer.name, phoneMasked: maskPhone(order.customer.phone) } : null };
+  const todayClosed = await isDayClosed(prisma, order.storeId, todayBizDate());
+  return {
+    ...order,
+    // 成本只给店长以上：店员连数据都拿不到，不只是页面上不显示
+    items: user.role === "STAFF" ? order.items.map((i) => ({ ...i, costFen: 0 })) : order.items,
+    customer: order.customer ? { id: order.customer.id, name: order.customer.name, phoneMasked: maskPhone(order.customer.phone) } : null,
+    todayClosed,
+  };
 }
 
 export type SalesOrderDetail = NonNullable<Awaited<ReturnType<typeof getSalesOrder>>>;

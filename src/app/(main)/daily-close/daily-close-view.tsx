@@ -7,7 +7,7 @@ import { Alert, App, Button, Card, Col, DatePicker, Input, InputNumber, Popconfi
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import type { PaymentMethod } from "@/generated/prisma/enums";
-import { formatDateTime, formatFen, yuanToFen } from "@/lib/format";
+import { formatDate, formatDateTime, formatFen, yuanToFen } from "@/lib/format";
 import { PAYMENT_METHOD_LABELS, SALES_STATUS_COLORS, SALES_STATUS_LABELS } from "@/lib/sales-labels";
 import { AUTO_MATCH_METHODS, type CloseLine } from "@/server/dailyclose/summary";
 import type { DailyCloseView as View } from "@/server/dailyclose/daily-close-service";
@@ -31,6 +31,7 @@ export function DailyCloseView({
   canClose: boolean;
   canReopen: boolean;
 }) {
+  const todayText = formatDate(new Date()); // 北京时间的今天，日期选择器不能选之后的日子
   const router = useRouter();
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
@@ -143,7 +144,7 @@ export function DailyCloseView({
         extra={
           <Space wrap>
             <Select value={storeId} style={{ width: 200 }} showSearch optionFilterProp="label" options={stores.map((s) => ({ value: s.id, label: s.label }))} onChange={(v) => go({ storeId: v })} disabled={stores.length === 1} />
-            <DatePicker value={dayjs(dateText)} allowClear={false} onChange={(d) => d && go({ date: d.format("YYYY-MM-DD") })} />
+            <DatePicker value={dayjs(dateText)} allowClear={false} disabledDate={(d) => d.format("YYYY-MM-DD") > todayText} onChange={(d) => d && go({ date: d.format("YYYY-MM-DD") })} />
           </Space>
         }
       >

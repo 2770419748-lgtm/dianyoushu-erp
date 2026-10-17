@@ -32,7 +32,9 @@ export default async function DailyClosePage({ searchParams }: PageProps<"/daily
   }
   const view = await getDailyCloseView(user, storeId, bizDate);
   return (
+    // key：换门店或日期时整个表单重建，不会带着上一天录的实收
     <DailyCloseView
+      key={`${storeId}-${dateText}`}
       stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))}
       storeId={storeId}
       dateText={dateText}

@@ -21,7 +21,8 @@ async function login(page: Page) {
 }
 
 async function accessoryQty(page: Page): Promise<number> {
-  await page.goto(`/stock?storeId=${STORE_ID}&tab=accessories`);
+  // 按名字搜，别依赖默认排序（不同系统的中文排序规则不一样，这一行可能排到第 2 页）
+  await page.goto(`/stock?storeId=${STORE_ID}&tab=accessories&q=${encodeURIComponent(ACCESSORY)}`);
   const row = page.locator("tr", { hasText: ACCESSORY }).first();
   await expect(row).toBeVisible();
   const text = await row.locator("td").nth(3).innerText();

@@ -5,8 +5,8 @@ import { prisma } from "@/lib/prisma";
 // 单号前缀：RI 入库单（跳到它的采购单）、TR 调拨单、ST 盘点、SO 销售单、RT 退货单（跳到原销售单）。
 // RC 回收单没有详情页，不给链接。只查这一批单号，一种前缀一条查询。
 
-export async function docLinks(docNos: string[]): Promise<Record<string, string>> {
-  const unique = [...new Set(docNos)];
+export async function docLinks(docNos: string[], opts: { canViewPurchase: boolean }): Promise<Record<string, string>> {
+  const unique = [...new Set(docNos)].filter((n) => opts.canViewPurchase || !n.startsWith("RI"));
   const pick = (prefix: string) => unique.filter((n) => n.startsWith(prefix));
   const [receipts, transfers, stocktakes, sales, returns] = await Promise.all([
     pick("RI").length ? prisma.goodsReceipt.findMany({ where: { receiptNo: { in: pick("RI") } }, select: { receiptNo: true, purchaseOrderId: true } }) : [],

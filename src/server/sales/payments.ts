@@ -60,3 +60,21 @@ export function maxRefundableFen(payments: PaymentLine[], alreadyRefundedFen: nu
   const paidCash = payments.filter((p) => p.method !== "TRADE_IN" && p.amountFen > 0).reduce((s, p) => s + p.amountFen, 0);
   return Math.max(0, paidCash - alreadyRefundedFen);
 }
+
+/**
+ * 这一次退货最多能退多少钱：只看这次退回的行。
+ * 每行按退的件数取成交额，再按整单优惠比例分摊，加起来；同时不能超过“实付 − 已退”（抵扣部分不退）。
+ * 例：5258 元的单（机器 5199 + 配件 59）只退配件，最多退 59 元，不能把整单的钱退走。
+ */
+export function returnRefundCapFen(
+  lines: { lineTotalFen: number; qty: number; returnQty: number }[],
+  order: { subtotalFen: number; totalFen: number },
+  payments: PaymentLine[],
+  alreadyRefundedFen: number,
+): number {
+  const byLines = lines.reduce(
+    (s, l) => s + (l.returnQty > 0 ? proportionalRefundFen(Math.round((l.lineTotalFen * l.returnQty) / l.qty), order.subtotalFen, order.totalFen) : 0),
+    0,
+  );
+  return Math.min(byLines, maxRefundableFen(payments, alreadyRefundedFen));
+}

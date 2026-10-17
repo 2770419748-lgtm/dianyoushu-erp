@@ -8,7 +8,7 @@ import { canCloseDay } from "@/server/auth/permissions";
 import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
-import { nextDocNo } from "@/server/stock/doc-no";
+import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { buildCloseLines, checkClose, DAILY_CLOSE_METHODS, emptyAmounts, orderMismatchFen, summarizeByMethod, type MethodAmounts } from "./summary";
 
 // 收银日结（口径第 5 节）：按门店、按营业日、按支付方式汇总收款（退款记负），和订单逐笔比对；
@@ -23,8 +23,14 @@ export function parseBizDate(text: unknown): Date {
   const s = typeof text === "string" ? text.trim() : "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new DailyCloseError("日期格式要 YYYY-MM-DD");
   const d = new Date(`${s}T00:00:00.000Z`);
-  if (Number.isNaN(d.getTime())) throw new DailyCloseError("日期不对");
+  // 2026-02-31 这种 JS 会悄悄变成 03-03，转回去对不上就是不存在的日期
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) throw new DailyCloseError("没有这一天");
   return d;
+}
+
+/** 日结只能做今天和以前的（北京时间）；给未来某天确认了，到那天这家店就开不了单 */
+function assertNotFuture(bizDate: Date) {
+  if (bizDate.getTime() > todayBizDate().getTime()) throw new DailyCloseError("不能给还没到的日子做日结");
 }
 
 async function loadStore(user: CurrentUser, storeId: number) {
@@ -156,6 +162,7 @@ function parseInput(user: CurrentUser, input: CloseInput) {
 /** 先存实收、不确认（中途保存） */
 export async function saveDailyCloseTx(tx: Tx, user: CurrentUser, input: CloseInput) {
   const data = parseInput(user, input);
+  assertNotFuture(data.bizDate);
   await loadStore(user, data.storeId);
   await lockStoreDay(tx, data.storeId, data.bizDate);
   const day = await loadDay(tx, data.storeId, data.bizDate);
@@ -164,6 +171,7 @@ export async function saveDailyCloseTx(tx: Tx, user: CurrentUser, input: CloseIn
 
 export async function confirmDailyCloseTx(tx: Tx, user: CurrentUser, input: CloseInput) {
   const data = parseInput(user, input);
+  assertNotFuture(data.bizDate);
   await loadStore(user, data.storeId);
   // 和开单、作废、退货排队：拿到锁之后读到的当天单据就是最终的，算完账、锁单之前不会再有变化
   await lockStoreDay(tx, data.storeId, data.bizDate);

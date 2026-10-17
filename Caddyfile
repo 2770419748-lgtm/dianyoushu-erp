@@ -1,5 +1,8 @@
 # SITE_ADDRESS 是 :80（只用 IP）时走 HTTP；是域名时 Caddy 自动申请并续期 HTTPS 证书。
+# reverse_proxy 会自动带上 X-Forwarded-Proto，应用据此决定登录 cookie 要不要加 Secure（见 src/server/auth/session.ts）。
 {$SITE_ADDRESS} {
 	encode gzip
+	# HSTS：告诉浏览器以后只用 HTTPS 访问（只在 HTTPS 响应里生效，走 :80 时浏览器会忽略）
+	header Strict-Transport-Security "max-age=31536000"
 	reverse_proxy app:3000
 }

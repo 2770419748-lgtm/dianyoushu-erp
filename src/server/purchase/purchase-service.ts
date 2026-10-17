@@ -2,9 +2,10 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import { canManagePurchase } from "@/server/auth/permissions";
-import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
+import { assertStoreAccess, PermissionError, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
+import { lockRow } from "@/server/db-lock";
 import { nextDocNo } from "@/server/stock/doc-no";
 import { parseDeviceCodeLines, type DeviceCodes } from "@/server/stock/imei";
 import { changeAccessoryStock, receiveDevices, StockError } from "@/server/stock/stock-service";
@@ -65,8 +66,14 @@ function parseOrder(input: PurchaseOrderInput) {
 
 export const PURCHASE_PAGE_SIZE = 20;
 
+/** 采购单（含供应商、成本单价）只有总部能看（口径第 1 节） */
+function assertCanViewPurchase(user: CurrentUser) {
+  if (!canManagePurchase(user.role)) throw new PermissionError("采购单只有总部能看");
+}
+
 export async function listPurchaseOrders(user: CurrentUser, page = 1) {
-  const current = Math.max(1, Math.floor(page) || 1);
+  assertCanViewPurchase(user);
+  const current = Math.max(1, Math.min(Math.floor(page) || 1, 100000));
   const where = storeScopeWhere(user);
   const [rows, total] = await Promise.all([
     prisma.purchaseOrder.findMany({
@@ -88,6 +95,7 @@ export async function listPurchaseOrders(user: CurrentUser, page = 1) {
 export type PurchaseOrderRow = Awaited<ReturnType<typeof listPurchaseOrders>>["rows"][number];
 
 export async function getPurchaseOrder(user: CurrentUser, id: number) {
+  assertCanViewPurchase(user);
   const order = await prisma.purchaseOrder.findUnique({
     where: { id },
     include: {
@@ -155,10 +163,11 @@ export async function createPurchaseOrder(actor: Actor, input: PurchaseOrderInpu
 export async function updatePurchaseOrder(actor: Actor, id: number, input: PurchaseOrderInput) {
   assertCanManage(actor);
   const data = parseOrder(input);
-  const order = await prisma.purchaseOrder.findUnique({ where: { id }, select: { status: true } });
-  if (!order) throw new PurchaseError("采购单不存在");
-  if (order.status !== "DRAFT") throw new PurchaseError("只有草稿能改");
   await prisma.$transaction(async (tx) => {
+    // 锁住采购单再查状态：改单和提交、作废同时发生时排队，不会把已提交的单改掉
+    if (!(await lockRow(tx, "purchase_orders", id))) throw new PurchaseError("采购单不存在");
+    const order = await tx.purchaseOrder.findUniqueOrThrow({ where: { id }, select: { status: true } });
+    if (order.status !== "DRAFT") throw new PurchaseError("只有草稿能改（可能刚被别人提交了，刷新后再看）");
     await tx.purchaseOrderItem.deleteMany({ where: { orderId: id } });
     await tx.purchaseOrder.update({
       where: { id },
@@ -174,22 +183,26 @@ export async function submitPurchaseOrder(actor: Actor, id: number) {
   if (!order) throw new PurchaseError("采购单不存在");
   if (order.status !== "DRAFT") throw new PurchaseError("只有草稿能提交");
   if (order._count.items === 0) throw new PurchaseError("没有商品行，不能提交");
-  await prisma.purchaseOrder.update({ where: { id }, data: { status: "SUBMITTED", submittedAt: new Date() } });
+  const changed = await prisma.purchaseOrder.updateMany({ where: { id, status: "DRAFT" }, data: { status: "SUBMITTED", submittedAt: new Date() } });
+  if (changed.count === 0) throw new PurchaseError("这张采购单刚被别人处理过，刷新后再看");
   await writeAudit({ userId: actor.id, action: "purchase.submit", entity: "purchase_order", entityId: id });
 }
 
 export async function voidPurchaseOrder(actor: Actor, id: number, reason: unknown) {
   assertCanManage(actor);
-  const order = await prisma.purchaseOrder.findUnique({ where: { id }, include: { _count: { select: { receipts: true } } } });
-  if (!order) throw new PurchaseError("采购单不存在");
-  if (order.status !== "DRAFT" && order.status !== "SUBMITTED") throw new PurchaseError("只有草稿或已提交的单能作废");
-  if (order._count.receipts > 0) throw new PurchaseError("已经有到货记录，不能作废");
   const note = optionalText(reason);
-  await prisma.purchaseOrder.update({
-    where: { id },
-    data: { status: "VOIDED", voidedAt: new Date(), note: note ? `${order.note ? `${order.note}；` : ""}作废原因：${note}` : order.note },
+  await prisma.$transaction(async (tx) => {
+    // 锁住再查：作废和到货入库同时发生时排队，不会出现“入了库的单被作废”
+    if (!(await lockRow(tx, "purchase_orders", id))) throw new PurchaseError("采购单不存在");
+    const order = await tx.purchaseOrder.findUniqueOrThrow({ where: { id }, include: { _count: { select: { receipts: true } } } });
+    if (order.status !== "DRAFT" && order.status !== "SUBMITTED") throw new PurchaseError("只有草稿或已提交的单能作废");
+    if (order._count.receipts > 0) throw new PurchaseError("已经有到货记录，不能作废");
+    await tx.purchaseOrder.update({
+      where: { id },
+      data: { status: "VOIDED", voidedAt: new Date(), note: note ? `${order.note ? `${order.note}；` : ""}作废原因：${note}` : order.note },
+    });
+    await writeAudit({ userId: actor.id, action: "purchase.void", entity: "purchase_order", entityId: id, detail: { reason: note } }, tx);
   });
-  await writeAudit({ userId: actor.id, action: "purchase.void", entity: "purchase_order", entityId: id, detail: { reason: note } });
 }
 
 // ---------- 到货入库 ----------
@@ -247,6 +260,15 @@ export async function receiveGoods(actor: Actor, input: ReceiveGoodsInput) {
 
   try {
     const receipt = await prisma.$transaction(async (tx) => {
+      // 锁住采购单，再按最新的“已到数量”重新核对：两个人同时点确认入库，后一个会发现已经到齐、被拦下
+      await lockRow(tx, "purchase_orders", order.id);
+      const fresh = await tx.purchaseOrder.findUniqueOrThrow({ where: { id: order.id }, include: { items: { select: { id: true, qty: true, receivedQty: true } } } });
+      if (fresh.status !== "SUBMITTED") throw new PurchaseError("这张采购单刚被别人处理过（已到齐或已作废），刷新后再看");
+      for (const plan of plans) {
+        const now = fresh.items.find((i) => i.id === plan.item.id)!;
+        const remaining = now.qty - now.receivedQty;
+        if (plan.qty > remaining) throw new PurchaseError(`${plan.item.sku.name}：还差 ${remaining} 件，这次录了 ${plan.qty} 件（可能刚被别人入过库，刷新后再看）`);
+      }
       const receiptNo = await nextDocNo(tx, "RI");
       const created = await tx.goodsReceipt.create({
         data: { receiptNo, purchaseOrderId: order.id, storeId: order.storeId, receivedById: actor.id, note },

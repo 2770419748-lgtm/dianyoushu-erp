@@ -1,5 +1,6 @@
-# 每次推送和每个 PR 都跑：lint、类型检查、单元测试。
-# 不连数据库：DATABASE_URL 只是给 prisma.config.ts 读配置用的占位值，prisma generate 不会真的连接。
+# 每次推送和每个 PR 都跑：lint、类型检查、生产构建、全部测试。
+# 测试连一个临时的 PostgreSQL（GitHub 给每次运行起一个全新的），先建表、灌演示数据，
+# 所以连库测试、并发测试、会写库的回归测试（RUN_DESTRUCTIVE_TESTS=1）在 CI 上都会真跑，不会被跳过。
 name: CI
 
 on:
@@ -10,9 +11,24 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
-      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci?schema=public
       SESSION_SECRET: ci-only-placeholder-not-a-real-secret
+      RUN_DESTRUCTIVE_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -33,5 +49,14 @@ jobs:
       - name: 类型检查
         run: pnpm typecheck
 
-      - name: 单元测试
+      - name: 建表
+        run: pnpm exec prisma migrate deploy
+
+      - name: 灌演示数据（种子 + 3 个月模拟经营数据，带自检）
+        run: pnpm db:reset
+
+      - name: 测试（含连库、并发、回归）
         run: pnpm test
+
+      - name: 生产构建
+        run: pnpm build

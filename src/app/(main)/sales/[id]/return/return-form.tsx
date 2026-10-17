@@ -28,7 +28,10 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
     const sum = ctx.items.reduce((s, i) => s + proportionalRefundFen(Math.round((i.lineTotalFen * (qtys[i.id] ?? 0)) / i.qty), ctx.order.subtotalFen, ctx.order.totalFen), 0);
     return Math.min(sum, ctx.maxRefundFen);
   }, [ctx, qtys]);
+  // 这次最多能退：只按勾选的行算（和服务端 returnRefundCapFen 同一个算法），所以等于按比例建议的金额
+  const capFen = suggestedFen;
   const refundFen = refundYuan === null ? suggestedFen : yuanToFen(refundYuan) || 0;
+  const overCap = refundFen > capFen;
   const selectedCount = Object.values(qtys).filter((q) => q > 0).length;
 
   const columns: TableColumnsType<Item> = [
@@ -76,11 +79,11 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
       <Table rowKey="id" size="small" pagination={false} columns={columns} dataSource={ctx.items} scroll={{ x: true }} />
       <Space orientation="vertical" style={{ marginTop: 16 }} size="middle">
         <Typography.Text>
-          原单应收 {formatFen(ctx.order.totalFen)} 元，已退 {formatFen(ctx.refundedFen)} 元，最多还能退 <Typography.Text strong>{formatFen(ctx.maxRefundFen)}</Typography.Text> 元
+          原单应收 {formatFen(ctx.order.totalFen)} 元，已退 {formatFen(ctx.refundedFen)} 元；这次勾选的商品最多退 <Typography.Text strong>{formatFen(capFen)}</Typography.Text> 元
         </Typography.Text>
         <Space wrap>
           <span>退款金额（元）</span>
-          <InputNumber min={0} max={ctx.maxRefundFen / 100} precision={2} style={{ width: 160 }} placeholder={(suggestedFen / 100).toFixed(2)} value={refundYuan} onChange={(v) => setRefundYuan(v === null ? null : Number(v))} />
+          <InputNumber min={0} max={capFen / 100} status={overCap ? "error" : undefined} precision={2} style={{ width: 160 }} placeholder={(suggestedFen / 100).toFixed(2)} value={refundYuan} onChange={(v) => setRefundYuan(v === null ? null : Number(v))} />
           <Typography.Text type="secondary">按比例建议 {formatFen(suggestedFen)} 元</Typography.Text>
         </Space>
         <Space wrap>
@@ -88,7 +91,7 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
           <Select style={{ width: 140 }} value={method} onChange={setMethod} options={ctx.refundMethods.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] }))} placeholder={ctx.refundMethods.length ? "选择" : "原单全是抵扣，不用退钱"} disabled={ctx.refundMethods.length === 0} />
         </Space>
         <Input placeholder="退货原因" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)} style={{ width: 360 }} />
-        <Button type="primary" danger loading={pending} disabled={selectedCount === 0 || (refundFen > 0 && !method)} onClick={submit}>
+        <Button type="primary" danger loading={pending} disabled={selectedCount === 0 || overCap || (refundFen > 0 && !method)} onClick={submit}>
           确认退货（退 {formatFen(refundFen)} 元）
         </Button>
       </Space>

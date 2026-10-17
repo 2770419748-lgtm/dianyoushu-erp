@@ -6,7 +6,7 @@ import { login, type LoginState } from "./actions";
 
 const { Title, Text } = Typography;
 
-export function LoginForm() {
+export function LoginForm({ notice }: { notice?: string }) {
   const [state, formAction, pending] = useActionState<LoginState, FormData>(login, {});
 
   return (
@@ -23,6 +23,11 @@ export function LoginForm() {
           <Form.Item label="密码">
             <Input.Password name="password" autoComplete="current-password" size="large" />
           </Form.Item>
+          {notice && !state.error ? (
+            <Form.Item>
+              <Alert type="warning" title={notice} showIcon />
+            </Form.Item>
+          ) : null}
           {state.error ? (
             <Form.Item>
               <Alert type="error" title={state.error} showIcon />

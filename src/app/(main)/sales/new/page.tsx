@@ -27,7 +27,9 @@ export default async function NewSalePage({ searchParams }: PageProps<"/sales/ne
     listTradeInSkuOptions(),
   ]);
   return (
+    // key：换门店时重建，不会把别家店的机器和回收单带过来
     <SaleForm
+      key={storeId}
       stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))}
       storeId={storeId}
       accessories={accessories}

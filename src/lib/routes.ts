@@ -34,6 +34,9 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/me": "个人信息",
 };
 
+/** 只是路径中间的一级、本身没有页面的地址：面包屑上显示文字但不做链接（点了会 404） */
+const NO_PAGE = new Set(["/stock/devices", "/m", "/reports"]);
+
 /** 路径里通用的最后一段（如 /sales/12/return） */
 const SEGMENT_TITLES: Record<string, string> = { return: "退货", edit: "编辑", new: "新建" };
 
@@ -54,7 +57,7 @@ export function breadcrumbFor(pathname: string): BreadcrumbEntry[] {
     const isLast = index === segments.length - 1;
     const known = ROUTE_TITLES[acc];
     const title = known ?? SEGMENT_TITLES[segment] ?? (/^\d+$/.test(segment) ? "详情" : segment);
-    items.push(isLast ? { title } : { href: acc, title });
+    items.push(isLast || NO_PAGE.has(acc) ? { title } : { href: acc, title });
   });
   return items;
 }

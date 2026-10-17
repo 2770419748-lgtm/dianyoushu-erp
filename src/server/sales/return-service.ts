@@ -3,13 +3,14 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import type { PaymentMethod } from "@/generated/prisma/enums";
 import { canSell } from "@/server/auth/permissions";
-import { assertStoreAccess } from "@/server/auth/scope";
+import { assertStoreAccess, PermissionError } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { DeviceStateError } from "@/server/stock/device-state";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
-import { maxRefundableFen, MANUAL_PAYMENT_METHODS } from "./payments";
+import { maxRefundableFen, MANUAL_PAYMENT_METHODS, returnRefundCapFen } from "./payments";
+import { lockRow } from "@/server/db-lock";
 import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
 
 // 退货（口径第 5、6 节）：选原销售单的明细退回 → 串号回在库（回收机回良品）、配件加回数量；
@@ -40,10 +41,11 @@ export async function getReturnContext(user: CurrentUser, salesOrderId: number) 
   });
   if (!order) return null;
   assertStoreAccess(user, order.store);
+  if (user.role === "STAFF" && order.salespersonId !== user.id) throw new PermissionError("店员只能给自己开的单退货");
   const refunded = order.returnOrders.reduce((s, r) => s + r.refundFen, 0);
   const salePayments = order.payments.filter((p) => p.salesOrderId === order.id && p.amountFen > 0);
   return {
-    order: { id: order.id, orderNo: order.orderNo, status: order.status, subtotalFen: order.subtotalFen, totalFen: order.totalFen, store: order.store },
+    order: { id: order.id, orderNo: order.orderNo, status: order.status, subtotalFen: order.subtotalFen, totalFen: order.totalFen, store: order.store, dailyClosed: order.dailyCloseId !== null },
     items: order.items.map((i) => ({
       id: i.id,
       name: i.sku.name,
@@ -65,12 +67,15 @@ export type ReturnContext = NonNullable<Awaited<ReturnType<typeof getReturnConte
 export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInput) {
   if (!canSell(user.role)) throw new ReturnError("你的角色不能退货");
   const salesOrderId = Number(input.salesOrderId);
-  const head = await tx.salesOrder.findUnique({ where: { id: salesOrderId }, select: { storeId: true, store: { select: { id: true, regionId: true } } } });
+  const head = await tx.salesOrder.findUnique({ where: { id: salesOrderId }, select: { storeId: true, salespersonId: true, store: { select: { id: true, regionId: true } } } });
   if (!head) throw new ReturnError("原销售单不存在");
   assertStoreAccess(user, head.store);
+  if (user.role === "STAFF" && head.salespersonId !== user.id) throw new ReturnError("店员只能给自己开的单退货");
   // 退货记在原单门店的今天：先排队拿锁，再读原单的已退数量（防止同一行被两个人同时退）
   const bizDate = todayBizDate();
   await lockStoreDay(tx, head.storeId, bizDate);
+  // 再锁原单这一行：和“作废这张单”排队（作废锁的是原单那天，退货锁的是今天，两把日锁不同，靠这一行的锁错开）
+  await lockRow(tx, "sales_orders", salesOrderId);
   const order = await tx.salesOrder.findUnique({
     where: { id: salesOrderId },
     include: { store: true, items: true, payments: true, returnOrders: { select: { refundFen: true } } },
@@ -98,8 +103,16 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
   if (!Number.isInteger(refundFen) || refundFen < 0) throw new ReturnError("退款金额不对");
   const salePayments = order.payments.filter((p) => p.salesOrderId === order.id && p.amountFen > 0);
   const refunded = order.returnOrders.reduce((s, r) => s + r.refundFen, 0);
-  const maxFen = maxRefundableFen(salePayments, refunded);
-  if (refundFen > maxFen) throw new ReturnError(`最多能退 ${(maxFen / 100).toFixed(2)} 元（以旧换新抵扣部分不退）`);
+  const maxFen = returnRefundCapFen(
+    plans.map((p) => ({ lineTotalFen: p.item.lineTotalFen, qty: p.item.qty, returnQty: p.qty })),
+    order,
+    salePayments,
+    refunded,
+  );
+  if (refundFen > maxFen) {
+    const paidLeft = maxRefundableFen(salePayments, refunded);
+    throw new ReturnError(`这次退回的商品最多退 ${(maxFen / 100).toFixed(2)} 元${maxFen === paidLeft ? "（以旧换新抵扣部分不退）" : "（按退回的商品成交额算）"}`);
+  }
   const refundMethod = input.refundMethod as PaymentMethod;
   if (refundFen > 0) {
     if (!MANUAL_PAYMENT_METHODS.includes(refundMethod)) throw new ReturnError("请选退款方式");

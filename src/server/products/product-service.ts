@@ -78,6 +78,7 @@ export interface SkuQuery {
   brandId?: number;
   page?: number;
   includeInactive?: boolean;
+  includeCost?: boolean; // 参考成本只给总部（管商品的人）；其他角色拿到的是 0
 }
 
 export async function searchSkus(query: SkuQuery) {
@@ -100,7 +101,7 @@ export async function searchSkus(query: SkuQuery) {
     }),
     prisma.sku.count({ where }),
   ]);
-  return { rows, total, page, pageSize: SKU_PAGE_SIZE };
+  return { rows: query.includeCost ? rows : rows.map((r) => ({ ...r, costPriceFen: 0 })), total, page, pageSize: SKU_PAGE_SIZE };
 }
 
 export type SkuRow = Awaited<ReturnType<typeof searchSkus>>["rows"][number];
@@ -138,6 +139,10 @@ export async function createCategory(actor: Actor, input: CategoryInput) {
 export async function updateCategory(actor: Actor, id: number, input: CategoryInput) {
   assertCanManage(actor);
   const data = parseCategory(input);
+  // 大件按串号管、小件按数量管，库存记法完全不同：品类下已经有型号了，就不能再改“大件 / 小件”
+  const current = await prisma.category.findUnique({ where: { id }, select: { kind: true, _count: { select: { models: true } } } });
+  if (!current) throw new ProductError("品类不存在");
+  if (current.kind !== data.kind && current._count.models > 0) throw new ProductError("这个品类下已经有型号了，不能再改大件 / 小件；要换就新建一个品类");
   try {
     const row = await prisma.category.update({ where: { id }, data });
     await writeAudit({ userId: actor.id, action: "category.update", entity: "category", entityId: id, detail: data });
@@ -208,6 +213,12 @@ export async function createModel(actor: Actor, input: ModelInput) {
 export async function updateModel(actor: Actor, id: number, input: ModelInput) {
   assertCanManage(actor);
   const data = parseModel(input);
+  // 型号挪到另一种（大件 / 小件）品类：已经有 SKU 的不行，否则已有的串号库存和数量库存就对不上了
+  const current = await prisma.productModel.findUnique({ where: { id }, select: { category: { select: { kind: true } }, _count: { select: { skus: true } } } });
+  if (!current) throw new ProductError("型号不存在");
+  const target = await prisma.category.findUnique({ where: { id: data.categoryId }, select: { kind: true } });
+  if (!target) throw new ProductError("品类不存在");
+  if (target.kind !== current.category.kind && current._count.skus > 0) throw new ProductError("这个型号下已经有商品了，不能挪到另一种（大件 / 小件）品类");
   try {
     const row = await prisma.productModel.update({ where: { id }, data });
     await writeAudit({ userId: actor.id, action: "model.update", entity: "model", entityId: id, detail: data });

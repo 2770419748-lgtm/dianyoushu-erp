@@ -29,7 +29,9 @@ export default async function NewTransferPage({ searchParams }: PageProps<"/tran
   const [devices, accessories] = await Promise.all([listDevicesForTransfer(user, fromStoreId, { page: 1 }), listAccessoriesForTransfer(user, fromStoreId)]);
 
   return (
+    // key：换发出门店时重建，机器列表和已勾选的都换成新门店的
     <TransferForm
+      key={fromStoreId}
       fromStores={fromStores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))}
       toStores={allStores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))}
       fromStoreId={fromStoreId}

@@ -19,6 +19,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
     brandId: Number(one(params.brandId)) || undefined,
     page: Number(one(params.page)) || 1,
     includeInactive: canManageProducts(user.role) && one(params.all) === "1",
+    includeCost: canManageProducts(user.role),
   };
   const [result, catalog] = await Promise.all([searchSkus(query), listCatalog()]);
   return (

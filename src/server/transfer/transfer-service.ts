@@ -5,6 +5,7 @@ import { canManageTransfer } from "@/server/auth/permissions";
 import { assertStoreAccess, canAccessStoreSafe, storeTableWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
+import { lockRow } from "@/server/db-lock";
 import { nextDocNo } from "@/server/stock/doc-no";
 import { parseCodeList } from "@/server/stock/imei";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
@@ -215,6 +216,9 @@ export async function shipTransfer(user: CurrentUser, id: number) {
 
   try {
     await prisma.$transaction(async (tx) => {
+      // 先“抢”状态：只有还是申请中才改成已发出。两个人同时点发出，后一个改到 0 行，整个事务回滚，不会扣两次
+      const claimed = await tx.transferOrder.updateMany({ where: { id, status: "REQUESTED" }, data: { status: "SHIPPED", shippedById: user.id, shippedAt: new Date() } });
+      if (claimed.count === 0) throw new TransferError("这张调拨单刚被别人处理过（已发出或已作废），刷新后再看");
       for (const item of order.items) {
         if (item.deviceId) {
           await applyDeviceAction(tx, { deviceId: item.deviceId, action: "SHIP", docType: "TRANSFER_OUT", docNo: order.orderNo, operatorId: user.id });
@@ -222,7 +226,6 @@ export async function shipTransfer(user: CurrentUser, id: number) {
           await changeAccessoryStock(tx, { storeId: order.fromStoreId, skuId: item.skuId, qtyDelta: -item.qty, docType: "TRANSFER_OUT", docNo: order.orderNo, operatorId: user.id });
         }
       }
-      await tx.transferOrder.update({ where: { id }, data: { status: "SHIPPED", shippedById: user.id, shippedAt: new Date() } });
       await writeAudit({ userId: user.id, action: "transfer.ship", entity: "transfer_order", entityId: id }, tx);
     });
   } catch (error) {
@@ -239,42 +242,51 @@ export interface ReceiveTransferInput {
 
 export async function receiveTransfer(user: CurrentUser, id: number, input: ReceiveTransferInput) {
   assertCanManage(user);
-  const order = await prisma.transferOrder.findUnique({
-    where: { id },
-    include: { toStore: true, items: { include: { device: { select: { code: true, sn: true, imei1: true, imei2: true } }, sku: { select: { name: true } } } } },
-  });
-  if (!order) throw new TransferError("调拨单不存在");
-  if (order.status !== "SHIPPED") throw new TransferError("只有已发出的调拨单能收货");
-  assertStoreAccess(user, order.toStore);
+  const head = await prisma.transferOrder.findUnique({ where: { id }, include: { toStore: true } });
+  if (!head) throw new TransferError("调拨单不存在");
+  assertStoreAccess(user, head.toStore);
 
   // 收到的码：SN、IMEI1、IMEI2 哪个都行，对上同一台算一台
   const parsed = parseCodeList(typeof input.imeiText === "string" ? input.imeiText : "");
   if (parsed.invalid.length > 0) throw new TransferError(`有格式不对的码：${parsed.invalid.slice(0, 3).join("、")}`);
-  const pendingDeviceItems = order.items.filter((i) => i.deviceId && i.receivedQty < i.qty);
-  const byCode = new Map<string, (typeof pendingDeviceItems)[number]>();
-  for (const item of pendingDeviceItems) {
-    for (const c of [item.device!.code, item.device!.sn, item.device!.imei1, item.device!.imei2]) if (c) byCode.set(c, item);
-  }
-  const unknown = parsed.valid.filter((c) => !byCode.has(c));
-  if (unknown.length > 0) throw new TransferError(`这些码不在这张调拨单的待收清单里：${unknown.slice(0, 3).join("、")}`);
-  const deviceItems = Array.from(new Set(parsed.valid.map((c) => byCode.get(c)!)));
-
-  const accessoryPlans: { itemId: number; qty: number }[] = [];
+  const lines: { itemId: number; qty: number }[] = [];
   for (const line of input.accessoryLines ?? []) {
     const itemId = requireId(line.itemId, "配件行");
-    const item = order.items.find((i) => i.id === itemId && !i.deviceId);
-    if (!item) throw new TransferError("配件行不属于这张单");
     const qty = Number(line.qty ?? 0);
     if (qty === 0) continue;
-    if (!Number.isInteger(qty) || qty < 0) throw new TransferError(`${item.sku.name}：数量必须是正整数`);
-    const remaining = item.qty - item.receivedQty;
-    if (qty > remaining) throw new TransferError(`${item.sku.name}：还差 ${remaining} 件，录了 ${qty} 件`);
-    accessoryPlans.push({ itemId, qty });
+    if (!Number.isInteger(qty) || qty < 0) throw new TransferError("收货数量必须是正整数");
+    lines.push({ itemId, qty });
   }
-  if (deviceItems.length === 0 && accessoryPlans.length === 0) throw new TransferError("没有填任何收到的串号或数量");
 
   try {
     await prisma.$transaction(async (tx) => {
+      // 锁住调拨单再读明细：两个人同时收货，后一个会读到前一个收完的“已收数量”，超收会被拦下
+      await lockRow(tx, "transfer_orders", id);
+      const order = await tx.transferOrder.findUniqueOrThrow({
+        where: { id },
+        include: { items: { include: { device: { select: { code: true, sn: true, imei1: true, imei2: true } }, sku: { select: { name: true } } } } },
+      });
+      if (order.status !== "SHIPPED") throw new TransferError("只有已发出的调拨单能收货（可能刚被别人收完了，刷新后再看）");
+
+      const pendingDeviceItems = order.items.filter((i) => i.deviceId && i.receivedQty < i.qty);
+      const byCode = new Map<string, (typeof pendingDeviceItems)[number]>();
+      for (const item of pendingDeviceItems) {
+        for (const c of [item.device!.code, item.device!.sn, item.device!.imei1, item.device!.imei2]) if (c) byCode.set(c, item);
+      }
+      const unknown = parsed.valid.filter((c) => !byCode.has(c));
+      if (unknown.length > 0) throw new TransferError(`这些码不在这张调拨单的待收清单里：${unknown.slice(0, 3).join("、")}`);
+      const deviceItems = Array.from(new Set(parsed.valid.map((c) => byCode.get(c)!)));
+
+      const accessoryPlans: { item: (typeof order.items)[number]; qty: number }[] = [];
+      for (const line of lines) {
+        const item = order.items.find((i) => i.id === line.itemId && !i.deviceId);
+        if (!item) throw new TransferError("配件行不属于这张单");
+        const remaining = item.qty - item.receivedQty;
+        if (line.qty > remaining) throw new TransferError(`${item.sku.name}：还差 ${remaining} 件，录了 ${line.qty} 件`);
+        accessoryPlans.push({ item, qty: line.qty });
+      }
+      if (deviceItems.length === 0 && accessoryPlans.length === 0) throw new TransferError("没有填任何收到的串号或数量");
+
       for (const item of deviceItems) {
         await applyDeviceAction(tx, {
           deviceId: item.deviceId!,
@@ -287,9 +299,8 @@ export async function receiveTransfer(user: CurrentUser, id: number, input: Rece
         await tx.transferItem.update({ where: { id: item.id }, data: { receivedQty: 1, receivedAt: new Date() } });
       }
       for (const plan of accessoryPlans) {
-        const item = order.items.find((i) => i.id === plan.itemId)!;
-        await changeAccessoryStock(tx, { storeId: order.toStoreId, skuId: item.skuId, qtyDelta: plan.qty, docType: "TRANSFER_IN", docNo: order.orderNo, operatorId: user.id });
-        await tx.transferItem.update({ where: { id: plan.itemId }, data: { receivedQty: { increment: plan.qty }, receivedAt: new Date() } });
+        await changeAccessoryStock(tx, { storeId: order.toStoreId, skuId: plan.item.skuId, qtyDelta: plan.qty, docType: "TRANSFER_IN", docNo: order.orderNo, operatorId: user.id });
+        await tx.transferItem.update({ where: { id: plan.item.id }, data: { receivedQty: { increment: plan.qty }, receivedAt: new Date() } });
       }
       const items = await tx.transferItem.findMany({ where: { transferId: id }, select: { qty: true, receivedQty: true } });
       const allReceived = items.every((i) => i.receivedQty >= i.qty);
@@ -314,12 +325,13 @@ export async function voidTransfer(user: CurrentUser, id: number) {
   assertStoreAccess(user, order.fromStore);
   try {
     await prisma.$transaction(async (tx) => {
+      const claimed = await tx.transferOrder.updateMany({ where: { id, status: "REQUESTED" }, data: { status: "VOIDED", voidedAt: new Date() } });
+      if (claimed.count === 0) throw new TransferError("这张调拨单刚被别人处理过（已发出或已作废），刷新后再看");
       for (const item of order.items) {
         if (item.deviceId) {
           await applyDeviceAction(tx, { deviceId: item.deviceId, action: "UNLOCK", docType: "TRANSFER_UNLOCK", docNo: order.orderNo, operatorId: user.id });
         }
       }
-      await tx.transferOrder.update({ where: { id }, data: { status: "VOIDED", voidedAt: new Date() } });
       await writeAudit({ userId: user.id, action: "transfer.void", entity: "transfer_order", entityId: id }, tx);
     });
   } catch (error) {

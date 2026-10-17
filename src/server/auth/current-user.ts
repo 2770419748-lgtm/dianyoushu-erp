@@ -31,6 +31,8 @@ export type CurrentUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>
 /** 页面和服务层用：没登录直接跳登录页 */
 export async function requireUser(): Promise<CurrentUser> {
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
-  return user;
+  if (user) return user;
+  // 有登录 cookie、但账号已停用或不存在：先去清 cookie，否则登录页和首页会来回跳（见 /api/session/clear）
+  if (await readSession()) redirect("/api/session/clear");
+  redirect("/login");
 }

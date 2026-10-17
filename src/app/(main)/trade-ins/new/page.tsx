@@ -20,5 +20,5 @@ export default async function NewTradeInPage({ searchParams }: PageProps<"/trade
   const requested = Number(one(params.storeId));
   const storeId = stores.some((s) => s.id === requested) ? requested : (user.storeId ?? stores[0]!.id);
   const skuOptions = await listTradeInSkuOptions();
-  return <NewTradeInView stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))} storeId={storeId} skuOptions={skuOptions} />;
+  return <NewTradeInView key={storeId} stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))} storeId={storeId} skuOptions={skuOptions} />;
 }

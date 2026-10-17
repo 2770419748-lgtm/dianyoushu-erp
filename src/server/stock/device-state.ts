@@ -19,6 +19,22 @@ export type DeviceAction =
 
 export class DeviceStateError extends Error {}
 
+/** 报错给人看的动作名 */
+export const DEVICE_ACTION_LABELS: Record<DeviceAction, string> = {
+  RECEIVE: "入库",
+  LOCK_FOR_TRANSFER: "调拨锁定",
+  UNLOCK: "调拨解锁",
+  SHIP: "调拨发出",
+  TRANSFER_RECEIVE: "调拨收货",
+  SELL: "卖出",
+  VOID_SALE: "作废销售单",
+  RETURN: "退货",
+  TRADE_IN: "回收入库",
+  REFURBISH: "转良品",
+  STOCKTAKE_LOSS: "盘亏",
+  STOCKTAKE_GAIN: "盘盈",
+};
+
 /** from 为 null 表示这个动作会新建一台机器 */
 const TRANSITIONS: Record<DeviceAction, { from: DeviceStatus[] | null; to: DeviceStatus }> = {
   RECEIVE: { from: null, to: "IN_STOCK" },
@@ -61,12 +77,12 @@ export const SELLABLE_STATUSES: DeviceStatus[] = ["IN_STOCK", "REFURBISHED"];
 export function nextDeviceStatus(action: DeviceAction, current: DeviceStatus | null, opts: { recycled?: boolean } = {}): DeviceStatus {
   const rule = TRANSITIONS[action];
   if (rule.from === null) {
-    if (current !== null) throw new DeviceStateError(`"${action}" 只能用于新机器，这台已经是"${DEVICE_STATUS_LABELS[current]}"`);
+    if (current !== null) throw new DeviceStateError(`“${DEVICE_ACTION_LABELS[action]}”只能用于新机器，这台已经是“${DEVICE_STATUS_LABELS[current]}”`);
     return rule.to;
   }
   if (current === null || !rule.from.includes(current)) {
     const label = current === null ? "不存在" : DEVICE_STATUS_LABELS[current];
-    throw new DeviceStateError(`机器当前是"${label}"，不能执行 ${action}`);
+    throw new DeviceStateError(`机器现在是“${label}”，不能${DEVICE_ACTION_LABELS[action]}`);
   }
   if ((action === "VOID_SALE" || action === "RETURN") && opts.recycled) return "REFURBISHED";
   return rule.to;

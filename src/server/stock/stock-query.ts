@@ -49,14 +49,22 @@ export async function listDevices(user: CurrentUser, query: DeviceQuery) {
     }),
     prisma.device.count({ where }),
   ]);
-  return { rows, total, page, pageSize: STOCK_PAGE_SIZE };
+  return { rows: canSeeCost(user) ? rows : rows.map((r) => ({ ...r, costFen: 0, sku: hideSkuCost(r.sku) })), total, page, pageSize: STOCK_PAGE_SIZE };
 }
 
 export type DeviceRow = Awaited<ReturnType<typeof listDevices>>["rows"][number];
 
+/** 成本（采购价、参考成本）只给店长以上：店员拿到的数据里就是 0，不只是页面不显示 */
+function canSeeCost(user: CurrentUser): boolean {
+  return user.role !== "STAFF";
+}
+function hideSkuCost<T extends { costPriceFen: number }>(sku: T): T {
+  return { ...sku, costPriceFen: 0 };
+}
+
 export async function listAccessoryStocks(user: CurrentUser, query: { storeId?: number; q?: string }) {
   const text = (query.q ?? "").trim();
-  return prisma.accessoryStock.findMany({
+  const rows = await prisma.accessoryStock.findMany({
     where: {
       AND: [
         storeScopeWhere(user),
@@ -77,6 +85,7 @@ export async function listAccessoryStocks(user: CurrentUser, query: { storeId?: 
       store: { select: { code: true, name: true } },
     },
   });
+  return canSeeCost(user) ? rows : rows.map((r) => ({ ...r, sku: hideSkuCost(r.sku) }));
 }
 
 export type AccessoryStockRow = Awaited<ReturnType<typeof listAccessoryStocks>>[number];
@@ -135,7 +144,7 @@ export async function getDeviceByCode(user: CurrentUser, code: string) {
   });
   if (!device) return null;
   assertStoreAccess(user, { id: device.store.id, regionId: device.store.regionId });
-  return device;
+  return canSeeCost(user) ? device : { ...device, costFen: 0, sku: hideSkuCost(device.sku) };
 }
 
 export type DeviceDetail = NonNullable<Awaited<ReturnType<typeof getDeviceByCode>>>;

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { NoAccess } from "@/components/no-access";
 import { requireUser, type CurrentUser } from "@/server/auth/current-user";
-import { canVoidSales } from "@/server/auth/permissions";
+import { canSell, canVoidSales } from "@/server/auth/permissions";
 import { PermissionError } from "@/server/auth/scope";
 import { getSalesOrder, type SalesOrderDetail } from "@/server/sales/sales-service";
 import { SalesDetailView } from "./sales-detail-view";
@@ -28,5 +28,5 @@ export default async function SalesDetailPage({ params }: PageProps<"/sales/[id]
   const loaded = await load(user, orderId);
   if (loaded.kind === "missing") notFound();
   if (loaded.kind === "forbidden") return <NoAccess title="没有权限看这张销售单" />;
-  return <SalesDetailView order={loaded.order} canVoid={canVoidSales(user.role)} showCost={user.role !== "STAFF"} />;
+  return <SalesDetailView order={loaded.order} canVoid={canVoidSales(user.role)} canSell={canSell(user.role)} showCost={user.role !== "STAFF"} />;
 }

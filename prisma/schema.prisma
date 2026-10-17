@@ -626,6 +626,7 @@ model SalesOrderItem {
   skuId        Int  @map("sku_id")
   deviceId     Int? @map("device_id") // 大件必填
   qty          Int  @default(1)
+  listPriceFen Int? @map("list_price_fen") // 开单时的门店售价（原价）；和成交单价不同就是改过价。旧数据为空
   unitPriceFen Int  @map("unit_price_fen") // 成交单价
   discountFen  Int  @default(0) @map("discount_fen") // 行优惠
   lineTotalFen Int  @map("line_total_fen") // 单价 × 数量 − 行优惠

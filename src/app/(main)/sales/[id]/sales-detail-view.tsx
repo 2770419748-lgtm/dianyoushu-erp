@@ -11,7 +11,7 @@ import { voidSalesOrderAction } from "../actions";
 
 type Item = SalesOrderDetail["items"][number];
 
-export function SalesDetailView({ order, canVoid, showCost }: { order: SalesOrderDetail; canVoid: boolean; showCost: boolean }) {
+export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: SalesOrderDetail; canVoid: boolean; canSell: boolean; showCost: boolean }) {
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState("");
@@ -19,7 +19,21 @@ export function SalesDetailView({ order, canVoid, showCost }: { order: SalesOrde
   const itemColumns: TableColumnsType<Item> = [
     { title: "商品", render: (_, i) => i.sku.name },
     { title: "机器 / 数量", render: (_, i) => (i.device ? <Link href={`/stock/devices/${i.device.code}`}>{i.device.code}</Link> : `× ${i.qty}`) },
-    { title: "单价（元）", dataIndex: "unitPriceFen", align: "right", render: (v: number) => formatFen(v) },
+    {
+      title: "单价（元）",
+      align: "right",
+      render: (_, i) =>
+        i.listPriceFen !== null && i.listPriceFen !== i.unitPriceFen ? (
+          <Space size={4} orientation="vertical" style={{ alignItems: "flex-end" }}>
+            <span>{formatFen(i.unitPriceFen)}</span>
+            <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+              改价，原价 {formatFen(i.listPriceFen)}
+            </Tag>
+          </Space>
+        ) : (
+          formatFen(i.unitPriceFen)
+        ),
+    },
     { title: "小计（元）", dataIndex: "lineTotalFen", align: "right", render: (v: number) => formatFen(v) },
     { title: "已退", dataIndex: "returnedQty", align: "right", render: (v: number) => (v > 0 ? <Tag color="orange">{v}</Tag> : "-") },
     ...(showCost
@@ -30,7 +44,11 @@ export function SalesDetailView({ order, canVoid, showCost }: { order: SalesOrde
       : []),
   ];
 
-  const grossFen = order.items.reduce((s, i) => s + i.lineTotalFen - i.costFen, 0) - order.discountFen;
+  // 毛利扣掉退货：应收 − 已退款 − 没退回那部分商品的成本
+  const refundedFen = order.returnOrders.reduce((s, r) => s + r.refundFen, 0);
+  const keptCostFen = order.items.reduce((s, i) => s + Math.round((i.costFen * (i.qty - i.returnedQty)) / i.qty), 0);
+  const grossFen = order.status === "COMPLETED" ? order.totalFen - refundedFen - keptCostFen : 0;
+  const canReturn = canSell && order.status === "COMPLETED" && order.items.some((i) => i.returnedQty < i.qty);
 
   return (
     <Space orientation="vertical" size="large" style={{ width: "100%" }}>
@@ -46,15 +64,23 @@ export function SalesDetailView({ order, canVoid, showCost }: { order: SalesOrde
             <Link href="/sales">
               <Button size="small">返回列表</Button>
             </Link>
-            <Link href="/sales/new">
-              <Button size="small" type="primary">
-                再开一单
-              </Button>
-            </Link>
-            {order.status === "COMPLETED" && order.items.some((i) => i.returnedQty < i.qty) ? (
-              <Link href={`/sales/${order.id}/return`}>
-                <Button size="small">退货</Button>
+            {canSell ? (
+              <Link href="/sales/new">
+                <Button size="small" type="primary">
+                  再开一单
+                </Button>
               </Link>
+            ) : null}
+            {canReturn ? (
+              order.todayClosed ? (
+                <Button size="small" disabled title="这家店今天已经日结确认，要退货请总部先撤销日结">
+                  退货（今天已日结）
+                </Button>
+              ) : (
+                <Link href={`/sales/${order.id}/return`}>
+                  <Button size="small">退货</Button>
+                </Link>
+              )
             ) : null}
             {canVoid && order.status === "COMPLETED" && !order.dailyCloseId && order.returnOrders.length === 0 ? (
               <Popconfirm
@@ -85,7 +111,7 @@ export function SalesDetailView({ order, canVoid, showCost }: { order: SalesOrde
             { key: "date", label: "营业日", children: formatDate(order.bizDate) },
             { key: "created", label: "开单时间", children: formatDateTime(order.createdAt) },
             { key: "total", label: "应收", children: `${formatFen(order.totalFen)} 元（商品 ${formatFen(order.subtotalFen)} − 优惠 ${formatFen(order.discountFen)}）` },
-            ...(showCost ? [{ key: "gross", label: "毛利", children: `${formatFen(grossFen)} 元` }] : []),
+            ...(showCost ? [{ key: "gross", label: refundedFen > 0 ? "毛利（已扣退货）" : "毛利", children: `${formatFen(grossFen)} 元` }] : []),
             { key: "note", label: "备注", children: order.note ?? "-" },
             ...(order.status === "VOIDED"
               ? [{ key: "void", label: "作废", children: `${order.voidedBy?.name ?? ""} · ${order.voidedAt ? formatDateTime(order.voidedAt) : ""}${order.voidReason ? ` · ${order.voidReason}` : ""}`, span: "filled" as const }]

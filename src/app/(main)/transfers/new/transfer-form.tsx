@@ -131,6 +131,10 @@ export function TransferForm({
           style={{ width: 280, marginBottom: 8 }}
           loading={loadingDevices}
           onSearch={(q) => void loadDevices(q.trim(), 1)}
+          // 搜索框在整张调拨表单里面，浏览器默认“回车 = 提交表单”，这里拦掉，回车只搜索
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.preventDefault();
+          }}
         />
         {selected.size > 0 ? (
           <div style={{ marginBottom: 8 }}>
