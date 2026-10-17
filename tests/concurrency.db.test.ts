@@ -19,9 +19,12 @@ let stock: { storeId: number; skuId: number; qty: number } | null = null;
 beforeAll(async () => {
   try {
     const hq = await prisma.user.findFirst({ where: { role: "HQ" }, select: { id: true } });
-    const d = await prisma.device.findFirst({ where: { status: "IN_STOCK" }, orderBy: { id: "asc" }, select: { id: true } });
-    const s = await prisma.accessoryStock.findFirst({ where: { qty: { gte: 1, lte: 50 } }, orderBy: { id: "asc" }, select: { storeId: true, skuId: true, qty: true } });
-    if (!hq || !d || !s) return;
+    // 这里会真的提交改动，用第 3 家店的数据，和其他连库测试（用第一家、最后一家店）错开，避免并行跑时互相干扰
+    const store = await prisma.store.findFirst({ orderBy: { id: "asc" }, skip: 2, select: { id: true } });
+    if (!hq || !store) return;
+    const d = await prisma.device.findFirst({ where: { storeId: store.id, status: "IN_STOCK" }, orderBy: { id: "desc" }, select: { id: true } });
+    const s = await prisma.accessoryStock.findFirst({ where: { storeId: store.id, qty: { gte: 1, lte: 50 } }, orderBy: { id: "desc" }, select: { storeId: true, skuId: true, qty: true } });
+    if (!d || !s) return;
     operatorId = hq.id;
     device = { id: d.id, status: "IN_STOCK" };
     stock = s;

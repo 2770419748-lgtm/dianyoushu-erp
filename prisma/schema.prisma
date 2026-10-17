@@ -514,6 +514,7 @@ model TransferItem {
   sku      Sku           @relation(fields: [skuId], references: [id])
   device   Device?       @relation(fields: [deviceId], references: [id])
 
+  @@unique([transferId, deviceId]) // 一台机器在一张调拨单里只能有一行
   @@index([transferId])
   @@map("transfer_items")
 }
@@ -556,6 +557,7 @@ model StocktakeItem {
   sku       Sku       @relation(fields: [skuId], references: [id])
   device    Device?   @relation(fields: [deviceId], references: [id])
 
+  @@unique([stocktakeId, deviceId]) // 一台机器在一次盘点里只能有一行（配件行 device_id 为空，不受影响）
   @@index([stocktakeId])
   @@map("stocktake_items")
 }
