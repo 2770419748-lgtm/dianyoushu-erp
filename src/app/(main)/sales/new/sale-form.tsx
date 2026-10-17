@@ -222,7 +222,7 @@ export function SaleForm({
           ) : (
             <Space orientation="vertical" style={{ width: "100%", marginBottom: 16 }}>
               <Space>
-                <Input.Search placeholder="输完整手机号或姓名找客户" style={{ width: "min(280px, 100%)" }} onSearch={searchCustomers} allowClear />
+                <Input.Search placeholder="输手机号（至少 4 位）或姓名找客户" style={{ width: "min(280px, 100%)" }} onSearch={searchCustomers} allowClear />
                 <Button onClick={() => { customerForm.resetFields(); setCustomerModalOpen(true); }}>新客户</Button>
                 <Typography.Text type="secondary">不选就是散客</Typography.Text>
               </Space>

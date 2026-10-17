@@ -22,8 +22,13 @@ export async function searchCustomers(user: CurrentUser, q = "", page = 1) {
   assertCanUse(user);
   const text = q.trim();
   const current = clampPage(page);
-  // 手机号必须输全 11 位才匹配（精确查找）；只输几位不按手机号匹配，否则一位一位地试，几十次就能猜出被脱敏的中间 4 位。姓名照样模糊搜
-  const where = !text ? {} : PHONE_PATTERN.test(text) ? { phone: text } : { name: { contains: text, mode: "insensitive" as const } };
+  // 姓名和手机号都能模糊搜（2026-10-17 坤总定：门店常按手机尾号找人）。手机号至少输 4 位数字才按号码匹配，免得输一两位就把全部客户列出来。
+  // 已知取舍：能模糊搜手机号，有心人可以一位一位试出被脱敏的中间 4 位；只有店员、店长、总部能搜，演示版接受。
+  const where = !text
+    ? {}
+    : /^\d{4,11}$/.test(text)
+      ? { OR: [{ phone: { contains: text } }, { name: { contains: text, mode: "insensitive" as const } }] }
+      : { name: { contains: text, mode: "insensitive" as const } };
   const [rows, total] = await Promise.all([
     prisma.customer.findMany({
       where,
