@@ -6,6 +6,8 @@ import { App, Button, Card, Descriptions, Form, Input, InputNumber, Popconfirm, 
 import type { TableColumnsType } from "antd";
 import { formatDateTime } from "@/lib/format";
 import { DEVICE_STATUS_COLORS, DEVICE_STATUS_LABELS, TRANSFER_STATUS_COLORS, TRANSFER_STATUS_LABELS } from "@/lib/stock-labels";
+import { ScanButton } from "@/components/scan-button";
+import { appendScannedCode } from "@/lib/device/scanner";
 import { parseCodeList } from "@/server/stock/imei";
 import type { TransferDetail } from "@/server/transfer/transfer-service";
 import { receiveTransferAction, shipTransferAction, voidTransferAction, type TransferActionResult } from "../actions";
@@ -137,8 +139,9 @@ export function TransferDetailView({ order, canManage }: { order: TransferDetail
             {pendingDevices.length > 0 ? (
               <>
                 <Form.Item name="imeiText" label={`收到的串号（待收 ${pendingDevices.length} 台）`} style={{ marginBottom: 4 }}>
-                  <Input.TextArea rows={4} placeholder="粘贴串号，一行一个" />
+                  <Input.TextArea rows={4} placeholder="粘贴串号，一行一个（SN、IMEI1、IMEI2 哪个都行）" />
                 </Form.Item>
+                <ScanButton continuous size="small" label="扫码收货" onCode={(code) => form.setFieldValue("imeiText", appendScannedCode(form.getFieldValue("imeiText"), code))} />
                 <Typography.Text type={unknown.length || parsed.invalid.length ? "danger" : "secondary"} style={{ display: "block", marginBottom: 12 }}>
                   已识别 {parsed.valid.length} 个{parsed.invalid.length ? `，${parsed.invalid.length} 个格式不对` : ""}
                   {unknown.length ? `，${unknown.length} 个不在待收清单里：${unknown.slice(0, 3).join("、")}` : ""}

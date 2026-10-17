@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import type { Role } from "@/generated/prisma/enums";
+import { DEMO_PROTECTED_MESSAGE, isProtectedDemoAccount } from "@/server/auth/demo-accounts";
 import { hashPassword } from "@/server/auth/password";
 import { canManageOrg, ROLE_LABELS } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
@@ -217,8 +218,15 @@ export async function createUser(actor: Actor, input: UserInput & { username: un
   }
 }
 
+/** 演示账号不能被改密码、停用、改角色（见 demo-accounts.ts） */
+async function assertNotDemoAccount(id: number) {
+  const target = await prisma.user.findUnique({ where: { id }, select: { username: true } });
+  if (target && isProtectedDemoAccount(target.username)) throw new OrgError(DEMO_PROTECTED_MESSAGE);
+}
+
 export async function updateUser(actor: Actor, id: number, input: UserInput) {
   assertCanManage(actor);
+  await assertNotDemoAccount(id);
   const data = parseUserInput(input);
   if (id === actor.id && data.role !== "HQ") throw new OrgError("不能把自己改成非总部角色");
   const user = await prisma.user.update({ where: { id }, data });
@@ -228,6 +236,7 @@ export async function updateUser(actor: Actor, id: number, input: UserInput) {
 
 export async function resetUserPassword(actor: Actor, id: number, password: unknown) {
   assertCanManage(actor);
+  await assertNotDemoAccount(id);
   const passwordHash = await hashPassword(requirePassword(password));
   await prisma.user.update({ where: { id }, data: { passwordHash } });
   await writeAudit({ userId: actor.id, action: "user.reset_password", entity: "user", entityId: id });
@@ -235,6 +244,7 @@ export async function resetUserPassword(actor: Actor, id: number, password: unkn
 
 export async function setUserActive(actor: Actor, id: number, isActive: boolean) {
   assertCanManage(actor);
+  await assertNotDemoAccount(id);
   if (id === actor.id && !isActive) throw new OrgError("不能停用自己");
   const user = await prisma.user.update({ where: { id }, data: { isActive } });
   await writeAudit({ userId: actor.id, action: isActive ? "user.activate" : "user.deactivate", entity: "user", entityId: id });

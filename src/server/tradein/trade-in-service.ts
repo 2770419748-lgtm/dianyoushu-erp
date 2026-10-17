@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
+import type { DeviceStatus } from "@/generated/prisma/enums";
 import { maskPhone } from "@/lib/sales-labels";
 import { canRefurbish, canSell } from "@/server/auth/permissions";
 import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
@@ -154,20 +155,30 @@ export async function listTradeIns(user: CurrentUser, page = 1) {
 
 export type TradeInRow = Awaited<ReturnType<typeof listTradeIns>>["rows"][number];
 
-/** 回收库存：本范围内状态为"回收"的机器（等待检测转良品） */
-export async function listRecycledDevices(user: CurrentUser) {
-  return prisma.device.findMany({
-    where: { AND: [storeScopeWhere(user), { status: { in: ["RECYCLED", "REFURBISHED"] } }] },
-    orderBy: [{ status: "asc" }, { id: "desc" }],
-    include: {
-      sku: { select: { name: true } },
-      store: { select: { code: true, name: true } },
-      tradeInOrder: { select: { orderNo: true, modelName: true, appraisedFen: true, createdAt: true } },
-    },
-  });
+export const RECYCLED_PAGE_SIZE = 20;
+
+/** 回收库存：本范围内状态为"回收"（等待检测）和"良品"的机器，分页（总部能看到几百台） */
+export async function listRecycledDevices(user: CurrentUser, page = 1) {
+  const where = { AND: [storeScopeWhere(user), { status: { in: ["RECYCLED", "REFURBISHED"] as DeviceStatus[] } }] };
+  const current = Math.max(1, Math.floor(page) || 1);
+  const [rows, total] = await Promise.all([
+    prisma.device.findMany({
+      where,
+      orderBy: [{ status: "asc" }, { id: "desc" }],
+      skip: (current - 1) * RECYCLED_PAGE_SIZE,
+      take: RECYCLED_PAGE_SIZE,
+      include: {
+        sku: { select: { name: true } },
+        store: { select: { code: true, name: true } },
+        tradeInOrder: { select: { orderNo: true, modelName: true, appraisedFen: true, createdAt: true } },
+      },
+    }),
+    prisma.device.count({ where }),
+  ]);
+  return { rows, total, page: current, pageSize: RECYCLED_PAGE_SIZE };
 }
 
-export type RecycledDeviceRow = Awaited<ReturnType<typeof listRecycledDevices>>[number];
+export type RecycledDeviceRow = Awaited<ReturnType<typeof listRecycledDevices>>["rows"][number];
 
 /** 开单时可抵扣的回收单：本店、已完成、还没被任何销售单用过 */
 export async function listAvailableTradeIns(user: CurrentUser, storeId: number) {

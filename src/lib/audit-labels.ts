@@ -15,6 +15,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "user.create": "新增员工",
   "user.update": "修改员工",
   "user.reset_password": "重置密码",
+  "user.change_password": "自己改密码",
   "user.activate": "启用员工",
   "user.deactivate": "停用员工",
   "category.create": "新增品类",

@@ -23,7 +23,7 @@ Next.js（App Router）+ Prisma + PostgreSQL + Ant Design，TypeScript 全栈，
 5. `pnpm db:reset` 灌入模拟数据：3 个区域、10 家门店、100 个员工（含演示账号），再生成截至昨天 3 个月的经营数据，约 30 秒。
 6. `pnpm dev`，浏览器打开 http://localhost:3000 。
 
-常用命令见 `PROJECT_STATE.md`，开发规则见 `AGENTS.md`，备份恢复见 `docs/备份与恢复.md`。
+常用命令见 `PROJECT_STATE.md`，开发规则见 `AGENTS.md`，备份恢复见 `docs/备份与恢复.md`，安全基线见 `docs/安全基线.md`，10 分钟演示怎么走见 `docs/演示脚本.md`。
 
 ## 手机上测试
 
@@ -36,7 +36,7 @@ Next.js（App Router）+ Prisma + PostgreSQL + Ant Design，TypeScript 全栈，
 
 ## 演示账号
 
-密码都是 `demo1234`（演示用，上线前会换并每日自动重置）。
+密码都是 `demo1234`。这 4 个账号受保护，不能被改密码、停用或改角色；想试这些功能先用 `hq` 新建一个员工。
 
 | 账号 | 角色 | 能看什么 |
 |---|---|---|

@@ -110,7 +110,7 @@ export async function listDevicesForTransfer(user: CurrentUser, storeId: number,
         : {}),
     },
     orderBy: [{ skuId: "asc" }, { code: "asc" }],
-    take: 300,
+    take: 2000, // 一家店的在库机器一般几百台；全列出来，前端按串号或商品名筛（新进的机器也一定在里面）
     select: { id: true, code: true, sn: true, imei1: true, imei2: true, status: true, sku: { select: { name: true } } },
   });
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// 手机开单端到端（手机屏幕尺寸）：店长登录 → 手机查库存找一台在库机器 → 手机开单输入它的串号 → 微信收款提交
+// 手机开单端到端（手机屏幕尺寸）：店长登录 → 手机查库存找一台在库机器 → 手机开单输入它的串号 → 现金 100 + 微信收剩下的，提交
 // → 机器变已售 → 作废这单 → 机器回到在库。最后作废还原，可以反复跑。相机扫码在这里用"输入串号"代替（同一个入口）。
 
 test.use({ viewport: { width: 390, height: 844 } });
@@ -27,8 +27,12 @@ test("手机开单：输串号加机器 → 提交 → 已售；作废后回到�
     await input.press("Enter");
     await expect(page.locator(".ant-tag", { hasText: code })).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 15_000 });
-  await page.getByRole("button", { name: /微信收款并提交/ }).click();
+  // 拆两种收款：现金收 100，剩下的微信收（演示路径第 4 步）
+  await page.getByRole("button", { name: "拆成两种收" }).click();
+  await page.getByPlaceholder("收多少").fill("100");
+  await page.getByRole("button", { name: "收款并提交" }).click();
   await expect(page.getByText(/开单成功/)).toBeVisible();
+  await expect(page.getByText(/现金 100\.00/)).toBeVisible();
   const orderHref = await page.locator("a", { hasText: "看这张单" }).getAttribute("href");
   expect(orderHref).toMatch(/^\/sales\/\d+$/);
 

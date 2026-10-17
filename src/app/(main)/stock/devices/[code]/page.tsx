@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { NoAccess } from "@/components/no-access";
 import { requireUser, type CurrentUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
+import { docLinks } from "@/server/stock/doc-links";
 import { isValidCode } from "@/server/stock/imei";
 import { getDeviceByCode, type DeviceDetail } from "@/server/stock/stock-query";
 import { DeviceView } from "./device-view";
@@ -29,5 +30,6 @@ export default async function DevicePage({ params }: PageProps<"/stock/devices/[
   const loaded = await load(user, decoded);
   if (loaded.kind === "missing") notFound();
   if (loaded.kind === "forbidden") return <NoAccess title="没有权限看这台机器" />;
-  return <DeviceView device={loaded.device} showCost={user.role !== "STAFF"} />;
+  const links = await docLinks(loaded.device.ledgers.map((l) => l.docNo));
+  return <DeviceView device={loaded.device} links={links} showCost={user.role !== "STAFF"} />;
 }

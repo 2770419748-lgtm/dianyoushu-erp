@@ -31,6 +31,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/m/stock": "手机查库存",
   "/kpi": "KPI 目标",
   "/roadmap": "后续规划",
+  "/me": "个人信息",
 };
 
 /** 路径里通用的最后一段（如 /sales/12/return） */

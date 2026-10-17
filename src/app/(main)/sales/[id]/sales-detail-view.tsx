@@ -88,7 +88,7 @@ export function SalesDetailView({ order, canVoid, showCost }: { order: SalesOrde
             ...(showCost ? [{ key: "gross", label: "毛利", children: `${formatFen(grossFen)} 元` }] : []),
             { key: "note", label: "备注", children: order.note ?? "-" },
             ...(order.status === "VOIDED"
-              ? [{ key: "void", label: "作废", children: `${order.voidedBy?.name ?? ""} · ${order.voidedAt ? formatDateTime(order.voidedAt) : ""}${order.voidReason ? ` · ${order.voidReason}` : ""}`, span: 3 }]
+              ? [{ key: "void", label: "作废", children: `${order.voidedBy?.name ?? ""} · ${order.voidedAt ? formatDateTime(order.voidedAt) : ""}${order.voidReason ? ` · ${order.voidReason}` : ""}`, span: "filled" as const }]
               : []),
           ]}
         />

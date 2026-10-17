@@ -14,11 +14,13 @@ export function LedgerView({
   storeId,
   q,
   data,
+  links,
 }: {
   stores: { id: number; label: string }[];
   storeId?: number;
   q: string;
   data: { rows: LedgerRow[]; total: number; page: number; pageSize: number };
+  links: Record<string, string>; // 单号 → 单据页面
 }) {
   const router = useRouter();
 
@@ -35,7 +37,7 @@ export function LedgerView({
   const columns: TableColumnsType<LedgerRow> = [
     { title: "时间", dataIndex: "createdAt", width: 160, render: (v: Date) => formatDateTime(v) },
     { title: "类型", dataIndex: "docType", render: (t: LedgerDocType) => LEDGER_DOC_TYPE_LABELS[t] },
-    { title: "单号", dataIndex: "docNo" },
+    { title: "单号", dataIndex: "docNo", render: (no: string) => (links[no] ? <Link href={links[no]}>{no}</Link> : no) },
     { title: "门店", render: (_, r) => `${r.store.code} ${r.store.name}` },
     { title: "商品", render: (_, r) => r.sku.name },
     { title: "机器", render: (_, r) => (r.device ? <Link href={`/stock/devices/${r.device.code}`}>{r.device.code}</Link> : "-") },

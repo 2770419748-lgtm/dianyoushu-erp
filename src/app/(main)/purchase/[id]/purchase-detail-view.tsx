@@ -107,7 +107,7 @@ export function PurchaseDetailView({ order, canManage }: { order: PurchaseOrderD
             { key: "creator", label: "创建人", children: order.createdBy.name },
             { key: "created", label: "创建时间", children: formatDateTime(order.createdAt) },
             { key: "received", label: "到货时间", children: order.receivedAt ? formatDateTime(order.receivedAt) : "-" },
-            { key: "note", label: "备注", children: order.note ?? "-", span: 3 },
+            { key: "note", label: "备注", children: order.note ?? "-", span: "filled" },
           ]}
         />
         <Table rowKey="id" size="small" pagination={false} columns={itemColumns} dataSource={order.items} scroll={{ x: true }} style={{ marginTop: 16 }} />

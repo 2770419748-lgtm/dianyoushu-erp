@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { App, Button, Card, Popconfirm, Table, Tag, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import type { DeviceStatus } from "@/generated/prisma/enums";
@@ -10,7 +11,8 @@ import { DEVICE_STATUS_COLORS, DEVICE_STATUS_LABELS } from "@/lib/stock-labels";
 import type { RecycledDeviceRow } from "@/server/tradein/trade-in-service";
 import { refurbishAction } from "../actions";
 
-export function RecycledStockView({ rows, canRefurbish }: { rows: RecycledDeviceRow[]; canRefurbish: boolean }) {
+export function RecycledStockView({ rows, total, page, pageSize, canRefurbish }: { rows: RecycledDeviceRow[]; total: number; page: number; pageSize: number; canRefurbish: boolean }) {
+  const router = useRouter();
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
 
@@ -48,9 +50,9 @@ export function RecycledStockView({ rows, canRefurbish }: { rows: RecycledDevice
   ];
 
   return (
-    <Card title={`回收库存（${rows.length}）`} extra={<Link href="/trade-ins"><Button>回收单列表</Button></Link>}>
+    <Card title={`回收库存（${total}）`} extra={<Link href="/trade-ins"><Button>回收单列表</Button></Link>}>
       <Typography.Paragraph type="secondary">回收机先检测，合格的转良品后就能像新机一样开单卖，卖出毛利 = 售价 − 估价。</Typography.Paragraph>
-      <Table rowKey="id" size="small" columns={columns} dataSource={rows} scroll={{ x: true }} pagination={{ pageSize: 20, showSizeChanger: false }} />
+      <Table rowKey="id" size="small" columns={columns} dataSource={rows} scroll={{ x: true }} pagination={{ current: page, pageSize, total, showSizeChanger: false, onChange: (p) => router.push(`/trade-ins/stock?page=${p}`) }} />
     </Card>
   );
 }

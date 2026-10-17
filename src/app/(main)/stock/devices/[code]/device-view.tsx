@@ -10,11 +10,11 @@ import type { DeviceDetail } from "@/server/stock/stock-query";
 
 type Ledger = DeviceDetail["ledgers"][number];
 
-export function DeviceView({ device, showCost }: { device: DeviceDetail; showCost: boolean }) {
+export function DeviceView({ device, links, showCost }: { device: DeviceDetail; links: Record<string, string>; showCost: boolean }) {
   const columns: TableColumnsType<Ledger> = [
     { title: "时间", dataIndex: "createdAt", width: 160, render: (v: Date) => formatDateTime(v) },
     { title: "动作", dataIndex: "docType", render: (t: LedgerDocType) => LEDGER_DOC_TYPE_LABELS[t] },
-    { title: "单号", dataIndex: "docNo" },
+    { title: "单号", dataIndex: "docNo", render: (no: string) => (links[no] ? <Link href={links[no]}>{no}</Link> : no) },
     { title: "门店", render: (_, l) => `${l.store.code} ${l.store.name}` },
     {
       title: "状态变化",

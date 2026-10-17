@@ -72,7 +72,9 @@ export function AppShell({
           }}
         >
           <Space size="small" wrap={false} style={{ whiteSpace: "nowrap" }}>
-            <Typography.Text strong>{user.name}</Typography.Text>
+            <Link href="/me" title="个人信息、改密码">
+              <Typography.Text strong>{user.name}</Typography.Text>
+            </Link>
             <Tag color="blue">{user.roleLabel}</Tag>
             {compact ? null : <Typography.Text type="secondary">{user.scopeLabel}</Typography.Text>}
           </Space>

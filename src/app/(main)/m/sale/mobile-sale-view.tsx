@@ -42,7 +42,7 @@ interface CustomerPick {
 
 const BIG = { height: 48, fontSize: 16 };
 
-// 手机开单：扫码 / 输码加商品 → 改价（可选）→ 客户、旧机抵扣（可选）→ 点一种收款方式 → 底部一键提交。
+// 手机开单：扫码 / 输码加商品 → 改价（可选）→ 客户、旧机抵扣（可选）→ 点收款方式（可拆成两种）→ 底部一键提交。
 // 下单走的是和电脑版同一个 createSalesOrderAction，扣库存、写流水、记支付的规则完全一样。
 export function MobileSaleView({
   stores,
@@ -70,7 +70,9 @@ export function MobileSaleView({
   const [tradeInOptions, setTradeInOptions] = useState<TradeInPick[]>(availableTradeIns);
   const [tradeInModalOpen, setTradeInModalOpen] = useState(false);
   const [method, setMethod] = useState<PaymentMethod>("WECHAT");
-  const [done, setDone] = useState<{ id: number; orderNo: string; totalFen: number } | null>(null);
+  // 拆两种收款：第二种填金额，主收款方式收剩下的（演示路径“微信 + 现金”就是这样）
+  const [split, setSplit] = useState<{ method: PaymentMethod; amountYuan: number | null } | null>(null);
+  const [done, setDone] = useState<{ id: number; orderNo: string; totalFen: number; payText: string } | null>(null);
 
   useEffect(() => {
     linesRef.current = lines;
@@ -79,6 +81,9 @@ export function MobileSaleView({
   const tradeInFen = tradeIn?.appraisedFen ?? 0;
   const needFen = totalFen - tradeInFen;
   const itemCount = lines.reduce((s, l) => s + l.qty, 0);
+  const splitFen = split ? yuanToFen(split.amountYuan ?? 0) || 0 : 0;
+  const mainFen = needFen - splitFen;
+  const splitInvalid = split !== null && (splitFen <= 0 || mainFen <= 0);
 
   // 扫码和回车走同一个入口：机器一台一行，同一个配件再扫一次数量加 1
   async function addByCode(raw: string) {
@@ -133,6 +138,7 @@ export function MobileSaleView({
     setCustomer(null);
     setTradeIn(null);
     setMethod("WECHAT");
+    setSplit(null);
     setDone(null);
     router.refresh(); // 重新取一遍本店未用的回收单
   }
@@ -145,14 +151,19 @@ export function MobileSaleView({
         customerId: customer?.id,
         items: lines.map((l) => (l.kind === "device" ? { deviceId: l.deviceId, unitPriceFen: l.unitPriceFen } : { skuId: l.skuId, qty: l.qty, unitPriceFen: l.unitPriceFen })),
         tradeInOrderId: tradeIn?.id,
-        paymentMethod: method,
+        ...(split
+          ? { payments: [{ method, amountFen: mainFen }, { method: split.method, amountFen: splitFen }] }
+          : { paymentMethod: method }),
       });
       if (!result.ok) {
         message.error(result.error);
         return;
       }
       if (tradeIn) setTradeInOptions((prev) => prev.filter((t) => t.id !== tradeIn.id));
-      setDone({ id: result.id!, orderNo: result.orderNo!, totalFen: Math.max(needFen, 0) });
+      const payText = split
+        ? `${PAYMENT_METHOD_LABELS[method]} ${formatFen(mainFen)} + ${PAYMENT_METHOD_LABELS[split.method]} ${formatFen(splitFen)}`
+        : `${PAYMENT_METHOD_LABELS[method]} ${formatFen(Math.max(needFen, 0))}`;
+      setDone({ id: result.id!, orderNo: result.orderNo!, totalFen: Math.max(needFen, 0), payText });
     });
   }
 
@@ -162,8 +173,8 @@ export function MobileSaleView({
         <Card>
           <Result
             status="success"
-            title={`开单成功，${PAYMENT_METHOD_LABELS[method]}收 ${formatFen(done.totalFen)} 元`}
-            subTitle={done.orderNo}
+            title={`开单成功，收 ${formatFen(done.totalFen)} 元`}
+            subTitle={`${done.orderNo} · ${done.payText}`}
             extra={
               <Space orientation="vertical" style={{ width: "100%" }}>
                 <Button type="primary" block style={BIG} onClick={reset}>
@@ -310,17 +321,66 @@ export function MobileSaleView({
           ) : null}
         </Card>
 
-        <Card size="small" title="收款方式">
-          <Radio.Group value={method} onChange={(e) => setMethod(e.target.value)} buttonStyle="solid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+        <Card
+          size="small"
+          title={split ? `主收款：收剩下的 ${formatFen(Math.max(mainFen, 0))} 元` : "收款方式"}
+          extra={
+            <Button size="small" onClick={() => setSplit(split ? null : { method: PAYMENT_METHODS_FOR_SALE.find((m) => m !== method)!, amountYuan: null })}>
+              {split ? "不拆了" : "拆成两种收"}
+            </Button>
+          }
+        >
+          <Radio.Group
+            value={method}
+            onChange={(e) => {
+              setMethod(e.target.value);
+              if (split && split.method === e.target.value) setSplit({ ...split, method: PAYMENT_METHODS_FOR_SALE.find((m) => m !== e.target.value)! });
+            }}
+            buttonStyle="solid"
+            style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}
+          >
             {PAYMENT_METHODS_FOR_SALE.map((m) => (
               <Radio.Button key={m} value={m} style={{ ...BIG, lineHeight: "46px", textAlign: "center", borderRadius: 6, borderInlineStartWidth: 1 }}>
                 {PAYMENT_METHOD_LABELS[m]}
               </Radio.Button>
             ))}
           </Radio.Group>
-          <Typography.Text type="secondary" style={{ display: "block", marginTop: 8 }}>
-            手机上只收一种；要拆成几种收、整单优惠，用电脑版<Link href={`/sales/new?storeId=${storeId}`}>开单</Link>。
-          </Typography.Text>
+          {split ? (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #f0f0f0" }}>
+              <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
+                另一种收款
+              </Typography.Text>
+              <Space.Compact style={{ width: "100%" }}>
+                <Select
+                  size="large"
+                  value={split.method}
+                  style={{ width: 120 }}
+                  onChange={(m) => setSplit({ ...split, method: m })}
+                  options={PAYMENT_METHODS_FOR_SALE.filter((m) => m !== method).map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] }))}
+                />
+                <InputNumber
+                  size="large"
+                  min={0}
+                  precision={2}
+                  prefix="¥"
+                  inputMode="decimal"
+                  placeholder="收多少"
+                  style={{ flex: 1 }}
+                  value={split.amountYuan}
+                  onChange={(v) => setSplit({ ...split, amountYuan: v === null ? null : Number(v) })}
+                />
+              </Space.Compact>
+              {splitInvalid ? (
+                <Typography.Text type="danger" style={{ display: "block", marginTop: 6 }}>
+                  填一个大于 0、小于 {formatFen(Math.max(needFen, 0))} 的金额
+                </Typography.Text>
+              ) : null}
+            </div>
+          ) : (
+            <Typography.Text type="secondary" style={{ display: "block", marginTop: 8 }}>
+              要整单优惠或拆三种以上，用电脑版<Link href={`/sales/new?storeId=${storeId}`}>开单</Link>。
+            </Typography.Text>
+          )}
         </Card>
       </Space>
 
@@ -339,13 +399,14 @@ export function MobileSaleView({
       >
         <div style={{ maxWidth: 560, margin: "0 auto", display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, color: "#888" }}>
+            <div style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               共 {itemCount} 件{tradeIn ? `，旧机抵 ${formatFen(tradeInFen)}` : ""}
+              {split && !splitInvalid ? `，${PAYMENT_METHOD_LABELS[method]} ${formatFen(mainFen)} + ${PAYMENT_METHOD_LABELS[split.method]} ${formatFen(splitFen)}` : ""}
             </div>
             <div style={{ fontSize: 20, fontWeight: 600 }}>¥{formatFen(Math.max(needFen, 0))}</div>
           </div>
-          <Button type="primary" size="large" style={{ ...BIG, minWidth: 150 }} loading={pending} disabled={lines.length === 0 || tradeInFen > totalFen} onClick={submit}>
-            {PAYMENT_METHOD_LABELS[method]}收款并提交
+          <Button type="primary" size="large" style={{ ...BIG, minWidth: 150 }} loading={pending} disabled={lines.length === 0 || tradeInFen > totalFen || splitInvalid} onClick={submit}>
+            {split ? "收款并提交" : `${PAYMENT_METHOD_LABELS[method]}收款并提交`}
           </Button>
         </div>
       </div>

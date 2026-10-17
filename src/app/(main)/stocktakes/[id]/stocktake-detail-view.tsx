@@ -109,7 +109,7 @@ export function StocktakeDetailView({ stocktake, canEnter, canConfirm }: { stock
             { key: "creator", label: "发起", children: `${stocktake.createdBy.name} · ${formatDateTime(stocktake.createdAt)}` },
             { key: "confirm", label: "确认", children: stocktake.confirmedAt ? `${stocktake.confirmedBy?.name ?? ""} · ${formatDateTime(stocktake.confirmedAt)}` : "-" },
             { key: "summary", label: "进度", children: `应有 ${stocktake.items.length} 项，已录 ${stocktake.items.length - notCounted} 项，差异 ${diffs.length} 项` },
-            { key: "note", label: "备注", children: stocktake.note ?? "-", span: 2 },
+            { key: "note", label: "备注", children: stocktake.note ?? "-", span: "filled" },
           ]}
         />
       </Card>

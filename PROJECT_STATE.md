@@ -1,7 +1,7 @@
 # 项目状态（PROJECT_STATE.md）
 
 - 更新：2026-10-17
-- 阶段：第 10 周开发完成（手机开单、手机查库存、扫码、KPI 目标录入、后续规划页、PWA、本机备份），仓库已公开、CI 绿；下一步第 11 周安全基线、分页与索引、演示排练
+- 阶段：第 11 周开发完成（安全基线、分页、演示路径走查、演示脚本），等坤总排练 3 次；下一步第 12 周文档、录屏、打 v1.0 标签
 
 ## 做完了什么
 
@@ -28,8 +28,11 @@
 - 第 8 周：日结 `src/server/dailyclose/`（summary 纯函数：按支付方式汇总、差异、能否确认；daily-close-service：逐笔比对、录实收、确认后当日销售单和退货单挂日结锁定、当天不能再开单退货、总部可撤销；收银日报 cashierReport）；页面 `/daily-close`、`/reports/cashier`，导出接口 `/api/reports/cashier`（CSV 带 BOM，Excel 直接打开）。端到端 `tests/e2e/sale-daily-close.spec.ts`（`pnpm test:e2e`，用本机 Edge）：店长登录 → 开单 → 配件库存少 1 → 日结微信系统数多出这单 → 作废还原。验收通过：中山路店当天现金 1328、微信 4570（3000 + 1599 − 29）、抵扣 1200，录实收确认后锁单，再撤销留给坤总试用。单元测试 63 条。
 - 第 9 周：模拟数据生成器 `prisma/generate-demo.ts`（`pnpm db:reset` = 清空 → 基础种子 → 生成）：10 店、截至昨天 92 天，约 1.2 万张有效销售单、1500 张回收单（七成检测后转良品再卖）、约 190 张退货、1% 当天作废、每天日结（6% 有现金长短款）、周末和月底高峰、KPI 目标；跑完自检库存余额 = 流水、收款 = 应收、日结 = 收款汇总，全为 0 才算过，耗时约 30 秒。今天不生成，留给现场演示。看板 `/dashboard`（`src/server/dashboard/`，ECharts 按需引入）：日销趋势、门店月销对比、员工排名、热销机型 TOP10、KPI 完成率与门店日均差额、库存周转与滞销清单。测试 67 条 + 端到端 1 条。
 - 第 10 周：手机开单 `/m/sale`（扫码或输码加商品，查找逻辑 `src/server/sales/lookup.ts`：先认 SN / IMEI1 / IMEI2，再认配件条码，只认本店能卖的；改价、旧机抵扣、一种收款、底部一键提交，下单走和电脑版同一个 `createSalesOrderAction`）；手机查库存 `/m/stock`；扫码 `src/lib/device/scanner.ts`（html5-qrcode）+ 共用按钮 `src/components/scan-button.tsx`，接进手机开单、电脑开单、到货入库、盘点、回收；本机临时 HTTPS `scripts/dev-https.mjs`（openssl 自签证书，放用户目录）；KPI 目标录入 `/kpi`（`src/server/kpi/kpi-service.ts`，门店 × 月四个数、复制上月、写日志）；后续规划 `/roadmap`；PWA（`src/app/manifest.ts`、`public/icons/`）；首页改成按角色的大按钮；本机备份 `scripts/backup-db.mjs` 与恢复演练 `scripts/restore-check.mjs`（已实际恢复一次，32 张表约 13 万行全对上）。顺手修了 `robots.txt` 被登录拦截、手机首屏侧栏闪一下。仓库改公开，CI 第一次绿。测试 73 条 + 端到端 2 条。
+- 第 11 周：手机开单补“拆成两种收”；个人信息页 `/me`（改自己密码，旧密码错 5 次锁 15 分钟）；4 个演示账号受保护（`src/server/auth/demo-accounts.ts`，不能被改密码、停用、改角色）；全站安全响应头（`next.config.ts`）；安全基线逐项核对 `docs/安全基线.md`；回收库存改服务端分页、新建调拨可选机器上限 300 → 2000；库存流水单号能点开原单（`src/server/stock/doc-links.ts`）；调拨收货加扫码；按方案第 12 节演示路径完整走通一遍，写了 `docs/演示脚本.md`（含要粘贴的数据和每步用时）。各页服务端耗时实测 0.5 秒内，没加索引。测试 76 条 + 端到端 2 条。
 
 ## 进行中
+
+- 演示排练 3 次计时：脚本在 `docs/演示脚本.md`，要坤总本人来。
 
 - 服务器和域名坤总决定先不买，等找工作前约 3 周再买（任务清单“找工作前再做”）。
 - 手机真机扫码要坤总用自己的手机试一次（`pnpm dev:https`，见 README“手机上测试”）；电脑上已用手机尺寸跑通开单。
@@ -43,7 +46,7 @@
 
 ## 下一步
 
-1. 第 11 周：安全基线逐项打勾（服务器那几项在“找工作前再做”）、个人信息页 `/me` 改密码、列表全部分页、慢查询加索引、bug 清单清零、10 分钟演示路径排练。
+1. 第 12 周：README 终版（项目是什么、演示地址、账号、怎么本地跑）、取舍记录、业务口径终版、本机生产构建验证一次、打 `v1.0` 标签；架构说明和录屏是坤总的。
 2. “第 1 到 2 周学到什么”一页纸是坤总的作业，提纲已给。
 
 ## 卡在哪
@@ -62,7 +65,7 @@ code/
 ├─ src/lib/prisma.ts           Prisma 客户端单例（pg 驱动适配器）
 ├─ src/generated/prisma        prisma generate 生成，不进仓库
 ├─ prisma/schema.prisma        表定义（31 张表）；prisma/migrations/ 迁移历史；prisma/seed.ts 演示种子
-├─ docs/                       业务口径.md（规则之源）、数据模型.md（表的中文说明）、页面清单.md、备份与恢复.md、部署.md
+├─ docs/                       业务口径.md（规则之源）、数据模型.md（表的中文说明）、页面清单.md、备份与恢复.md、部署.md、安全基线.md、演示脚本.md
 ├─ scripts/                    dev-https（本机临时 HTTPS）、backup-db / restore-check（备份与恢复演练）
 ├─ tests/                      Vitest 单元测试
 ├─ prisma.config.ts            Prisma 7 配置，从 .env 读 DATABASE_URL，seed 命令
