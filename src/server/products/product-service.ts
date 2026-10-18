@@ -5,6 +5,7 @@ import type { SkuKind } from "@/generated/prisma/enums";
 import { canManageProducts } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
+import { isValidFen, MAX_AMOUNT_FEN } from "@/lib/limits";
 import { skuSearchWhere } from "./search";
 
 // 商品主数据服务层：品类、品牌、型号、SKU。查询所有角色都能用（查价），改动只有总部。
@@ -39,7 +40,7 @@ function requireId(value: unknown, label: string): number {
 function requireFen(value: unknown, label: string): number {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(n) || n < 0) throw new ProductError(`${label}必须是不小于 0 的金额`);
-  if (n > 2_000_000_000) throw new ProductError(`${label}太大了`);
+  if (!isValidFen(n)) throw new ProductError(`金额不对：${label}不能超过 ${MAX_AMOUNT_FEN / 1_000_000} 万元`);
   return n;
 }
 
@@ -116,11 +117,13 @@ export interface CategoryInput {
 }
 
 function parseCategory(input: CategoryInput) {
-  const sortOrder = Number(input.sortOrder ?? 0);
+  const sortOrder = input.sortOrder === null || input.sortOrder === "" ? 0 : Number(input.sortOrder ?? 0);
+  // 以前填小数会悄悄存成 0，现在直接提示
+  if (!Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > 9999) throw new ProductError("排序要填 0 到 9999 的整数");
   return {
     name: requireText(input.name, "品类名称", 30),
     kind: requireKind(input.kind),
-    sortOrder: Number.isInteger(sortOrder) ? sortOrder : 0,
+    sortOrder,
   };
 }
 

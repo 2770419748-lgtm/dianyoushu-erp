@@ -14,6 +14,13 @@ const host = (() => {
     return "";
   }
 })();
+const dbName = (() => {
+  try {
+    return new URL(url).pathname.slice(1);
+  } catch {
+    return "";
+  }
+})();
 
 // 真上线（DEMO_MODE=0）的库一律不准重置，不管 ALLOW_DB_RESET 怎么设
 if (process.env.DEMO_MODE === "0") {
@@ -36,7 +43,7 @@ async function main() {
   } else {
     const list = tables.map((t) => `"${t.tablename}"`).join(", ");
     await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`);
-    console.log(`已清空 ${tables.length} 张表（${host}/dianyoushu_erp）`);
+    console.log(`已清空 ${tables.length} 张表（${host}/${dbName}）`);
   }
   await prisma.$disconnect();
 }

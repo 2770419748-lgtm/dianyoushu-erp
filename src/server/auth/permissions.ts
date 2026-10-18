@@ -106,7 +106,7 @@ export function canManageKpi(role: Role): boolean {
   return role === "HQ";
 }
 
-/** 谁能作废销售单、回收单：店长、总部 */
+/** 谁能作废销售单：店长、总部（回收单这版不做作废，口径第 5 节） */
 export function canVoidSales(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
 }

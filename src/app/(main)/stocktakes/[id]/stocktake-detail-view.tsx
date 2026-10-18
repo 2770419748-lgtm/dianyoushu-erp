@@ -133,7 +133,7 @@ export function StocktakeDetailView({ stocktake, canEnter, canConfirm }: { stock
           <Card title={`机器（应有 ${deviceItems.length} 台）`}>
             {inProgress && canEnter ? (
               <>
-                <Typography.Paragraph type="secondary">把现场盘到的全部串号一次粘贴进来（扫码枪逐个扫也行），保存后没出现在清单里的机器就算盘亏。</Typography.Paragraph>
+                <Typography.Paragraph type="secondary">把现场盘到的全部串号一次粘贴进来（扫码枪逐个扫也行）。框里有串号时按这次的清单算，没出现的机器记为没盘到，确认后算盘亏；框留空保存不改机器的结果，只更新配件数量。</Typography.Paragraph>
                 <Form.Item name="imeiText" style={{ marginBottom: 4 }}>
                   <Input.TextArea rows={5} placeholder="粘贴实盘串号，一行一个" />
                 </Form.Item>

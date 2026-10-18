@@ -34,6 +34,7 @@
 - 复查后补（2026-10-17）：盘点明细、调拨明细加“一台机器只能一行”唯一约束（迁移 `item_device_unique`）；生产启动配置检查 `src/instrumentation.ts`（弱密钥、占位值、没配数据库就拒绝启动，本机实测过）；README / 部署文档写清演示密码；测试文件改为依次跑（`vitest.config.mts` 的 `fileParallelism: false`）。测试 87 条 + 端到端 2 条。
 - 全面自检修复（2026-10-17）：另一个会话从头查了一遍，报告的 11 + 5 + 4 条和十几处小毛病都修了；单据级防并发 `src/server/db-lock.ts`；盘点按录入时的系统数算差异；退款上限 `returnRefundCapFen`；销售明细原价 `list_price_fen`；采购单只给总部、成本按角色去掉；登录 `src/server/auth/login-service.ts`（按用户名限流）；cookie Secure 按协议；停用账号清 cookie `/api/session/clear`；CI 起 PostgreSQL 跑全部测试和构建；回归测试 `tests/regression.db.test.ts`（`RUN_DESTRUCTIVE_TESTS=1` 才跑）。测试 100 条（含回归 7 条）+ 端到端 2 条。
 - 生产上线补齐（2026-10-18，复审 9 条）：会话版本号（改密码、重置、停用后旧登录立刻失效，迁移 `user_session_version`，`src/server/auth/session-user.ts`）；演示模式开关 `DEMO_MODE`（默认开，0 = 真用）；`/api/health` + compose 健康检查、日志限额、Caddy 访问日志、`backup` 定时备份服务（`docker/backup.sh`）；登录限流在 Caddy 后按 IP + 用户名（`TRUST_PROXY`）；对账自检 `pnpm db:check`（`prisma/integrity-checks.ts`，CI 也跑）；CSP nonce（`src/proxy.ts`）；压测 `pnpm load-test`（`scripts/load-test.ts`）；`docs/部署.md` 开头“上线前检查清单”。
+- 第三轮深审修复（2026-10-18）：本系统卖出的机器可以被回收单收回（沿用原机器记录，状态机加“已售 → 回收”，`retakeSoldDevice`）；机器开单默认价 门店售价 → 指导价 → 成本（`deviceDefaultPriceFen`）；数量 ≤ 9999、金额 ≤ 1000 万元（`src/lib/limits.ts`）；参考成本只给总部；对账自检加“机器状态 / 门店 = 最后一条流水、已售 = 有没退的有效销售单”；前端扫码断网提示、优惠超合计提示、盘点文案、品类排序整数、回收库存只转一行；页面清单、数据模型、口径 v1.2 按代码核对。测试 111 条（含回归 12 条）+ 端到端 2 条。
 
 ## 进行中
 

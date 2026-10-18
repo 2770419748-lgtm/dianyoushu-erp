@@ -202,7 +202,7 @@ export function CatalogView({ catalog }: { catalog: Catalog }) {
             <Select options={KIND_OPTIONS} />
           </Form.Item>
           <Form.Item name="sortOrder" label="排序（小的在前）">
-            <InputNumber min={0} style={{ width: 120 }} />
+            <InputNumber min={0} max={9999} precision={0} style={{ width: 120 }} />
           </Form.Item>
         </Form>
       </Modal>

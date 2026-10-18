@@ -85,7 +85,8 @@ export function SaleForm({
   const [tradeInModalOpen, setTradeInModalOpen] = useState(false);
 
   const subtotalFen = useMemo(() => lines.reduce((s, l) => s + l.unitPriceFen * l.qty, 0), [lines]);
-  const discountFen = Math.min(yuanToFen(discountYuan) || 0, subtotalFen);
+  const typedDiscountFen = yuanToFen(discountYuan) || 0;
+  const discountFen = Math.min(typedDiscountFen, subtotalFen); // 超过合计按合计算，下面会提示
   const totalFen = subtotalFen - discountFen;
   const tradeInFen = tradeIn?.appraisedFen ?? 0;
   const needFen = totalFen - tradeInFen; // 抵扣之后还要客户付的
@@ -132,7 +133,12 @@ export function SaleForm({
 
   // 扫码加商品：机器按串号、配件按商品条码，和手机开单同一个查找逻辑
   async function addScanned(code: string) {
-    const found = await lookupForSaleAction(storeId, code);
+    let found;
+    try {
+      found = await lookupForSaleAction(storeId, code);
+    } catch {
+      return void message.error("网络不通，这个码没查到，检查网络后再扫一次");
+    }
     if (found.kind === "error") return void message.warning(found.message);
     if (found.kind === "device") {
       setLines((prev) =>
@@ -270,6 +276,7 @@ export function SaleForm({
             <Space>
               <span>整单优惠（元）</span>
               <InputNumber min={0} precision={2} value={discountYuan} onChange={(v) => setDiscountYuan(Number(v) || 0)} style={{ width: 140 }} />
+              {typedDiscountFen > subtotalFen ? <Typography.Text type="warning">优惠超过了商品合计，按 {formatFen(subtotalFen)} 元算</Typography.Text> : null}
             </Space>
             <Space>
               <span>应收</span>

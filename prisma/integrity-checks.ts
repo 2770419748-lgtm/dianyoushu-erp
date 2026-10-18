@@ -1,17 +1,21 @@
 import type { PrismaClient } from "../src/generated/prisma/client";
 
-// 对账自检（4 条 SQL）：账对得上，数字才可信。模拟数据生成完会跑一遍；上线后每天跑一遍（pnpm db:check），对不上要告警。
-// 1. 配件余额 = 这家店这个配件所有流水的累计（余额永远能从流水算出来）
+// 对账自检：账对得上，数字才可信。模拟数据生成完会跑一遍；上线后每天跑一遍（pnpm db:check），对不上要告警。
+// 1. 配件余额 = 这家店这个配件所有流水的累计（余额永远能从流水算出来），也等于最后一条流水记的变动后余额；有流水就要有余额行
 // 2. 每家店在库机器数 = 机器流水的累计（在库、良品、回收、锁定都算在店里；在途的已经从发出店减掉）
 // 3. 每张销售单的收款合计 = 应收（作废的单收款也还在，合计照样相等）
 // 4. 已确认的日结，每种收款方式的系统数 = 当天这家店的收款汇总（销售收款 + 退货退款）
 //    只查已确认的：没确认的日结白天还在开单，系统数会变，不算对不上。
+// 5. 每台机器：状态和归属店 = 它最后一条流水记的状态和门店；没有流水的机器不该存在；
+//    "已售"的机器要有一张没退的有效销售单，反过来不是"已售"的机器不该挂着没退的有效销售单
+//    （例外：卖出去之后又被回收单收回来的，看那之后有没有回收入库流水）。
 
 export interface IntegrityResult {
   accessory: number;
   device: number;
   payment: number;
   dailyClose: number;
+  deviceState: number;
 }
 
 export async function runIntegrityChecks(prisma: PrismaClient): Promise<IntegrityResult> {
@@ -20,6 +24,14 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
     LEFT JOIN (SELECT store_id, sku_id, SUM(qty_delta) AS s FROM stock_ledgers WHERE device_id IS NULL GROUP BY store_id, sku_id) l
       ON l.store_id = a.store_id AND l.sku_id = a.sku_id
     WHERE a.qty <> COALESCE(l.s, 0)`;
+  const [accessoryLast] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT COUNT(*)::bigint AS n FROM accessory_stocks a
+    JOIN (SELECT DISTINCT ON (store_id, sku_id) store_id, sku_id, balance_after FROM stock_ledgers WHERE device_id IS NULL ORDER BY store_id, sku_id, id DESC) l
+      ON l.store_id = a.store_id AND l.sku_id = a.sku_id
+    WHERE l.balance_after IS DISTINCT FROM a.qty`;
+  const [accessoryOrphan] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT COUNT(*)::bigint AS n FROM (SELECT DISTINCT store_id, sku_id FROM stock_ledgers WHERE device_id IS NULL) l
+    WHERE NOT EXISTS (SELECT 1 FROM accessory_stocks a WHERE a.store_id = l.store_id AND a.sku_id = l.sku_id)`;
   const [device] = await prisma.$queryRaw<{ n: bigint }[]>`
     SELECT COUNT(*)::bigint AS n FROM (
       SELECT store_id, COUNT(*) AS c FROM devices WHERE status IN ('IN_STOCK','REFURBISHED','RECYCLED','LOCKED') GROUP BY store_id
@@ -41,13 +53,33 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
     ) x ON x.store_id = c.store_id AND x.biz_date = c.biz_date AND x.method = l.method
     GROUP BY l.id, l.system_fen
     HAVING l.system_fen <> COALESCE(SUM(x.s), 0)`;
-  return { accessory: Number(accessory!.n), device: Number(device!.n), payment: Number(payment!.n), dailyClose: closeRows.length };
+  const [deviceLedger] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT COUNT(*)::bigint AS n FROM devices d
+    LEFT JOIN (SELECT DISTINCT ON (device_id) device_id, status_after, store_id FROM stock_ledgers WHERE device_id IS NOT NULL ORDER BY device_id, id DESC) x
+      ON x.device_id = d.id
+    WHERE x.device_id IS NULL OR x.status_after IS DISTINCT FROM d.status OR x.store_id <> d.store_id`;
+  const [deviceSale] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT COUNT(*)::bigint AS n FROM devices d
+    WHERE (d.status = 'SOLD' AND NOT EXISTS (
+        SELECT 1 FROM sales_order_items si JOIN sales_orders o ON o.id = si.order_id
+        WHERE si.device_id = d.id AND o.status = 'COMPLETED' AND si.returned_qty < si.qty))
+      OR (d.status <> 'SOLD' AND EXISTS (
+        SELECT 1 FROM sales_order_items si JOIN sales_orders o ON o.id = si.order_id
+        WHERE si.device_id = d.id AND o.status = 'COMPLETED' AND si.returned_qty < si.qty
+          AND NOT EXISTS (SELECT 1 FROM stock_ledgers l WHERE l.device_id = d.id AND l.doc_type = 'TRADE_IN' AND l.created_at > o.created_at)))`;
+  return {
+    accessory: Number(accessory!.n) + Number(accessoryLast!.n) + Number(accessoryOrphan!.n),
+    device: Number(device!.n),
+    payment: Number(payment!.n),
+    dailyClose: closeRows.length,
+    deviceState: Number(deviceLedger!.n) + Number(deviceSale!.n),
+  };
 }
 
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {
-  return r.accessory + r.device + r.payment + r.dailyClose === 0;
+  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState === 0;
 }

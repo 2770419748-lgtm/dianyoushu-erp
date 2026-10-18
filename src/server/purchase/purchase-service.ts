@@ -9,6 +9,7 @@ import { writeAudit } from "@/server/audit";
 import { lockRow } from "@/server/db-lock";
 import { nextDocNo } from "@/server/stock/doc-no";
 import { parseDeviceCodeLines, type DeviceCodes } from "@/server/stock/imei";
+import { isValidFen, isValidQty, MAX_AMOUNT_FEN, MAX_QTY } from "@/lib/limits";
 import { changeAccessoryStock, receiveDevices, StockError } from "@/server/stock/stock-service";
 
 // 采购入库服务层：采购单（草稿 → 已提交 → 已到货，可作废）和到货入库。
@@ -54,8 +55,9 @@ function parseOrder(input: PurchaseOrderInput) {
     const skuId = requireId(item.skuId, `第 ${index + 1} 行的商品`);
     const qty = Number(item.qty);
     if (!Number.isInteger(qty) || qty <= 0) throw new PurchaseError(`第 ${index + 1} 行数量必须是正整数`);
+    if (!isValidQty(qty)) throw new PurchaseError(`数量不对：第 ${index + 1} 行最多 ${MAX_QTY} 件`);
     const unitCostFen = Number(item.unitCostFen);
-    if (!Number.isInteger(unitCostFen) || unitCostFen < 0) throw new PurchaseError(`第 ${index + 1} 行成本单价不对`);
+    if (!isValidFen(unitCostFen)) throw new PurchaseError(`金额不对：第 ${index + 1} 行成本单价要在 0 到 ${MAX_AMOUNT_FEN / 1_000_000} 万元之间`);
     return { skuId, qty, unitCostFen };
   });
   const skuIds = new Set(items.map((i) => i.skuId));

@@ -101,6 +101,55 @@ export async function receiveDevices(tx: Prisma.TransactionClient, input: Receiv
   return ids;
 }
 
+export interface RetakeSoldDeviceInput {
+  deviceId: number;
+  storeId: number; // 回收店：机器归到这家店
+  costFen: number; // 成本改成这次的估价
+  condition: string;
+  tradeInOrderId: number;
+  fillCodes: { sn?: string; imei1?: string; imei2?: string }; // 系统里还空着、这次填了的码，顺手补上
+  docNo: string;
+  operatorId: number;
+  note?: string;
+}
+
+/**
+ * 本系统卖出去的机器被客户拿回来以旧换新：串号全局唯一，不能再新建一条，
+ * 就把原来那条机器记录改成“回收”、归到回收店、成本改成估价、挂上这张回收单，写一条回收入库流水。
+ * 只认“已售”：在库、锁定、在途等状态由状态机拒绝。原销售单的明细和成本快照不动。
+ */
+export async function retakeSoldDevice(tx: Prisma.TransactionClient, input: RetakeSoldDeviceInput) {
+  const device = await tx.device.findUnique({ where: { id: input.deviceId } });
+  if (!device) throw new StockError("机器不存在");
+  const statusAfter = nextDeviceStatus("TRADE_IN_SOLD", device.status);
+  let changed;
+  try {
+    changed = await tx.device.updateMany({
+      where: { id: device.id, status: device.status },
+      data: { status: statusAfter, storeId: input.storeId, costFen: input.costFen, condition: input.condition, tradeInOrderId: input.tradeInOrderId, ...input.fillCodes },
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new StockError(`补填的码刚被别的机器用了，检查一下 ${device.code} 的码有没有填错`);
+    throw error;
+  }
+  if (changed.count === 0) throw new StockError(`${device.code} 刚被别人操作过（状态已经变了），刷新后再试`);
+  await tx.stockLedger.create({
+    data: {
+      docType: "TRADE_IN",
+      docNo: input.docNo,
+      storeId: input.storeId,
+      skuId: device.skuId,
+      deviceId: device.id,
+      qtyDelta: ACTION_QTY_DELTA.TRADE_IN_SOLD,
+      statusBefore: device.status,
+      statusAfter,
+      operatorId: input.operatorId,
+      note: input.note,
+    },
+  });
+  return tx.device.findUniqueOrThrow({ where: { id: device.id } });
+}
+
 /** 按任意一个码找机器（扫码、盘点、收货都用它） */
 export function deviceCodeWhere(code: string): Prisma.DeviceWhereInput {
   return { OR: [{ code }, { sn: code }, { imei1: code }, { imei2: code }] };
@@ -162,7 +211,7 @@ export async function changeAccessoryStock(tx: Prisma.TransactionClient, input: 
 
 export interface DeviceActionInput {
   deviceId: number;
-  action: Exclude<DeviceAction, "RECEIVE" | "TRADE_IN" | "STOCKTAKE_GAIN">;
+  action: Exclude<DeviceAction, "RECEIVE" | "TRADE_IN" | "TRADE_IN_SOLD">;
   docType: LedgerDocType;
   docNo: string;
   operatorId: number;

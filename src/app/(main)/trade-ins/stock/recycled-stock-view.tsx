@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { App, Button, Card, Popconfirm, Table, Tag, Typography } from "antd";
@@ -15,6 +15,7 @@ export function RecycledStockView({ rows, total, page, pageSize, canRefurbish }:
   const router = useRouter();
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
+  const [busyId, setBusyId] = useState<number | null>(null); // 正在转良品的那一行，别的行不转圈
 
   const columns: TableColumnsType<RecycledDeviceRow> = [
     { title: "主码", dataIndex: "code", render: (code: string) => <Link href={`/stock/devices/${code}`}>{code}</Link> },
@@ -33,13 +34,14 @@ export function RecycledStockView({ rows, total, page, pageSize, canRefurbish }:
             title="检测合格，转成良品？转后可以开单卖。"
             onConfirm={() =>
               startTransition(async () => {
+                setBusyId(d.id);
                 const result = await refurbishAction(d.id);
                 if (result.ok) message.success("已转良品");
                 else message.error(result.error);
               })
             }
           >
-            <Button size="small" type="primary" loading={pending}>
+            <Button size="small" type="primary" loading={pending && busyId === d.id} disabled={pending && busyId !== d.id}>
               转良品
             </Button>
           </Popconfirm>

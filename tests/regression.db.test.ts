@@ -168,3 +168,64 @@ describe.skipIf(!enabled)("回归：全面自检复现的问题（会写库）",
     expect(await findSessionUser({ userId: emp.id, sv: afterReset.sessionVersion })).toBeNull();
   });
 });
+
+// 第三轮深审（2026-10-18）的边界用例：这几条当时就是对的，收进来防以后改坏。用 S002、S003，和上面的用例错开。
+describe.skipIf(!enabled)("回归：第三轮深审的边界用例（会写库）", () => {
+  async function stores() {
+    const [a, b] = await Promise.all([prisma.store.findFirstOrThrow({ where: { code: "S002" } }), prisma.store.findFirstOrThrow({ where: { code: "S003" } })]);
+    return { from: a.id, to: b.id };
+  }
+
+  it("9 调拨申请锁住的机器不能开单卖，发出照常", async () => {
+    const hq = await userBy("hq");
+    const { from, to } = await stores();
+    const dev = await prisma.device.findFirstOrThrow({ where: { storeId: from, status: "IN_STOCK" }, orderBy: { id: "desc" } });
+    const tr = await createTransfer(hq, { fromStoreId: from, toStoreId: to, deviceIds: [dev.id], accessories: [] });
+    expect((await prisma.device.findUniqueOrThrow({ where: { id: dev.id } })).status).toBe("LOCKED");
+    await expect(createSalesOrder(hq, { storeId: from, items: [{ deviceId: dev.id }], paymentMethod: "CASH" })).rejects.toThrow(/不能卖/);
+    await shipTransfer(hq, tr!.id);
+    expect((await prisma.device.findUniqueOrThrow({ where: { id: dev.id } })).status).toBe("IN_TRANSIT");
+  });
+
+  it("10 配件调拨申请后被卖掉一件，再发出：库存不够就拒绝，提示作废重开，库存不动", async () => {
+    const hq = await userBy("hq");
+    const { from, to } = await stores();
+    const acc = await prisma.accessoryStock.findFirstOrThrow({ where: { storeId: from, qty: { gte: 2, lte: 20 } }, orderBy: { id: "desc" } });
+    const tr = await createTransfer(hq, { fromStoreId: from, toStoreId: to, deviceIds: [], accessories: [{ skuId: acc.skuId, qty: acc.qty }] });
+    await createSalesOrder(hq, { storeId: from, items: [{ skuId: acc.skuId, qty: 1 }], paymentMethod: "CASH" });
+    await expect(shipTransfer(hq, tr!.id)).rejects.toThrow(/作废/);
+    expect(await qtyOf(from, acc.skuId)).toBe(acc.qty - 1);
+    expect((await prisma.transferOrder.findUniqueOrThrow({ where: { id: tr!.id } })).status).toBe("REQUESTED");
+  });
+
+  it("11 作废了的销售单不能退货", async () => {
+    const hq = await userBy("hq");
+    const { from } = await stores();
+    const dev = await prisma.device.findFirstOrThrow({ where: { storeId: from, status: "IN_STOCK" }, orderBy: { id: "asc" } });
+    const so = await createSalesOrder(hq, { storeId: from, items: [{ deviceId: dev.id }], paymentMethod: "CASH" });
+    const item = await prisma.salesOrderItem.findFirstOrThrow({ where: { orderId: so.id } });
+    await voidSalesOrder(hq, so.id, "回归测试");
+    await expect(createReturn(hq, { salesOrderId: so.id, lines: [{ salesItemId: item.id, qty: 1 }], refundFen: item.lineTotalFen, refundMethod: "CASH" })).rejects.toThrow();
+    expect((await prisma.device.findUniqueOrThrow({ where: { id: dev.id } })).status).toBe("IN_STOCK");
+  });
+
+  it("12 盘点录入后有机器被调走：确认时调走的不算盘亏，没盘到的才算", async () => {
+    const hq = await userBy("hq");
+    const { from, to } = await stores();
+    const st = await createStocktake(hq, { storeId: from });
+    const items = await prisma.stocktakeItem.findMany({ where: { stocktakeId: st.id }, include: { device: { select: { id: true, code: true, status: true } } } });
+    const deviceItems = items.filter((i) => i.device);
+    const inStock = deviceItems.filter((i) => i.device!.status === "IN_STOCK").map((i) => i.device!);
+    const [moved, missing] = inStock; // moved 盘完被调走，missing 留在店里但没盘到；其余（含良品）都盘到
+    const counted = deviceItems.map((i) => i.device!).filter((d) => d.id !== moved!.id && d.id !== missing!.id);
+    const accCounts = items.filter((i) => !i.deviceId).map((i) => ({ itemId: i.id, countedQty: i.expectedQty }));
+    await enterCounts(hq, st.id, { imeiText: counted.map((d) => d.code).join("\n"), accessoryCounts: accCounts });
+    const tr = await createTransfer(hq, { fromStoreId: from, toStoreId: to, deviceIds: [moved!.id], accessories: [] });
+    await shipTransfer(hq, tr!.id);
+    await confirmStocktake(hq, st.id);
+    expect((await prisma.device.findUniqueOrThrow({ where: { id: moved!.id } })).status).toBe("IN_TRANSIT");
+    expect((await prisma.device.findUniqueOrThrow({ where: { id: missing!.id } })).status).toBe("LOST");
+    const lossRows = await prisma.stockLedger.findMany({ where: { docNo: st.stocktakeNo, docType: "STOCKTAKE_LOSS" }, select: { deviceId: true } });
+    expect(lossRows.map((r) => r.deviceId)).toEqual([missing!.id]);
+  });
+});

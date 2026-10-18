@@ -124,6 +124,8 @@ export function MobileSaleView({
         }
       }
       setCode("");
+    } catch {
+      message.error("网络不通，这个码没查到，检查网络后再扫一次");
     } finally {
       setLooking(false);
     }

@@ -50,17 +50,18 @@ export async function listDevices(user: CurrentUser, query: DeviceQuery) {
     }),
     prisma.device.count({ where }),
   ]);
-  return { rows: canSeeCost(user) ? rows : rows.map((r) => ({ ...r, costFen: 0, sku: hideSkuCost(r.sku) })), total, page, pageSize: STOCK_PAGE_SIZE };
+  return { rows: rows.map((r) => ({ ...r, costFen: canSeeCost(user) ? r.costFen : 0, sku: hideSkuCost(r.sku, user) })), total, page, pageSize: STOCK_PAGE_SIZE };
 }
 
 export type DeviceRow = Awaited<ReturnType<typeof listDevices>>["rows"][number];
 
-/** 成本（采购价、参考成本）只给店长以上：店员拿到的数据里就是 0，不只是页面不显示 */
+/** 机器成本（采购价 / 回收估价）只给店长以上：店员拿到的数据里就是 0，不只是页面不显示 */
 function canSeeCost(user: CurrentUser): boolean {
   return user.role !== "STAFF";
 }
-function hideSkuCost<T extends { costPriceFen: number }>(sku: T): T {
-  return { ...sku, costPriceFen: 0 };
+/** 商品的参考成本只给总部（口径第 1 节）：店长、区域经理拿到的数据里也是 0 */
+function hideSkuCost<T extends { costPriceFen: number }>(sku: T, user: CurrentUser): T {
+  return user.role === "HQ" ? sku : { ...sku, costPriceFen: 0 };
 }
 
 export async function listAccessoryStocks(user: CurrentUser, query: { storeId?: number; q?: string }) {
@@ -86,7 +87,7 @@ export async function listAccessoryStocks(user: CurrentUser, query: { storeId?: 
       store: { select: { code: true, name: true } },
     },
   });
-  return canSeeCost(user) ? rows : rows.map((r) => ({ ...r, sku: hideSkuCost(r.sku) }));
+  return rows.map((r) => ({ ...r, sku: hideSkuCost(r.sku, user) }));
 }
 
 export type AccessoryStockRow = Awaited<ReturnType<typeof listAccessoryStocks>>[number];
@@ -145,7 +146,7 @@ export async function getDeviceByCode(user: CurrentUser, code: string) {
   });
   if (!device) return null;
   assertStoreAccess(user, { id: device.store.id, regionId: device.store.regionId });
-  return canSeeCost(user) ? device : { ...device, costFen: 0, sku: hideSkuCost(device.sku) };
+  return { ...device, costFen: canSeeCost(user) ? device.costFen : 0, sku: hideSkuCost(device.sku, user) };
 }
 
 export type DeviceDetail = NonNullable<Awaited<ReturnType<typeof getDeviceByCode>>>;

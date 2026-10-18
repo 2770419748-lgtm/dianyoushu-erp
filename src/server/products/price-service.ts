@@ -5,6 +5,7 @@ import { assertStoreAccess } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { effectivePriceFen } from "./search";
+import { isValidFen, MAX_AMOUNT_FEN } from "@/lib/limits";
 import { ProductError } from "./product-service";
 
 // 门店售价：按门店覆盖指导价。看价按数据范围；改价只有店长（本店）和总部。
@@ -72,6 +73,7 @@ export async function setStorePrice(user: CurrentUser, storeId: number, skuId: n
     return;
   }
   if (!Number.isInteger(priceFen) || priceFen < 0) throw new ProductError("售价必须是不小于 0 的金额");
+  if (!isValidFen(priceFen)) throw new ProductError(`金额不对：售价不能超过 ${MAX_AMOUNT_FEN / 1_000_000} 万元`);
   await prisma.storePrice.upsert({
     where: { storeId_skuId: { storeId, skuId } },
     update: { priceFen },

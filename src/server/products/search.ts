@@ -21,3 +21,12 @@ export function skuSearchWhere(q: string): Prisma.SkuWhereInput {
 export function effectivePriceFen(guidePriceFen: number, storePriceFen: number | null | undefined): number {
   return storePriceFen ?? guidePriceFen;
 }
+
+/**
+ * 机器开单的默认价：门店售价 → 指导价 → 这台的成本。
+ * 回收机用“回收机（其他机型）”这种指导价 0 的通用商品时，默认价不能是 0，否则店员不改价就白送；退到成本（估价），至少不亏。
+ */
+export function deviceDefaultPriceFen(guidePriceFen: number, storePriceFen: number | null | undefined, costFen: number): number {
+  const price = effectivePriceFen(guidePriceFen, storePriceFen);
+  return price > 0 ? price : costFen;
+}

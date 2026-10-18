@@ -10,6 +10,7 @@ import { lockRow } from "@/server/db-lock";
 import { nextDocNo } from "@/server/stock/doc-no";
 import { parseCodeList } from "@/server/stock/imei";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
+import { isValidQty, MAX_QTY } from "@/lib/limits";
 import { DeviceStateError } from "@/server/stock/device-state";
 
 // 调拨服务层：申请（串号锁定）→ 发出（在途，发出店扣库存）→ 收货（核对串号，收货店加库存，可部分）；申请中可作废（解锁）。
@@ -168,6 +169,7 @@ export async function createTransfer(user: CurrentUser, input: TransferInput) {
     .filter((a) => a.qty !== 0);
   for (const a of accessories) {
     if (!Number.isInteger(a.qty) || a.qty <= 0) throw new TransferError("配件数量必须是正整数");
+    if (!isValidQty(a.qty)) throw new TransferError(`数量不对：一种配件一次最多调 ${MAX_QTY} 件`);
   }
   if (deviceIds.length === 0 && accessories.length === 0) throw new TransferError("至少要选一台机器或一种配件");
 
@@ -224,7 +226,11 @@ export async function shipTransfer(user: CurrentUser, id: number) {
         if (item.deviceId) {
           await applyDeviceAction(tx, { deviceId: item.deviceId, action: "SHIP", docType: "TRANSFER_OUT", docNo: order.orderNo, operatorId: user.id });
         } else {
-          await changeAccessoryStock(tx, { storeId: order.fromStoreId, skuId: item.skuId, qtyDelta: -item.qty, docType: "TRANSFER_OUT", docNo: order.orderNo, operatorId: user.id });
+          // 配件申请时不占库存，发出时才扣；这期间卖掉了就不够发，调拨单数量不能改，只能作废重开
+          await changeAccessoryStock(tx, { storeId: order.fromStoreId, skuId: item.skuId, qtyDelta: -item.qty, docType: "TRANSFER_OUT", docNo: order.orderNo, operatorId: user.id }).catch((error: unknown) => {
+            if (error instanceof StockError) throw new TransferError(`${error.message}。要改数量请作废这张调拨单，按现有库存重开`);
+            throw error;
+          });
         }
       }
       await writeAudit({ userId: user.id, action: "transfer.ship", entity: "transfer_order", entityId: id }, tx);

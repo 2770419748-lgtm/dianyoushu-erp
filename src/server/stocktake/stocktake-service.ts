@@ -9,6 +9,7 @@ import { nextDocNo } from "@/server/stock/doc-no";
 import { parseCodeList } from "@/server/stock/imei";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { DeviceStateError } from "@/server/stock/device-state";
+import { isValidQty, MAX_QTY } from "@/lib/limits";
 import { lockRow } from "@/server/db-lock";
 
 // 盘点服务层：建任务时把"应有"快照下来 → 录实盘（大件粘串号、小件填数量；应有刷新成录入那一刻的系统数）→ 自动算差异 → 确认后把差异加到当时余额上、写流水。
@@ -153,6 +154,7 @@ export async function enterCounts(user: CurrentUser, id: number, input: EnterCou
     if (line.countedQty === null || line.countedQty === undefined || line.countedQty === "") continue;
     const qty = Number(line.countedQty);
     if (!Number.isInteger(qty) || qty < 0) throw new StocktakeError("实盘数量必须是不小于 0 的整数");
+    if (!isValidQty(qty, true)) throw new StocktakeError(`数量不对：实盘数量最多 ${MAX_QTY}`);
     counts.push({ itemId, countedQty: qty });
   }
 

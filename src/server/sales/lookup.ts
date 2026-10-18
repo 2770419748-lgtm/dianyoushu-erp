@@ -5,7 +5,7 @@ import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { canSell as deviceCanSell } from "@/server/stock/device-state";
 import { deviceCodeWhere } from "@/server/stock/stock-service";
-import { effectivePriceFen } from "@/server/products/search";
+import { deviceDefaultPriceFen, effectivePriceFen } from "@/server/products/search";
 
 // 扫码 / 输码查找（手机开单、手机查库存用）：
 // 先按机器的 SN / IMEI1 / IMEI2 找，再按商品条码找配件。
@@ -35,7 +35,7 @@ export async function lookupForSale(user: CurrentUser, storeId: number, rawCode:
     if (device.storeId !== storeId) return { kind: "error", message: `${device.code} 在 ${device.store.name}，不在本店` };
     if (!deviceCanSell(device.status)) return { kind: "error", message: `${device.code} 现在不能卖（状态不是在库或良品）` };
     const name = device.status === "REFURBISHED" ? `良品 · ${device.tradeInOrder?.modelName ?? device.sku.name}` : device.sku.name;
-    return { kind: "device", deviceId: device.id, code: device.code, skuId: device.sku.id, name, priceFen: effectivePriceFen(device.sku.guidePriceFen, device.sku.storePrices[0]?.priceFen ?? null), status: device.status };
+    return { kind: "device", deviceId: device.id, code: device.code, skuId: device.sku.id, name, priceFen: deviceDefaultPriceFen(device.sku.guidePriceFen, device.sku.storePrices[0]?.priceFen ?? null, device.costFen), status: device.status };
   }
 
   const sku = await prisma.sku.findUnique({

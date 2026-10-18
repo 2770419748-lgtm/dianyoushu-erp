@@ -10,12 +10,14 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { nextDocNo } from "@/server/stock/doc-no";
 import { DeviceStateError } from "@/server/stock/device-state";
+import { DEVICE_STATUS_LABELS } from "@/lib/stock-labels";
 import { parseDeviceCodeLines } from "@/server/stock/imei";
-import { applyDeviceAction, receiveDevices, StockError } from "@/server/stock/stock-service";
+import { applyDeviceAction, receiveDevices, retakeSoldDevice, StockError } from "@/server/stock/stock-service";
 
 // 回收单（以旧换新收旧机，口径第 7 节）：
 // 估价店员手填；提交后旧机进本店回收库（串号状态"回收"，成本 = 估价）；
 // 一张回收单只能抵扣一张销售单；店长或总部确认后"回收 → 良品"，良品可以再开单卖。
+// 本系统卖出去的机器被客户拿回来（串号已在系统里、状态"已售"）：不新建机器，沿用原记录改成"回收"，机型以系统里的为准。
 
 export class TradeInError extends Error {}
 
@@ -53,14 +55,17 @@ export async function createTradeInTx(tx: Tx, user: CurrentUser, input: TradeInI
   if (parsed.errors.length > 0) throw new TradeInError(parsed.errors[0]!);
   if (parsed.devices.length !== 1) throw new TradeInError("一张回收单收一台旧机：填这台的 SN / IMEI1 / IMEI2，至少一个，写在一行");
   const codes = parsed.devices[0]!;
+  const sold = await findSoldDevice(tx, codes);
 
   const skuId = Number(input.skuId);
-  const sku = Number.isInteger(skuId) && skuId > 0 ? await tx.sku.findUnique({ where: { id: skuId }, include: { model: { include: { brand: true, category: true } } } }) : null;
+  const chosen = Number.isInteger(skuId) && skuId > 0 ? await tx.sku.findUnique({ where: { id: skuId }, include: { model: { include: { brand: true, category: true } } } }) : null;
+  // 收回本系统卖出的机器：系统知道它是什么机型，以系统为准（也就不会落到指导价 0 的“其他机型”上）
+  const sku = sold ? sold.sku : chosen;
   if (!sku) throw new TradeInError("请选旧机机型（对不上就选“回收机（其他机型）”并写清机型）");
   if (sku.model.category.kind !== "DEVICE") throw new TradeInError("回收的必须是大件");
   const typedModel = typeof input.modelName === "string" ? input.modelName.trim().slice(0, 60) : "";
-  const modelName = typedModel || `${sku.model.brand.name} ${sku.name}`;
-  if (sku.name === GENERIC_TRADE_IN_SKU_NAME && !typedModel) throw new TradeInError("选了“其他机型”要写清旧机是什么型号");
+  const modelName = (sold ? "" : typedModel) || `${sku.model.brand.name} ${sku.name}`;
+  if (!sold && sku.name === GENERIC_TRADE_IN_SKU_NAME && !typedModel) throw new TradeInError("选了“其他机型”要写清旧机是什么型号");
 
   const condition = typeof input.condition === "string" ? input.condition : "";
   if (!(CONDITION_OPTIONS as readonly string[]).includes(condition)) throw new TradeInError("请选成色");
@@ -77,11 +82,24 @@ export async function createTradeInTx(tx: Tx, user: CurrentUser, input: TradeInI
   const note = typeof input.note === "string" ? input.note.trim().slice(0, 200) || null : null;
 
   const orderNo = await nextDocNo(tx, "RC");
+  const deviceCode = sold ? sold.device.code : codes.code;
   const order = await tx.tradeInOrder.create({
-    data: { orderNo, storeId, customerId, handledById: user.id, deviceCode: codes.code, modelName, skuId: sku.id, condition, appraisedFen, note },
+    data: { orderNo, storeId, customerId, handledById: user.id, deviceCode, modelName, skuId: sku.id, condition, appraisedFen, note },
   });
   try {
-    await receiveDevices(tx, {
+    if (sold) {
+      await retakeSoldDevice(tx, {
+        deviceId: sold.device.id,
+        storeId,
+        costFen: appraisedFen,
+        condition,
+        tradeInOrderId: order.id,
+        fillCodes: sold.fillCodes,
+        docNo: orderNo,
+        operatorId: user.id,
+        note: `${modelName}（本系统卖出的机器收回）`,
+      });
+    } else await receiveDevices(tx, {
       storeId,
       skuId: sku.id,
       devices: [{ sn: codes.sn, imei1: codes.imei1, imei2: codes.imei2 }],
@@ -96,8 +114,34 @@ export async function createTradeInTx(tx: Tx, user: CurrentUser, input: TradeInI
   } catch (error) {
     wrap(error);
   }
-  await writeAudit({ userId: user.id, action: "trade_in.create", entity: "trade_in_order", entityId: order.id, detail: { orderNo, appraisedFen, deviceCode: codes.code } }, tx);
-  return { id: order.id, orderNo, appraisedFen, deviceCode: codes.code, modelName };
+  await writeAudit({ userId: user.id, action: "trade_in.create", entity: "trade_in_order", entityId: order.id, detail: { orderNo, appraisedFen, deviceCode, retake: sold !== null } }, tx);
+  return { id: order.id, orderNo, appraisedFen, deviceCode, modelName };
+}
+
+/**
+ * 回收单填的码在系统里已经有了：只有“已售”（本系统卖出去、客户又拿回来）能收，返回那台机器和要补填的码；
+ * 系统里没有返回 null（按新机器入回收库）；其他状态、码对不上、几个码分属不同机器都拒绝。
+ */
+async function findSoldDevice(tx: Tx, codes: { sn: string | null; imei1: string | null; imei2: string | null; code: string }) {
+  const list = [codes.sn, codes.imei1, codes.imei2].filter((c): c is string => !!c);
+  const found = await tx.device.findMany({
+    where: { OR: [{ code: { in: list } }, { sn: { in: list } }, { imei1: { in: list } }, { imei2: { in: list } }] },
+    include: { sku: { include: { model: { include: { brand: true, category: true } } } } },
+  });
+  if (found.length === 0) return null;
+  if (found.length > 1) throw new TradeInError(`填的几个码在系统里分属 ${found.length} 台不同的机器（${found.map((d) => d.code).join("、")}），检查一下有没有填错`);
+  const device = found[0]!;
+  if (device.status !== "SOLD") {
+    throw new TradeInError(`${device.code} 已经在系统里，现在是“${DEVICE_STATUS_LABELS[device.status]}”，不能回收（只有卖出去的机器才能回收）`);
+  }
+  const fillCodes: { sn?: string; imei1?: string; imei2?: string } = {};
+  for (const key of ["sn", "imei1", "imei2"] as const) {
+    const typed = codes[key];
+    if (!typed) continue;
+    if (device[key] && device[key] !== typed) throw new TradeInError(`填的 ${key.toUpperCase()} 和系统里这台（${device.code}）对不上，检查一下有没有填错`);
+    if (!device[key]) fillCodes[key] = typed;
+  }
+  return { device, sku: device.sku, fillCodes };
 }
 
 export async function createTradeIn(user: CurrentUser, input: TradeInInput) {

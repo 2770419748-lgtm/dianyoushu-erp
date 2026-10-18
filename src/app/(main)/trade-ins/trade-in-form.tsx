@@ -98,7 +98,7 @@ export function TradeInForm({
           ? parsed.errors[0]
           : parsed.devices[0]
             ? `识别：${[parsed.devices[0].sn ? `SN ${parsed.devices[0].sn}` : null, parsed.devices[0].imei1 ? `IMEI1 ${parsed.devices[0].imei1}` : null, parsed.devices[0].imei2 ? `IMEI2 ${parsed.devices[0].imei2}` : null].filter(Boolean).join("，")}`
-            : "15 位数字按先后算 IMEI1、IMEI2，其他的算 SN"}
+            : "15 位数字按先后算 IMEI1、IMEI2，其他的算 SN；本系统卖出过的机器，机型按系统里记的"}
       </Typography.Text>
       <Form.Item name="skuId" label="旧机机型" rules={[{ required: true, message: "请选机型" }]}>
         <Select showSearch optionFilterProp="label" options={skuOptions.map((s) => ({ value: s.id, label: s.label }))} placeholder="搜型号；对不上选“回收机（其他机型）”" />

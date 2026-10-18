@@ -10,7 +10,8 @@ import { writeAudit } from "@/server/audit";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { canSell as deviceCanSell, DeviceStateError } from "@/server/stock/device-state";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
-import { effectivePriceFen } from "@/server/products/search";
+import { deviceDefaultPriceFen, effectivePriceFen } from "@/server/products/search";
+import { isValidFen, isValidQty, MAX_AMOUNT_FEN, MAX_QTY } from "@/lib/limits";
 import { buildSalePayments, PaymentError } from "./payments";
 import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
 import { lockRow } from "@/server/db-lock";
@@ -51,6 +52,7 @@ function optionalFen(value: unknown, label: string): number | null {
   if (value === undefined || value === null || value === "") return null;
   const n = Number(value);
   if (!Number.isInteger(n) || n < 0) throw new SalesError(`${label}必须是不小于 0 的金额`);
+  if (!isValidFen(n)) throw new SalesError(`金额不对：${label}不能超过 ${MAX_AMOUNT_FEN / 1_000_000} 万元`);
   return n;
 }
 
@@ -67,6 +69,7 @@ function parseOrder(input: SalesOrderInput) {
     } else {
       const qty = Number(item.qty ?? 1);
       if (!Number.isInteger(qty) || qty <= 0) throw new SalesError(`第 ${index + 1} 行数量必须是正整数`);
+      if (!isValidQty(qty)) throw new SalesError(`数量不对：第 ${index + 1} 行最多 ${MAX_QTY} 件`);
       accessoryLines.push({ skuId: requireId(item.skuId, "配件"), qty, unitPriceFen });
     }
   });
@@ -112,7 +115,8 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     if (device.storeId !== data.storeId) throw new SalesError(`${device.code} 不在本店`);
     if (!deviceCanSell(device.status)) throw new SalesError(`${device.code} 现在不能卖`);
     // 原价 = 开单时的门店售价（没设就是指导价）；成交价可以手改，两个都存，单据和日志上能看出改过价
-    const listPriceFen = await resolveUnitPrice(tx, data.storeId, device.skuId, device.sku.guidePriceFen);
+    // 门店售价、指导价都是 0（回收机用通用商品）时退到这台的成本，见 deviceDefaultPriceFen
+    const listPriceFen = (await resolveUnitPrice(tx, data.storeId, device.skuId, device.sku.guidePriceFen)) || device.costFen;
     const unitPriceFen = d.unitPriceFen ?? listPriceFen;
     lines.push({ skuId: device.skuId, deviceId: device.id, qty: 1, listPriceFen, unitPriceFen, lineTotalFen: unitPriceFen, costFen: device.costFen });
   }
@@ -126,6 +130,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   }
 
   const subtotalFen = lines.reduce((s, l) => s + l.lineTotalFen, 0);
+  if (subtotalFen > MAX_AMOUNT_FEN) throw new SalesError(`金额不对：一张单合计不能超过 ${MAX_AMOUNT_FEN / 1_000_000} 万元`);
   if (data.discountFen > subtotalFen) throw new SalesError("优惠不能超过商品合计");
   const totalFen = subtotalFen - data.discountFen;
 
@@ -338,7 +343,7 @@ export async function searchSellableDevices(user: CurrentUser, storeId: number, 
     skuId: d.sku.id,
     // 良品（回收机）显示回收单上写的真实机型
     skuName: d.status === "REFURBISHED" ? `良品 · ${d.tradeInOrder?.modelName ?? d.sku.name}` : d.sku.name,
-    priceFen: effectivePriceFen(d.sku.guidePriceFen, d.sku.storePrices[0]?.priceFen ?? null),
+    priceFen: deviceDefaultPriceFen(d.sku.guidePriceFen, d.sku.storePrices[0]?.priceFen ?? null, d.costFen),
   }));
 }
 

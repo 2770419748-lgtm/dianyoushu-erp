@@ -13,9 +13,11 @@ export type DeviceAction =
   | "VOID_SALE" // 销售单作废
   | "RETURN" // 退货
   | "TRADE_IN" // 回收单收旧机
+  | "TRADE_IN_SOLD" // 回收单收回本系统卖出去的机器（不新建，原记录改成回收）
   | "REFURBISH" // 回收机转良品
-  | "STOCKTAKE_LOSS" // 盘点确认盘亏
-  | "STOCKTAKE_GAIN"; // 盘点确认盘盈
+  | "STOCKTAKE_LOSS"; // 盘点确认盘亏
+// 没有“盘盈”：大件盘盈（扫到系统里没有的码）这版不自动建机器，由总部走采购入库补录（口径第 4 节）；
+// 配件盘盈只是流水类型 STOCKTAKE_GAIN，不经过串号状态机。
 
 export class DeviceStateError extends Error {}
 
@@ -30,9 +32,9 @@ export const DEVICE_ACTION_LABELS: Record<DeviceAction, string> = {
   VOID_SALE: "作废销售单",
   RETURN: "退货",
   TRADE_IN: "回收入库",
+  TRADE_IN_SOLD: "回收入库",
   REFURBISH: "转良品",
   STOCKTAKE_LOSS: "盘亏",
-  STOCKTAKE_GAIN: "盘盈",
 };
 
 /** from 为 null 表示这个动作会新建一台机器 */
@@ -46,9 +48,9 @@ const TRANSITIONS: Record<DeviceAction, { from: DeviceStatus[] | null; to: Devic
   VOID_SALE: { from: ["SOLD"], to: "IN_STOCK" },
   RETURN: { from: ["SOLD"], to: "IN_STOCK" },
   TRADE_IN: { from: null, to: "RECYCLED" },
+  TRADE_IN_SOLD: { from: ["SOLD"], to: "RECYCLED" },
   REFURBISH: { from: ["RECYCLED"], to: "REFURBISHED" },
   STOCKTAKE_LOSS: { from: ["IN_STOCK", "REFURBISHED"], to: "LOST" },
-  STOCKTAKE_GAIN: { from: null, to: "IN_STOCK" },
 };
 
 /** 库存数量怎么变：+1、−1 或 0（只改状态） */
@@ -62,9 +64,9 @@ export const ACTION_QTY_DELTA: Record<DeviceAction, 1 | 0 | -1> = {
   VOID_SALE: 1,
   RETURN: 1,
   TRADE_IN: 1,
+  TRADE_IN_SOLD: 1,
   REFURBISH: 0,
   STOCKTAKE_LOSS: -1,
-  STOCKTAKE_GAIN: 1,
 };
 
 /** 能开单卖的状态 */
