@@ -58,5 +58,8 @@ jobs:
       - name: 测试（含连库、并发、回归）
         run: pnpm test
 
+      - name: 对账自检（测试跑完账还对得上）
+        run: pnpm db:check
+
       - name: 生产构建
         run: pnpm build

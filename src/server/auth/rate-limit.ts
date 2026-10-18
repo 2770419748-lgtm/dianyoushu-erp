@@ -1,5 +1,5 @@
-// 登录限流：同一账号 + 来源 IP，15 分钟内错 5 次就锁 15 分钟。
-// 状态放内存：演示版单进程部署够用；重启进程会清零，这是已知取舍。
+// 登录限流的计数器：同一个 key 15 分钟内错 N 次就锁 15 分钟（key 怎么拼见 login-service.ts）。
+// 状态放内存：单进程部署够用；重启进程会清零，多实例部署时要换成数据库或 Redis（上线前检查清单里写了）。
 
 export const LOGIN_MAX_FAILURES = 5;
 export const LOGIN_WINDOW_MS = 15 * 60 * 1000;
@@ -9,7 +9,7 @@ type Attempt = { failures: number; windowStart: number; lockedUntil: number | nu
 
 export type LimiterCheck = { allowed: true } | { allowed: false; retryAfterMs: number };
 
-export function createLoginLimiter(now: () => number = () => Date.now()) {
+export function createLoginLimiter(now: () => number = () => Date.now(), maxFailures = LOGIN_MAX_FAILURES) {
   const attempts = new Map<string, Attempt>();
 
   function current(key: string): Attempt {
@@ -37,7 +37,7 @@ export function createLoginLimiter(now: () => number = () => Date.now()) {
     recordFailure(key: string): void {
       const a = current(key);
       a.failures += 1;
-      if (a.failures >= LOGIN_MAX_FAILURES) {
+      if (a.failures >= maxFailures) {
         a.lockedUntil = now() + LOGIN_LOCK_MS;
       }
     },

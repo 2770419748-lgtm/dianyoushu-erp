@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { DEMO_MODE } from "@/server/auth/demo-accounts";
 import { LoginForm } from "./login-form";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +9,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   const user = await getCurrentUser();
   if (user) redirect("/");
   const reason = (await searchParams).reason;
-  const notice = reason === "inactive" ? "这个账号已停用或不存在，请换账号登录或联系店长、总部" : undefined;
+  const notice = reason === "expired" || reason === "inactive" ? "登录已失效：密码可能被修改过，或账号已停用。请重新登录，登不上就联系店长或总部。" : undefined;
 
   return (
     <main
@@ -21,7 +22,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
         background: "#f5f5f5",
       }}
     >
-      <LoginForm notice={notice} />
+      <LoginForm notice={notice} showDemoAccounts={DEMO_MODE} />
     </main>
   );
 }

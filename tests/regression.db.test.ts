@@ -8,6 +8,8 @@ import { createReturn } from "@/server/sales/return-service";
 import { createSalesOrder, voidSalesOrder } from "@/server/sales/sales-service";
 import { confirmStocktake, createStocktake, enterCounts } from "@/server/stocktake/stocktake-service";
 import { createTransfer, receiveTransfer, shipTransfer } from "@/server/transfer/transfer-service";
+import { findSessionUser } from "@/server/auth/session-user";
+import { resetUserPassword, setUserActive } from "@/server/org/org-service";
 
 // 回归测试：来自 2026-10-17 全面自检的复现脚本（每条当时都复现失败过，修好后应全部通过）。
 // 这些用例会真的写库、不清理，所以只在“随时可以重建”的库上跑：
@@ -148,5 +150,21 @@ describe.skipIf(!enabled)("回归：全面自检复现的问题（会写库）",
       expect(r.filter((x) => x.status === "fulfilled").length).toBe(1);
       expect((await qtyOf(order.storeId, line.skuId)) - before).toBe(line.qty);
     }
+  });
+  it("8 总部重置密码、停用账号后，这个人之前的登录立刻失效（2026-10-18 复审）", async () => {
+    const hq = await userBy("hq");
+    const emp = await prisma.user.findFirstOrThrow({ where: { username: "emp002" }, select: { id: true, sessionVersion: true } });
+    const oldSession = { userId: emp.id, sv: emp.sessionVersion };
+    expect(await findSessionUser(oldSession)).not.toBeNull();
+
+    await resetUserPassword(hq, emp.id, "newpass123");
+    expect(await findSessionUser(oldSession)).toBeNull(); // 旧 cookie 不能再用
+    const afterReset = await prisma.user.findUniqueOrThrow({ where: { id: emp.id }, select: { sessionVersion: true } });
+    expect(await findSessionUser({ userId: emp.id, sv: afterReset.sessionVersion })).not.toBeNull(); // 用新密码重新登录的可以
+
+    await setUserActive(hq, emp.id, false);
+    expect(await findSessionUser({ userId: emp.id, sv: afterReset.sessionVersion })).toBeNull();
+    await setUserActive(hq, emp.id, true); // 重新启用后也要重新登录
+    expect(await findSessionUser({ userId: emp.id, sv: afterReset.sessionVersion })).toBeNull();
   });
 });

@@ -15,6 +15,12 @@ const host = (() => {
   }
 })();
 
+// 真上线（DEMO_MODE=0）的库一律不准重置，不管 ALLOW_DB_RESET 怎么设
+if (process.env.DEMO_MODE === "0") {
+  console.error("拒绝重置：DEMO_MODE=0 表示这是真实使用的库，清空会丢掉门店的真实数据。");
+  process.exit(1);
+}
+
 if (!["localhost", "127.0.0.1", "::1"].includes(host) && process.env.ALLOW_DB_RESET !== "1") {
   console.error(`拒绝重置：数据库主机是 "${host || "未知"}"，不是本机。确定要清空请设置 ALLOW_DB_RESET=1 再跑。`);
   process.exit(1);

@@ -11,11 +11,11 @@ export type LoginState = { error?: string };
 
 export async function login(_prev: LoginState, formData: FormData): Promise<LoginState> {
   const h = await headers();
-  // IP 只用来记日志（没有反向代理时这个头可以伪造，所以不拿它做限流）
+  // 来源 IP：在 Caddy 后面（TRUST_PROXY=1）时可信，用来按 IP 限流；直接对外时可能是伪造的，只记日志
   const ip = h.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
   const result = await authenticate(String(formData.get("username") ?? ""), String(formData.get("password") ?? ""), ip);
   if (!result.ok) return { error: result.error };
-  await createSession(result.userId);
+  await createSession(result.userId, result.sessionVersion);
   redirect("/");
 }
 

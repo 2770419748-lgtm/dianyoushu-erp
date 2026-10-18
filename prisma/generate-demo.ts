@@ -3,6 +3,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import type { DeviceStatus, LedgerDocType, PaymentMethod } from "../src/generated/prisma/enums";
 import { formatDate } from "../src/lib/format";
+import { describeIntegrity, integrityOk, runIntegrityChecks } from "./integrity-checks";
 
 // 模拟经营数据 v1（第 9 周）：10 家店、3 个月（截至昨天）的采购到货、销售、以旧换新、回收机转良品再卖、作废、退货、日结。
 // 规则和真实业务一致：库存每次变动都有流水、配件余额 = 流水合计、日结系统数 = 当天收款汇总。
@@ -619,41 +620,15 @@ async function write() {
   }
 }
 
-/** 自检：库存余额 = 流水合计；日结系统数 = 当天收款汇总；每张有效单收款合计 = 应收 */
+/** 自检：4 条对账 SQL 抽到 integrity-checks.ts，上线后 pnpm db:check 也用同一套 */
 async function verify() {
-  const [accMismatch] = await prisma.$queryRaw<{ n: bigint }[]>`
-    SELECT COUNT(*)::bigint AS n FROM accessory_stocks a
-    LEFT JOIN (SELECT store_id, sku_id, SUM(qty_delta) AS s FROM stock_ledgers WHERE device_id IS NULL GROUP BY store_id, sku_id) l
-      ON l.store_id = a.store_id AND l.sku_id = a.sku_id
-    WHERE a.qty <> COALESCE(l.s, 0)`;
-  const [devMismatch] = await prisma.$queryRaw<{ n: bigint }[]>`
-    SELECT COUNT(*)::bigint AS n FROM (
-      SELECT store_id, COUNT(*) AS c FROM devices WHERE status IN ('IN_STOCK','REFURBISHED','RECYCLED','LOCKED') GROUP BY store_id
-    ) d FULL JOIN (
-      SELECT store_id, SUM(qty_delta) AS s FROM stock_ledgers WHERE device_id IS NOT NULL GROUP BY store_id
-    ) l ON l.store_id = d.store_id
-    WHERE COALESCE(d.c, 0) <> COALESCE(l.s, 0)`;
-  const [payMismatch] = await prisma.$queryRaw<{ n: bigint }[]>`
-    SELECT COUNT(*)::bigint AS n FROM sales_orders o
-    JOIN (SELECT sales_order_id, SUM(amount_fen) AS s FROM payments WHERE sales_order_id IS NOT NULL GROUP BY sales_order_id) p ON p.sales_order_id = o.id
-    WHERE o.total_fen <> p.s`;
-  const [closeMismatch] = await prisma.$queryRaw<{ id: number }[]>`
-    SELECT COUNT(*)::bigint AS n FROM daily_close_lines l
-    JOIN daily_closes c ON c.id = l.daily_close_id
-    LEFT JOIN (
-      SELECT o.store_id, o.biz_date, p.method, SUM(p.amount_fen) AS s FROM payments p JOIN sales_orders o ON o.id = p.sales_order_id WHERE o.status = 'COMPLETED' GROUP BY 1, 2, 3
-      UNION ALL
-      SELECT r.store_id, r.biz_date, p.method, SUM(p.amount_fen) FROM payments p JOIN return_orders r ON r.id = p.return_order_id GROUP BY 1, 2, 3
-    ) x ON x.store_id = c.store_id AND x.biz_date = c.biz_date AND x.method = l.method
-    GROUP BY l.id, l.system_fen
-    HAVING l.system_fen <> COALESCE(SUM(x.s), 0)`.then((rows) => [{ n: rows.length }]);
-
+  const result = await runIntegrityChecks(prisma);
   const sales = out.sales.filter((s) => s.status === "COMPLETED");
   console.log(
     `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结。`,
   );
-  console.log(`自检：配件余额对不上 ${accMismatch!.n} 处，机器数对不上 ${devMismatch!.n} 处，收款 ≠ 应收 ${payMismatch!.n} 单，日结系统数对不上 ${closeMismatch!.n} 行。`);
-  if (Number(accMismatch!.n) + Number(devMismatch!.n) + Number(payMismatch!.n) + Number(closeMismatch!.n) > 0) process.exitCode = 1;
+  console.log(`自检：${describeIntegrity(result)}`);
+  if (!integrityOk(result)) process.exitCode = 1;
 }
 
 main().catch((error) => {

@@ -1,9 +1,18 @@
-# 一台服务器跑三样：数据库、应用、Caddy（自动申请 HTTPS 证书）。
+# 一台服务器跑四样：数据库、应用、Caddy（自动申请 HTTPS 证书）、定时备份。
 # 用法见 docs/部署.md。密码和密钥都放同目录的 .env（不进仓库），这里只引用变量名。
+
+# 每个容器的日志最多 5 个文件 × 50MB，写满自动滚动，不会把硬盘写满
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:17
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: erp
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?在 .env 里设置 POSTGRES_PASSWORD}
@@ -18,17 +27,30 @@ services:
   app:
     build: .
     restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgresql://erp:${POSTGRES_PASSWORD}@db:5432/dianyoushu_erp?schema=public
       SESSION_SECRET: ${SESSION_SECRET:?在 .env 里设置 SESSION_SECRET}
+      # 演示站保持 1；真给门店用改成 0（见 docs/部署.md 上线前检查清单）
+      DEMO_MODE: ${DEMO_MODE:-1}
+      # 应用在 Caddy 后面，X-Forwarded-For 由 Caddy 写入、可信，登录限流按 IP + 用户名
+      TRUST_PROXY: "1"
     depends_on:
       db:
         condition: service_healthy
+    # 镜像里没有 curl，用 node 自带的 fetch 请求健康检查接口（数据库不通会返回 503）
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # 备案没下来时用 IP 访问：SITE_ADDRESS 设成 :80；有域名后设成域名，Caddy 自动上 HTTPS
   caddy:
     image: caddy:2
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -40,6 +62,22 @@ services:
     depends_on:
       - app
 
+  # 每天凌晨 3 点备份数据库到 ./backups，留 14 天；手动备份：docker compose exec backup sh /backup.sh now
+  backup:
+    image: postgres:17
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Shanghai
+    entrypoint: ["sh", "/backup.sh"]
+    volumes:
+      - ./docker/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
   # 迁移和灌演示数据：docker compose run --rm tools pnpm exec prisma migrate deploy
   tools:
     build:
@@ -49,6 +87,9 @@ services:
     environment:
       DATABASE_URL: postgresql://erp:${POSTGRES_PASSWORD}@db:5432/dianyoushu_erp?schema=public
       ALLOW_DB_RESET: "1"
+      DEMO_MODE: ${DEMO_MODE:-1}
+      # 压测（pnpm load-test）要用它签登录 cookie
+      SESSION_SECRET: ${SESSION_SECRET}
     depends_on:
       db:
         condition: service_healthy

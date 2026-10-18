@@ -20,3 +20,14 @@ export async function getSystemStatus(user: CurrentUser): Promise<SystemStatus> 
     return { ok: false };
   }
 }
+
+/** 健康检查用（/api/health，不用登录）：数据库能不能执行一条最简单的查询 */
+export async function isDatabaseReachable(): Promise<boolean> {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return true;
+  } catch (error) {
+    console.error("[健康检查] 数据库连不上", error);
+    return false;
+  }
+}

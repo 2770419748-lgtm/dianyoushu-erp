@@ -19,7 +19,7 @@
 | `manager` | 店长 | S001 中山路店：调拨、盘点确认、日结、改价 |
 | `staff` | 店员 | S001 中山路店：开单、退货、收旧机、盘点录入 |
 
-这 4 个账号受保护，不能被改密码、停用或改角色；想试这些功能先用 `hq` 新建一个员工。`demo1234` 只是演示用的公开密码：本机和上线后的演示站都用它，演示站每天重置数据；拿去给真实门店用之前必须改掉所有密码，做法见 `docs/部署.md`“演示账号和密码”。
+这 4 个账号受保护（演示模式 `DEMO_MODE` 默认开），不能被改密码、停用或改角色；想试这些功能先用 `hq` 新建一个员工。`demo1234` 只是演示用的公开密码：本机和上线后的演示站都用它，演示站每天重置数据；拿去给真实门店用之前先过一遍 `docs/部署.md` 开头的“上线前检查清单”（第一条就是关演示模式、改掉所有密码）。
 
 ## 做了什么
 
@@ -41,7 +41,7 @@
 
 ## 技术
 
-Next.js 16（App Router）+ TypeScript + Prisma 7 + PostgreSQL 17 + Ant Design 6 + ECharts；单仓库单进程，业务规则全部在 `src/server/` 服务层。测试：Vitest（单元测试和连库测试，跑完回滚）+ Playwright（电脑开单到日结、手机开单两条端到端）；GitHub Actions 起一个临时 PostgreSQL，跑 lint、类型检查、全部测试（含连库、并发、回归）和生产构建。部署用 Docker Compose（PostgreSQL + 应用 + Caddy 自动 HTTPS），写好了还没上线。
+Next.js 16（App Router）+ TypeScript + Prisma 7 + PostgreSQL 17 + Ant Design 6 + ECharts；单仓库单进程，业务规则全部在 `src/server/` 服务层。测试：Vitest（单元测试和连库测试，跑完回滚）+ Playwright（电脑开单到日结、手机开单两条端到端）；GitHub Actions 起一个临时 PostgreSQL，跑 lint、类型检查、全部测试（含连库、并发、回归）、对账自检和生产构建。部署用 Docker Compose（PostgreSQL + 应用 + Caddy 自动 HTTPS + 每日备份，带健康检查 `/api/health` 和日志限额），写好了还没上线。对账自检 `pnpm db:check`，压测 `pnpm load-test`（先起生产构建）。
 
 为什么这么选、为什么不做 App 和人事：`docs/取舍记录.md`。
 
@@ -74,6 +74,6 @@ Next.js 16（App Router）+ TypeScript + Prisma 7 + PostgreSQL 17 + Ant Design 6
 | `docs/安全基线.md` | 安全要求逐项核对 |
 | `docs/演示脚本.md` | 10 分钟演示路径和排练记录 |
 | `docs/备份与恢复.md` | 本机备份、恢复演练、每日自动备份 |
-| `docs/部署.md` | Docker Compose 部署步骤（待上线时验证） |
+| `docs/部署.md` | 上线前检查清单、Docker Compose 部署步骤（待上线时验证） |
 | `PROJECT_STATE.md` | 进度、常用命令、踩过的坑 |
 | `AGENTS.md` | 开发规则（给人和 AI 看） |

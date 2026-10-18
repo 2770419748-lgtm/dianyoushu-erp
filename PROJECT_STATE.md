@@ -33,6 +33,7 @@
 - 代码审查修复（2026-10-17）：机器状态条件写入、配件原子增减 + CHECK 约束、门店 × 营业日咨询锁（`lockStoreDay`）、迁移 `integrity_checks`（配件余额 ≥ 0、收款二选一、已退数量范围）、重复码友好提示、CSV 防公式注入（`src/lib/csv.ts`）、新建调拨服务端搜索分页；并发测试 `tests/concurrency.db.test.ts`。测试 84 条 + 端到端 2 条。
 - 复查后补（2026-10-17）：盘点明细、调拨明细加“一台机器只能一行”唯一约束（迁移 `item_device_unique`）；生产启动配置检查 `src/instrumentation.ts`（弱密钥、占位值、没配数据库就拒绝启动，本机实测过）；README / 部署文档写清演示密码；测试文件改为依次跑（`vitest.config.mts` 的 `fileParallelism: false`）。测试 87 条 + 端到端 2 条。
 - 全面自检修复（2026-10-17）：另一个会话从头查了一遍，报告的 11 + 5 + 4 条和十几处小毛病都修了；单据级防并发 `src/server/db-lock.ts`；盘点按录入时的系统数算差异；退款上限 `returnRefundCapFen`；销售明细原价 `list_price_fen`；采购单只给总部、成本按角色去掉；登录 `src/server/auth/login-service.ts`（按用户名限流）；cookie Secure 按协议；停用账号清 cookie `/api/session/clear`；CI 起 PostgreSQL 跑全部测试和构建；回归测试 `tests/regression.db.test.ts`（`RUN_DESTRUCTIVE_TESTS=1` 才跑）。测试 100 条（含回归 7 条）+ 端到端 2 条。
+- 生产上线补齐（2026-10-18，复审 9 条）：会话版本号（改密码、重置、停用后旧登录立刻失效，迁移 `user_session_version`，`src/server/auth/session-user.ts`）；演示模式开关 `DEMO_MODE`（默认开，0 = 真用）；`/api/health` + compose 健康检查、日志限额、Caddy 访问日志、`backup` 定时备份服务（`docker/backup.sh`）；登录限流在 Caddy 后按 IP + 用户名（`TRUST_PROXY`）；对账自检 `pnpm db:check`（`prisma/integrity-checks.ts`，CI 也跑）；CSP nonce（`src/proxy.ts`）；压测 `pnpm load-test`（`scripts/load-test.ts`）；`docs/部署.md` 开头“上线前检查清单”。
 
 ## 进行中
 
@@ -95,6 +96,8 @@ code/
 - `pnpm lint`：ESLint
 - `pnpm db:migrate`：改了 schema.prisma 后生成并执行迁移
 - `pnpm db:seed`：灌模拟数据（3 区域、10 门店、100 员工，可重复跑）
+- `pnpm db:check`：对账自检（配件余额 = 流水、机器数 = 流水、收款 = 应收、已确认日结 = 收款），对不上退出码 1
+- `pnpm load-test [并发] [每路次数]`：压测 11 个页面，先 `pnpm build && pnpm start`；`LOAD_BASE` 改地址
 - `pnpm db:reset`：清空全部业务表 → 基础种子 → 生成 3 个月模拟经营数据（只允许本机库，约 30 秒）
 - `pnpm db:studio`：Prisma 自带的看表界面
 

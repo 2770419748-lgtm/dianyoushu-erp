@@ -5,7 +5,7 @@ import type { NextConfig } from "next";
 // - X-Content-Type-Options：浏览器不乱猜文件类型
 // - Referrer-Policy：跳到外站时只带域名，不带完整地址（地址里可能有单号）
 // - Permissions-Policy：只允许本站用摄像头（扫码），麦克风、定位一律关
-// 没加 CSP：Ant Design 的样式是运行时注入的，严格 CSP 要配 nonce，演示版先不做（取舍记录里写明）。
+// CSP（内容安全策略）不在这里：它要每个请求生成一个随机 nonce，所以放在 src/proxy.ts 里加。
 // HSTS 交给上线时的 Caddy（只在 HTTPS 下才有意义）。
 const SECURITY_HEADERS = [
   { key: "X-Frame-Options", value: "DENY" },

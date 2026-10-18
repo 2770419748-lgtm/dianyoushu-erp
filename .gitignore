@@ -31,3 +31,6 @@ src/generated/
 # Playwright 输出
 /test-results/
 /playwright-report/
+
+# 服务器上的数据库备份（docker compose 的 backup 服务写进来），不进仓库
+backups/

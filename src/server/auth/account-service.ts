@@ -12,7 +12,8 @@ export class AccountError extends Error {}
 
 const limiter = createLoginLimiter();
 
-export async function changeOwnPassword(user: CurrentUser, oldPassword: unknown, newPassword: unknown) {
+/** 改成功返回新的会话版本号：别的设备上的旧登录全部失效，当前这台由调用方用新版本号重新登录 */
+export async function changeOwnPassword(user: CurrentUser, oldPassword: unknown, newPassword: unknown): Promise<number> {
   if (isProtectedDemoAccount(user.username)) throw new AccountError(DEMO_PROTECTED_MESSAGE);
   const oldText = typeof oldPassword === "string" ? oldPassword : "";
   const newText = typeof newPassword === "string" ? newPassword : "";
@@ -30,6 +31,11 @@ export async function changeOwnPassword(user: CurrentUser, oldPassword: unknown,
     throw new AccountError("旧密码不对");
   }
   limiter.reset(key);
-  await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await hashPassword(newText) } });
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash: await hashPassword(newText), sessionVersion: { increment: 1 } },
+    select: { sessionVersion: true },
+  });
   await writeAudit({ userId: user.id, action: "user.change_password", entity: "user", entityId: user.id });
+  return updated.sessionVersion;
 }

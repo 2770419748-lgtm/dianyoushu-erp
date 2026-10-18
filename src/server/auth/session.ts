@@ -17,9 +17,9 @@ async function shouldUseSecureCookie(): Promise<boolean> {
   return proto === "https";
 }
 
-export async function createSession(userId: number): Promise<void> {
+export async function createSession(userId: number, sessionVersion: number): Promise<void> {
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
-  const token = await signSessionToken({ userId }, expiresAt);
+  const token = await signSessionToken({ userId, sv: sessionVersion }, expiresAt);
   const cookieStore = await cookies();
   cookieStore.set(COOKIE_NAME, token, {
     httpOnly: true, // 页面脚本读不到，防 XSS 偷 cookie

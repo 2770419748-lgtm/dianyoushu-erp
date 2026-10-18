@@ -238,7 +238,8 @@ export async function resetUserPassword(actor: Actor, id: number, password: unkn
   assertCanManage(actor);
   await assertNotDemoAccount(id);
   const passwordHash = await hashPassword(requirePassword(password));
-  await prisma.user.update({ where: { id }, data: { passwordHash } });
+  // 版本号 +1：这个人之前的登录（可能在别人手里）马上失效，要用新密码重新登录
+  await prisma.user.update({ where: { id }, data: { passwordHash, sessionVersion: { increment: 1 } } });
   await writeAudit({ userId: actor.id, action: "user.reset_password", entity: "user", entityId: id });
 }
 
@@ -246,7 +247,7 @@ export async function setUserActive(actor: Actor, id: number, isActive: boolean)
   assertCanManage(actor);
   await assertNotDemoAccount(id);
   if (id === actor.id && !isActive) throw new OrgError("不能停用自己");
-  const user = await prisma.user.update({ where: { id }, data: { isActive } });
+  const user = await prisma.user.update({ where: { id }, data: { isActive, sessionVersion: { increment: 1 } } });
   await writeAudit({ userId: actor.id, action: isActive ? "user.activate" : "user.deactivate", entity: "user", entityId: id });
   return user;
 }

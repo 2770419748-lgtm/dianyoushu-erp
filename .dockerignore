@@ -9,3 +9,6 @@ test-results
 playwright-report
 src/generated
 *.log
+
+# 服务器上的数据库备份不进镜像
+backups

@@ -6,7 +6,7 @@ import { login, type LoginState } from "./actions";
 
 const { Title, Text } = Typography;
 
-export function LoginForm({ notice }: { notice?: string }) {
+export function LoginForm({ notice, showDemoAccounts }: { notice?: string; showDemoAccounts: boolean }) {
   const [state, formAction, pending] = useActionState<LoginState, FormData>(login, {});
 
   return (
@@ -38,11 +38,13 @@ export function LoginForm({ notice }: { notice?: string }) {
           </Button>
         </Form>
       </form>
-      <div style={{ marginTop: 24 }}>
-        <Text type="secondary">
-          演示账号（密码都是 demo1234）：hq 总部、regional 区域经理、manager 店长、staff 店员
-        </Text>
-      </div>
+      {showDemoAccounts ? (
+        <div style={{ marginTop: 24 }}>
+          <Text type="secondary">
+            演示账号（密码都是 demo1234）：hq 总部、regional 区域经理、manager 店长、staff 店员
+          </Text>
+        </div>
+      ) : null}
     </Card>
   );
 }

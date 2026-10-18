@@ -180,6 +180,7 @@ model User {
   id           Int      @id @default(autoincrement())
   username     String   @unique // 登录账号
   passwordHash String   @map("password_hash") // bcrypt 哈希，永远不存明文
+  sessionVersion Int    @default(0) @map("session_version") // 会话版本号：改密码、停用、启用时 +1，之前签发的登录令牌立刻作废
   name         String // 姓名
   role         Role
   storeId      Int?     @map("store_id") // 店员、店长必填；区域经理、总部为空
