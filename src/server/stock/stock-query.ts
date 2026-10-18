@@ -3,6 +3,7 @@ import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { DeviceStatus } from "@/generated/prisma/enums";
 import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
+import { canSeeCost as canSeeCostRole } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
 
 // 库存只读查询，全部带数据范围（店员店长本店、区域经理辖区、总部全部）。
@@ -55,13 +56,12 @@ export async function listDevices(user: CurrentUser, query: DeviceQuery) {
 
 export type DeviceRow = Awaited<ReturnType<typeof listDevices>>["rows"][number];
 
-/** 机器成本（采购价 / 回收估价）只给店长以上：店员拿到的数据里就是 0，不只是页面不显示 */
+/** 成本（机器采购价 / 回收估价、商品参考成本）只给店长及以上：店员拿到的数据里就是 0，不只是页面不显示 */
 function canSeeCost(user: CurrentUser): boolean {
-  return user.role !== "STAFF";
+  return canSeeCostRole(user.role);
 }
-/** 商品的参考成本只给总部（口径第 1 节）：店长、区域经理拿到的数据里也是 0 */
 function hideSkuCost<T extends { costPriceFen: number }>(sku: T, user: CurrentUser): T {
-  return user.role === "HQ" ? sku : { ...sku, costPriceFen: 0 };
+  return canSeeCost(user) ? sku : { ...sku, costPriceFen: 0 };
 }
 
 export async function listAccessoryStocks(user: CurrentUser, query: { storeId?: number; q?: string }) {

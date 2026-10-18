@@ -106,6 +106,11 @@ export function canManageKpi(role: Role): boolean {
   return role === "HQ";
 }
 
+/** 谁能看成本（机器成本、商品参考成本、销售明细成本）：店长、区域经理、总部；店员拿到的数据里就是 0（2026-10-18 坤总定） */
+export function canSeeCost(role: Role): boolean {
+  return role !== "STAFF";
+}
+
 /** 谁能作废销售单：店长、总部（回收单这版不做作废，口径第 5 节） */
 export function canVoidSales(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";

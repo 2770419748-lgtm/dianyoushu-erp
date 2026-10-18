@@ -37,6 +37,7 @@ export function ProductsView({
   query,
   catalog,
   canManage,
+  showCost,
 }: {
   rows: SkuRow[];
   total: number;
@@ -45,6 +46,7 @@ export function ProductsView({
   query: Query;
   catalog: Catalog;
   canManage: boolean;
+  showCost: boolean; // 参考成本列：店长及以上
 }) {
   const router = useRouter();
   const { message } = App.useApp();
@@ -127,9 +129,9 @@ export function ProductsView({
     { title: "条码", dataIndex: "barcode", render: (v: string | null) => v ?? "-" },
     { title: "指导价（元）", dataIndex: "guidePriceFen", align: "right", render: (v: number) => formatFen(v) },
   ];
+  if (showCost) columns.push({ title: "参考成本（元）", dataIndex: "costPriceFen", align: "right", render: (v: number) => formatFen(v) });
   if (canManage) {
     columns.push(
-      { title: "参考成本（元）", dataIndex: "costPriceFen", align: "right", render: (v: number) => formatFen(v) },
       { title: "状态", dataIndex: "isActive", render: (v: boolean) => (v ? <Tag color="green">在售</Tag> : <Tag>停售</Tag>) },
       {
         title: "操作",

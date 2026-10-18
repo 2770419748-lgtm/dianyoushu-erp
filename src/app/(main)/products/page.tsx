@@ -1,5 +1,5 @@
 import { requireUser } from "@/server/auth/current-user";
-import { canManageProducts } from "@/server/auth/permissions";
+import { canManageProducts, canSeeCost } from "@/server/auth/permissions";
 import { listCatalog, searchSkus } from "@/server/products/product-service";
 import { ProductsView } from "./products-view";
 
@@ -19,7 +19,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
     brandId: Number(one(params.brandId)) || undefined,
     page: Number(one(params.page)) || 1,
     includeInactive: canManageProducts(user.role) && one(params.all) === "1",
-    includeCost: canManageProducts(user.role),
+    includeCost: canSeeCost(user.role),
   };
   const [result, catalog] = await Promise.all([searchSkus(query), listCatalog()]);
   return (
@@ -31,6 +31,7 @@ export default async function ProductsPage({ searchParams }: PageProps<"/product
       query={query}
       catalog={catalog}
       canManage={canManageProducts(user.role)}
+      showCost={canSeeCost(user.role)}
     />
   );
 }

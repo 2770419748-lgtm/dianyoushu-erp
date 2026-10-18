@@ -80,7 +80,7 @@ export interface SkuQuery {
   brandId?: number;
   page?: number;
   includeInactive?: boolean;
-  includeCost?: boolean; // 参考成本只给总部（管商品的人）；其他角色拿到的是 0
+  includeCost?: boolean; // 参考成本给店长及以上；店员拿到的是 0
 }
 
 export async function searchSkus(query: SkuQuery) {
