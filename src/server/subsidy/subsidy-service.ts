@@ -28,6 +28,7 @@ import { writeAudit } from "@/server/audit";
 import { lockRow } from "@/server/db-lock";
 import { type Db, withTx } from "@/server/db-tx";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
+import { isUniqueViolation } from "@/server/db-errors";
 import { issuedInvoiceNumber } from "@/server/invoice/invoice-service";
 
 // 国补（口径第 15 节）：总部配政策；开单时按政策算立减、校验资格，每台补贴的机器生成一张国补单；
@@ -64,8 +65,11 @@ function wrapAccess(fn: () => void) {
 
 function parseDate(value: unknown, label: string): Date {
   const s = typeof value === "string" ? value.trim() : "";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(new Date(`${s}T00:00:00.000Z`).getTime())) throw new SubsidyError(`${label}要写成 2026-01-01 这样`);
-  return new Date(`${s}T00:00:00.000Z`);
+  const date = new Date(`${s}T00:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(date.getTime())) throw new SubsidyError(`${label}要写成 2026-01-01 这样`);
+  // 2026-02-30 这种不存在的日期，Date 会滚到 3 月 2 日：回读不一样就拦下
+  if (date.toISOString().slice(0, 10) !== s) throw new SubsidyError(`${label} ${s} 不是一个真实的日期`);
+  return date;
 }
 
 // ---------- 政策 ----------
@@ -183,9 +187,15 @@ export async function createClaimsTx(
 ) {
   for (const l of input.lines) {
     const claimNo = await nextDocNo(tx, "GB");
-    await tx.subsidyClaim.create({
-      data: { claimNo, storeId: input.storeId, salesOrderId: input.salesOrderId, salesOrderItemId: l.salesOrderItemId, customerId: input.customerId, deviceId: l.deviceId, policyId: l.policyId, categoryId: l.categoryId, bizDate: input.bizDate, basePriceFen: l.baseFen, subsidyFen: l.subsidyFen, qualificationCode: input.code },
-    });
+    try {
+      await tx.subsidyClaim.create({
+        data: { claimNo, storeId: input.storeId, salesOrderId: input.salesOrderId, salesOrderItemId: l.salesOrderItemId, customerId: input.customerId, deviceId: l.deviceId, policyId: l.policyId, categoryId: l.categoryId, bizDate: input.bizDate, basePriceFen: l.baseFen, subsidyFen: l.subsidyFen, qualificationCode: input.code },
+      });
+    } catch (error) {
+      // 两家店同时用同一个资格码：先查后插都查不到，最后靠部分唯一索引 subsidy_claims_code_active_key 拦下
+      if (isUniqueViolation(error)) throw new SubsidyError("这个资格码刚被别的单用了，一个码只能补一台");
+      throw error;
+    }
   }
 }
 
@@ -216,7 +226,9 @@ export async function submitClaimTx(tx: Tx, user: CurrentUser, id: number, invoi
   const claim = await lockClaim(tx, user, id);
   if (claim.status !== "PENDING" && claim.status !== "REJECTED") throw new SubsidyError("待提交、被驳回的国补单才能提交审核");
   // 不填就用这张销售单已经开好的发票号码（口径第 16 节）
-  const invoice = text(invoiceNo, 30) || claim.invoiceNo || (await issuedInvoiceNumber(tx, claim.salesOrderId)) || "";
+  const typed = typeof invoiceNo === "string" ? invoiceNo.trim() : "";
+  if (typed.length > 30) throw new SubsidyError("发票号是 6～30 位字母数字");
+  const invoice = typed || claim.invoiceNo || (await issuedInvoiceNumber(tx, claim.salesOrderId)) || "";
   if (!invoice) throw new SubsidyError("这张销售单还没开票：先申请开票、等总部开好，或者直接填发票号");
   if (!/^[A-Za-z0-9-]{6,30}$/.test(invoice)) throw new SubsidyError("发票号是 6～30 位字母数字");
   await tx.subsidyClaim.update({ where: { id }, data: { status: "SUBMITTED", invoiceNo: invoice, submittedAt: new Date(), rejectReason: null } });
@@ -227,7 +239,7 @@ export async function submitClaimTx(tx: Tx, user: CurrentUser, id: number, invoi
 
 async function applyLinesTx(tx: Tx, user: CurrentUser, lines: PlatformResultLine[], source: "FILE" | "SIMULATED") {
   const now = new Date();
-  const result = { applied: 0, skipped: [] as { code: string; reason: string }[], unmatched: [] as string[] };
+  const result = { applied: 0, skipped: [] as { code: string; reason: string }[], unmatched: [] as string[], amountDiff: [] as { claimNo: string; subsidyFen: number; settledFen: number }[] };
   for (const line of lines) {
     const claim = await tx.subsidyClaim.findFirst({ where: { qualificationCode: line.code, status: { notIn: ["CANCELLED", "RETURNED"] } }, orderBy: { id: "desc" } });
     if (!claim) {
@@ -248,9 +260,10 @@ async function applyLinesTx(tx: Tx, user: CurrentUser, lines: PlatformResultLine
           ? { status: "REJECTED", reviewedAt: now, rejectReason: line.reason ?? "平台驳回（没写原因）" }
           : { status: "SETTLED", reviewedAt: fresh.reviewedAt ?? now, settledAt: now, settledFen: line.amountFen > 0 ? line.amountFen : fresh.subsidyFen };
     await tx.subsidyClaim.update({ where: { id: claim.id }, data });
+    if (step.next === "SETTLED" && line.amountFen > 0 && line.amountFen !== fresh.subsidyFen) result.amountDiff.push({ claimNo: fresh.claimNo, subsidyFen: fresh.subsidyFen, settledFen: line.amountFen });
     result.applied++;
   }
-  await writeAudit({ userId: user.id, action: "subsidy.import", entity: "subsidy_claim", detail: { source, lines: lines.length, applied: result.applied, skipped: result.skipped.length, unmatched: result.unmatched.length } }, tx);
+  await writeAudit({ userId: user.id, action: "subsidy.import", entity: "subsidy_claim", detail: { source, lines: lines.length, applied: result.applied, skipped: result.skipped.length, unmatched: result.unmatched.length, amountDiff: result.amountDiff.length } }, tx);
   return result;
 }
 
@@ -373,14 +386,16 @@ export async function subsidySummary(user: CurrentUser, query: { storeId?: numbe
     where: { AND: [storeScopeWhere(user), query.storeId ? { storeId: query.storeId } : {}] },
     select: { status: true, subsidyFen: true, settledFen: true, bizDate: true, store: { select: { id: true, code: true, name: true } } },
   });
-  type Agg = { storeId: number; label: string; receivableFen: number; monthFen: number; monthCount: number; rejectedFen: number; returnDueFen: number; settledFen: number };
+  type Agg = { storeId: number; label: string; receivableFen: number; monthFen: number; monthCount: number; rejectedFen: number; returnDueFen: number; settledFen: number; shortFen: number };
   const byStore = new Map<number, Agg>();
   for (const r of rows) {
-    const a = byStore.get(r.store.id) ?? { storeId: r.store.id, label: `${r.store.code} ${r.store.name}`, receivableFen: 0, monthFen: 0, monthCount: 0, rejectedFen: 0, returnDueFen: 0, settledFen: 0 };
+    const a = byStore.get(r.store.id) ?? { storeId: r.store.id, label: `${r.store.code} ${r.store.name}`, receivableFen: 0, monthFen: 0, monthCount: 0, rejectedFen: 0, returnDueFen: 0, settledFen: 0, shortFen: 0 };
     if (SUBSIDY_RECEIVABLE_STATUSES.includes(r.status)) a.receivableFen += r.subsidyFen;
     if (r.status === "REJECTED") a.rejectedFen += r.subsidyFen;
     if (r.status === "RETURN_DUE") a.returnDueFen += r.settledFen ?? r.subsidyFen;
     if (r.status === "SETTLED") a.settledFen += r.settledFen ?? 0;
+    // 到账差额：应到（补贴）− 实到，少到账为正、多到账为负
+    if (r.status === "SETTLED" && r.settledFen !== null) a.shortFen += r.subsidyFen - r.settledFen;
     if (r.status !== "CANCELLED" && r.bizDate >= from && r.bizDate < to) {
       a.monthFen += r.subsidyFen;
       a.monthCount++;
@@ -389,7 +404,7 @@ export async function subsidySummary(user: CurrentUser, query: { storeId?: numbe
   }
   const stores = Array.from(byStore.values()).sort((x, y) => y.receivableFen - x.receivableFen);
   const sum = (k: keyof Omit<Agg, "storeId" | "label">) => stores.reduce((s, a) => s + a[k], 0);
-  return { stores, total: { receivableFen: sum("receivableFen"), monthFen: sum("monthFen"), monthCount: sum("monthCount"), rejectedFen: sum("rejectedFen"), returnDueFen: sum("returnDueFen"), settledFen: sum("settledFen") } };
+  return { stores, total: { receivableFen: sum("receivableFen"), monthFen: sum("monthFen"), monthCount: sum("monthCount"), rejectedFen: sum("rejectedFen"), returnDueFen: sum("returnDueFen"), settledFen: sum("settledFen"), shortFen: sum("shortFen") } };
 }
 
 /** 销售单详情里的国补单 */

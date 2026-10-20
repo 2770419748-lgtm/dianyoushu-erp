@@ -258,6 +258,9 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
       bizDate,
       code: subsidy.code,
       lines: subsidy.picks.map((p) => ({ salesOrderItemId: itemIds[p.key]!, deviceId: lines[p.key]!.deviceId!, policyId: p.policyId, categoryId: p.categoryId, baseFen: p.baseFen, subsidyFen: p.subsidyFen })),
+    }).catch((error: unknown) => {
+      if (error instanceof SubsidyError) throw new SalesError(error.message); // 资格码刚被别的单用了
+      throw error;
     });
   }
 

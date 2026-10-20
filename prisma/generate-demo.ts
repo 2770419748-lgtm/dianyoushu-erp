@@ -562,7 +562,7 @@ async function main() {
         const lineFen = Math.round((item.lineTotalFen * 1) / item.qty) + (svcItem ? svcItem.lineTotalFen : 0);
         const subsidyClaim = out.subsidyClaims.find((c) => c.salesOrderItemId === item.id);
         const refundFen = Math.min(cashPaid, Math.max(0, Math.round((lineFen * sale.totalFen) / sale.subtotalFen) - (subsidyClaim?.subsidyFen ?? 0)));
-        if (subsidyClaim) cancelClaim(subsidyClaim, t);
+        if (subsidyClaim) cancelClaim(subsidyClaim, t, day);
         const invoice = invoiceBySale.get(sale.id);
         if (invoice) invoiceAfterReturn(invoice, t, day);
         const method = salePays.find((p) => p.method !== "TRADE_IN" && p.method !== "SUBSIDY")?.method ?? "CASH";
@@ -672,6 +672,7 @@ async function main() {
         if (tradeInId) pays.push({ id: ++ids.payment, salesOrderId: saleId, returnOrderId: null, method: "TRADE_IN", amountFen: tradeInFen, tradeInOrderId: tradeInId, reference: out.tradeIns[tradeInId - 1]!.orderNo as string, createdAt: plan.time });
         // 国补：这台新机按分摊整单优惠后的成交价算，6000 元以内补 15%、最多 500 元；客户这一类用过就不补
         let claim: SubsidyRec | null = null;
+        let lateReturnDay: number | null = null; // 到账之后才退货的（演示“需退回”“已退回”）
         if (wantSubsidy && customerId && newDeviceItem?.deviceId && plan.deviceSku) {
           const categoryId = plan.deviceSku.model.categoryId;
           const policy = policyByCategory.get(categoryId)!;
@@ -684,6 +685,11 @@ async function main() {
             subsidyUsed.set(customerId, new Set([...(subsidyUsed.get(customerId) ?? []), categoryId]));
             pays.push({ id: ++ids.payment, salesOrderId: saleId, returnOrderId: null, method: "SUBSIDY", amountFen: fen, tradeInOrderId: null, reference: code, createdAt: plan.time });
             advanceClaim(claim, -day);
+            // 少数到账之后才退货：退货排在到账后两三天，国补单变需退回（早一点的总部已经退回平台）
+            if (claim.status === "SETTLED" && claim.settledAt && chance(0.012)) {
+              const rd = day + Math.ceil((claim.settledAt.getTime() - plan.time.getTime()) / DAY_MS) + between(2, 4);
+              if (rd <= -1) lateReturnDay = rd;
+            }
             out.subsidyClaims.push(claim);
           }
         }
@@ -747,6 +753,9 @@ async function main() {
         if (chance(0.015)) {
           const rd = day + between(1, 5);
           if (rd <= -1) scheduledReturns.set(rd, [...(scheduledReturns.get(rd) ?? []), saleId]);
+          returnScheduled.add(saleId);
+        } else if (lateReturnDay !== null) {
+          scheduledReturns.set(lateReturnDay, [...(scheduledReturns.get(lateReturnDay) ?? []), saleId]);
           returnScheduled.add(saleId);
         }
       }
@@ -1428,11 +1437,17 @@ function advanceClaim(c: SubsidyRec, age: number) {
 }
 
 /** 作废、退货时的国补单：到账在这之前的要退回平台，没到账的撤销（这之后才会发生的提交、审核、到账都不算） */
-function cancelClaim(c: SubsidyRec, t: Date) {
+function cancelClaim(c: SubsidyRec, t: Date, day = 0) {
   if (c.settledAt && c.settledAt < t) {
     c.status = "RETURN_DUE";
     c.cancelledAt = t;
     c.updatedAt = t;
+    // 一周以前退的，总部已经把钱退回平台了
+    if (day <= -7) {
+      c.status = "RETURNED";
+      c.returnedAt = new Date(t.getTime() + 3 * DAY_MS);
+      c.updatedAt = c.returnedAt;
+    }
     return;
   }
   if (c.submittedAt && c.submittedAt > t) {

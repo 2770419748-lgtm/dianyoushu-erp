@@ -42,6 +42,11 @@ describe("国补：算补贴", () => {
     expect(used.notes[0]).toContain("已经用过一次手机国补");
 
     expect(planSubsidy([{ key: 0, categoryId: 10, baseFen: 299900 }], [phone], new Set(), d("2027-03-01")).picks).toEqual([]); // 政策过期
+
+    // 改价到几分钱：补贴四舍五入是 0，不能补，提示说清楚是太低不是太贵
+    const tooLow = planSubsidy([{ key: 0, categoryId: 10, baseFen: 3 }], [phone], new Set(), today);
+    expect(tooLow.picks).toEqual([]);
+    expect(tooLow.notes[0]).toContain("成交价太低");
   });
 });
 

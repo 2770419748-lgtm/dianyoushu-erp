@@ -93,9 +93,12 @@ export function planSubsidy(candidates: SubsidyCandidate[], policies: SubsidyPol
       notes.push(`这位客户 ${ymd(policy.startsOn)} 以来已经用过一次${policy.categoryName}国补，每人每类只能一台`);
       continue;
     }
-    const eligible = candidates.filter((c) => c.categoryId === categoryId && c.baseFen > 0 && c.baseFen <= policy.priceCapFen);
+    const inCategory = candidates.filter((c) => c.categoryId === categoryId);
+    // 成交价不超过上限、算出来的补贴大于 0（改价到几分钱的，补贴四舍五入是 0，不能补）
+    const eligible = inCategory.filter((c) => c.baseFen <= policy.priceCapFen && subsidyFenOf(c.baseFen, policy) > 0);
     if (eligible.length === 0) {
-      notes.push(`${policy.categoryName}成交价超过 ${(policy.priceCapFen / 100).toFixed(0)} 元，不能补`);
+      const tooHigh = inCategory.some((c) => c.baseFen > policy.priceCapFen);
+      notes.push(tooHigh ? `${policy.categoryName}成交价超过 ${(policy.priceCapFen / 100).toFixed(0)} 元，不能补` : `${policy.categoryName}成交价太低，算出来的补贴是 0，不能用国补`);
       continue;
     }
     for (const e of eligible) picks.push({ key: e.key, policyId: policy.id, categoryId, baseFen: e.baseFen, subsidyFen: subsidyFenOf(e.baseFen, policy) });

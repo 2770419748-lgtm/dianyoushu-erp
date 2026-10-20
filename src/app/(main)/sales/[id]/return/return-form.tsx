@@ -90,7 +90,7 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
     >
       {ctx.todayClosed ? <Alert type="warning" showIcon title="这家店今天已经日结确认了，不能再退货；确实要退请总部先撤销今天的日结。" style={{ marginBottom: 16 }} /> : null}
       <Typography.Paragraph type="secondary">
-        勾选要退的机器、填配件数量。退回后机器回在库（回收机回良品）、配件加回数量；退掉的碎屏险、延保跟着失效。退款走原单用过的收款方式；以旧换新抵扣的 {formatFen(ctx.tradeInFen)} 元不退（旧机已回收）。{ctx.subsidyFen > 0 ? `国补立减的 ${formatFen(ctx.subsidyFen)} 元是平台出的，不退给顾客；退了补贴的机器，国补单跟着撤销（已到账的要退回平台）。` : ""}
+        勾选要退的机器、填配件数量。退回后机器回在库（回收机回良品）、配件加回数量；退掉的碎屏险、延保跟着失效。退款走原单用过的收款方式；{ctx.tradeInFen > 0 ? `以旧换新抵扣的 ${formatFen(ctx.tradeInFen)} 元不退（旧机已回收）。` : ""}{ctx.subsidyFen > 0 ? `国补立减的 ${formatFen(ctx.subsidyFen)} 元是平台出的，不退给顾客；退了补贴的机器，国补单跟着撤销（已到账的要退回平台）。` : ""}
       </Typography.Paragraph>
       <Table rowKey="id" size="small" pagination={false} columns={columns} dataSource={ctx.items} scroll={{ x: true }} />
       {orphanServices.length > 0 ? (

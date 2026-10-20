@@ -21,8 +21,8 @@ async function run(fn: () => Promise<string | void>): Promise<SubsidyActionResul
   }
 }
 
-function summary(r: { applied: number; skipped: unknown[]; unmatched: unknown[] }): string {
-  return `处理了 ${r.applied} 张${r.skipped.length ? `，${r.skipped.length} 行状态不对没处理` : ""}${r.unmatched.length ? `，${r.unmatched.length} 行找不到国补单` : ""}`;
+function summary(r: { applied: number; skipped: unknown[]; unmatched: unknown[]; amountDiff: unknown[] }): string {
+  return `处理了 ${r.applied} 张${r.skipped.length ? `，${r.skipped.length} 行状态不对没处理` : ""}${r.unmatched.length ? `，${r.unmatched.length} 行找不到国补单` : ""}${r.amountDiff.length ? `，${r.amountDiff.length} 张到账金额和补贴不一样（看“到账差额”）` : ""}`;
 }
 
 export async function submitClaimAction(id: number, invoiceNo: string) {

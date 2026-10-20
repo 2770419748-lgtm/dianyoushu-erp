@@ -6,7 +6,7 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { createReturnTx } from "@/server/sales/return-service";
 import { createSalesOrderTx, voidSalesOrderTx } from "@/server/sales/sales-service";
 import { receiveDevices } from "@/server/stock/stock-service";
-import { importPlatformResults, markReturnedTx, simulateReview, simulateSettle, submitClaimTx } from "@/server/subsidy/subsidy-service";
+import { createClaimsTx, importPlatformResults, markReturnedTx, savePolicy, simulateReview, simulateSettle, submitClaimTx } from "@/server/subsidy/subsidy-service";
 import { runIntegrityChecks } from "../prisma/integrity-checks";
 
 // 国补（口径第 15 节，连本机库，事务回滚不留数据）：开单立减和校验、作废退货撤销、提交审核、平台结果、模拟器、对账自检第 9 类。
@@ -84,6 +84,28 @@ async function subsidizedSale(tx: Prisma.TransactionClient, seed: number, opts: 
 }
 
 describe("国补（连本机库，事务回滚）", () => {
+  it("政策日期要是真实日期：2026-02-30 不能存（不会滚成 3 月 2 日）", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const f = fixture;
+    await expect(savePolicy(f.hq, { categoryId: f.phoneCategoryId, rateBp: 1500, capFen: 50000, priceCapFen: 600000, startsOn: "2026-02-30", endsOn: "2026-12-31" })).rejects.toThrow("不是一个真实的日期");
+  });
+
+  it("同一个资格码已经在没撤销的国补单上：再建国补单被数据库唯一索引拦下，换成人话", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const f = fixture;
+    await inRolledBackTx(async (tx) => {
+      await setPolicy(tx);
+      const first = await subsidizedSale(tx, 41);
+      const claim = await tx.subsidyClaim.findFirstOrThrow({ where: { salesOrderId: first.saleId } });
+      const customer = await tx.customer.create({ data: { name: "国补测试", phone: "19600000042" } });
+      const [deviceId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.phoneSkuId, devices: [{ sn: null, imei1: imei(42), imei2: null }], costFen: 100000, docType: "PURCHASE_RECEIPT", docNo: "RI-GB-42", operatorId: f.hq.id });
+      const plain = await createSalesOrderTx(tx, f.hq, { storeId: f.storeId, customerId: customer.id, items: [{ deviceId }], paymentMethod: "CASH" });
+      const item = await tx.salesOrderItem.findFirstOrThrow({ where: { orderId: plain.id } });
+      // 模拟“另一家店同时开单、先查都没查到”：直接建第二张，用同一个码
+      await expect(createClaimsTx(tx, { storeId: f.storeId, salesOrderId: plain.id, customerId: customer.id, bizDate: claim.bizDate, code: claim.qualificationCode, lines: [{ salesOrderItemId: item.id, deviceId: deviceId!, policyId: claim.policyId, categoryId: claim.categoryId, baseFen: f.priceFen, subsidyFen: 100 }] })).rejects.toThrow("刚被别的单用了");
+    });
+  });
+
   it("开单用国补：生成国补单和一笔“国补立减”，顾客付应收减补贴；校验客户、资格码、每人每类一台", async (ctx) => {
     if (!fixture) return ctx.skip();
     const f = fixture;
@@ -153,6 +175,7 @@ describe("国补（连本机库，事务回滚）", () => {
       const claim = await tx.subsidyClaim.findFirstOrThrow({ where: { salesOrderId: saleId } });
       if (f.regional) await expect(submitClaimTx(tx, f.regional, claim.id, "FP2026102100")).rejects.toThrow("不能提交");
       await expect(submitClaimTx(tx, f.staff, claim.id, "")).rejects.toThrow("发票号");
+      await expect(submitClaimTx(tx, f.staff, claim.id, "F".repeat(31))).rejects.toThrow("6～30 位"); // 超长不截断
       await submitClaimTx(tx, f.staff, claim.id, "FP2026102100");
       expect(await tx.subsidyClaim.findUniqueOrThrow({ where: { id: claim.id } })).toMatchObject({ status: "SUBMITTED", invoiceNo: "FP2026102100" });
       await expect(submitClaimTx(tx, f.staff, claim.id, "FP2026102100")).rejects.toThrow("待提交、被驳回");
@@ -179,6 +202,8 @@ describe("国补（连本机库，事务回滚）", () => {
       const csv = `核销码,结果,金额（元）,原因\n${a},通过,,\n${b},驳回,,串号照片看不清\n${c},已到账,300.00,\n${pending},已到账,,\nNOSUCHCODE01,通过,,`;
       const r = await importPlatformResults(f.hq, csv, tx);
       expect([r.applied, r.skipped.length, r.unmatched]).toEqual([3, 1, ["NOSUCHCODE01"]]);
+      // 到账 300 元和补贴不一样：列出来
+      expect(r.amountDiff.map((x) => x.settledFen)).toEqual([30000]);
       const byCode = async (code: string) => tx.subsidyClaim.findFirstOrThrow({ where: { qualificationCode: code } });
       expect((await byCode(a)).status).toBe("APPROVED");
       expect(await byCode(b)).toMatchObject({ status: "REJECTED", rejectReason: "串号照片看不清" });

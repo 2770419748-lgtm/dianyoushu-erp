@@ -81,7 +81,12 @@ export function SubsidyView({ data, summary, query, stores }: { data: Data; summ
         <Space orientation="vertical" size={0}>
           <Tag color={SUBSIDY_STATUS_COLORS[r.status]}>{SUBSIDY_STATUS_LABELS[r.status]}</Tag>
           {r.rejectReason ? <Typography.Text type="danger">{r.rejectReason}</Typography.Text> : null}
-          {r.settledAt ? <Typography.Text type="secondary">{formatDate(r.settledAt)} 到账 {formatFen(r.settledFen ?? 0)}</Typography.Text> : null}
+          {r.settledAt ? (
+            <Typography.Text type={r.settledFen !== null && r.settledFen !== r.subsidyFen ? "warning" : "secondary"}>
+              {formatDate(r.settledAt)} 到账 {formatFen(r.settledFen ?? 0)}
+              {r.settledFen !== null && r.settledFen !== r.subsidyFen ? `（应到 ${formatFen(r.subsidyFen)}，差 ${formatFen(r.subsidyFen - r.settledFen)}）` : ""}
+            </Typography.Text>
+          ) : null}
         </Space>
       ),
     },
@@ -147,6 +152,7 @@ export function SubsidyView({ data, summary, query, stores }: { data: Data; summ
             <Statistic title="退货要退回平台" value={formatFen(t.returnDueFen)} styles={{ content: t.returnDueFen ? { color: "#d46b08" } : undefined }} />
           </Col>
         </Row>
+        {t.shortFen ? <Typography.Paragraph type="warning" style={{ marginTop: 12, marginBottom: 0 }}>平台到账比补贴{t.shortFen > 0 ? "少" : "多"} {formatFen(Math.abs(t.shortFen))} 元（看下面各店的“到账差额”和明细里标黄的单，找平台核对）。</Typography.Paragraph> : null}
         {summary.stores.length > 1 ? (
           <Table
             rowKey="storeId"
@@ -160,6 +166,7 @@ export function SubsidyView({ data, summary, query, stores }: { data: Data; summ
               { title: "应收（元）", dataIndex: "receivableFen", align: "right", render: (v: number) => formatFen(v) },
               { title: "本月补贴（元）", dataIndex: "monthFen", align: "right", render: (v: number) => formatFen(v) },
               { title: "已到账（元）", dataIndex: "settledFen", align: "right", render: (v: number) => formatFen(v) },
+              { title: "到账差额（元）", dataIndex: "shortFen", align: "right", render: (v: number) => (v ? <Typography.Text type="warning">{formatFen(v)}</Typography.Text> : "0.00") },
               { title: "被驳回（元）", dataIndex: "rejectedFen", align: "right", render: (v: number) => (v ? <Typography.Text type="danger">{formatFen(v)}</Typography.Text> : "0.00") },
               { title: "要退回（元）", dataIndex: "returnDueFen", align: "right", render: (v: number) => (v ? <Typography.Text type="warning">{formatFen(v)}</Typography.Text> : "0.00") },
             ]}

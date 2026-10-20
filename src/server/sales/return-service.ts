@@ -122,7 +122,10 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
   if (refundFen > maxFen) {
     const paidLeft = maxRefundableFen(salePayments, refunded);
     const hasSubsidy = plans.some((p) => p.item.subsidyClaim);
-    throw new ReturnError(`这次退回的商品最多退 ${(maxFen / 100).toFixed(2)} 元${maxFen === paidLeft ? "（以旧换新抵扣、国补立减部分不退）" : hasSubsidy ? "（按退回的商品成交额减去国补算）" : "（按退回的商品成交额算）"}`);
+    // 只提本单真有的：用了以旧换新才说抵扣不退，用了国补才说国补不退
+    const notRefunded = [salePayments.some((p) => p.method === "TRADE_IN") ? "以旧换新抵扣" : "", salePayments.some((p) => p.method === "SUBSIDY") ? "国补立减" : ""].filter(Boolean);
+    const why = maxFen === paidLeft ? (notRefunded.length ? `（${notRefunded.join("、")}部分不退）` : "（不能超过还没退的实付）") : hasSubsidy ? "（按退回的商品成交额减去国补算）" : "（按退回的商品成交额算）";
+    throw new ReturnError(`这次退回的商品最多退 ${(maxFen / 100).toFixed(2)} 元${why}`);
   }
   const refundMethod = input.refundMethod as PaymentMethod;
   if (refundFen > 0) {
