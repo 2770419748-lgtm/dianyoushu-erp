@@ -22,6 +22,14 @@ export const CATEGORY_SEED = [
   { name: "手机", kind: "DEVICE" as const, sortOrder: 1 },
   { name: "平板", kind: "DEVICE" as const, sortOrder: 2 },
   { name: "配件", kind: "ACCESSORY" as const, sortOrder: 3 },
+  { name: "服务", kind: "ACCESSORY" as const, sortOrder: 4 }, // 碎屏险、延保：小件品类下的服务类商品，不管库存
+];
+
+/** 服务类商品（口径第 12 节）：开单生成服务权益，到期提醒。季度版碎屏险让演示数据里有快到期的 */
+export const SERVICE_SEED = [
+  { name: "碎屏险 1 年", months: 12, guideYuan: 199, costYuan: 80 },
+  { name: "碎屏险 季度版", months: 3, guideYuan: 69, costYuan: 25 },
+  { name: "延保 1 年", months: 12, guideYuan: 299, costYuan: 120 },
 ];
 
 const v = (storage: string, guideYuan: number) => ({ storage, guideYuan });
@@ -197,6 +205,21 @@ export async function seedProducts(prisma: PrismaClient) {
     skuCount++;
   }
 
+  // 服务类商品：一个服务一个型号一个 SKU，品牌记“门店服务”
+  const serviceBrand = await prisma.brand.upsert({ where: { name: "门店服务" }, update: { isActive: true }, create: { name: "门店服务" } });
+  const serviceCategoryId = categoryIds.get("服务")!;
+  for (const sv of SERVICE_SEED) {
+    const model = await prisma.productModel.upsert({
+      where: { brandId_name: { brandId: serviceBrand.id, name: sv.name } },
+      update: { categoryId: serviceCategoryId, isActive: true },
+      create: { brandId: serviceBrand.id, categoryId: serviceCategoryId, name: sv.name },
+    });
+    const barcode = stableBarcode(`门店服务|${sv.name}`);
+    const data = { modelId: model.id, name: sv.name, guidePriceFen: sv.guideYuan * 100, costPriceFen: sv.costYuan * 100, safetyQty: 0, isService: true, serviceMonths: sv.months };
+    await prisma.sku.upsert({ where: { barcode }, update: { ...data, isActive: true }, create: { ...data, barcode } });
+    skuCount++;
+  }
+
   // 回收用的"其他机型"：旧机对不上现有型号时选它，真实机型写在回收单上
   const otherBrand = await prisma.brand.upsert({ where: { name: "其他" }, update: { isActive: true }, create: { name: "其他" } });
   const otherModel = await prisma.productModel.upsert({
@@ -212,5 +235,5 @@ export async function seedProducts(prisma: PrismaClient) {
   });
   skuCount++;
 
-  return { models: DEVICE_MODEL_SEED.length + ACCESSORY_SEED.length, deviceModels: DEVICE_MODEL_SEED.length, accessories: ACCESSORY_SEED.length, skus: skuCount };
+  return { models: DEVICE_MODEL_SEED.length + ACCESSORY_SEED.length + SERVICE_SEED.length, deviceModels: DEVICE_MODEL_SEED.length, accessories: ACCESSORY_SEED.length, services: SERVICE_SEED.length, skus: skuCount };
 }

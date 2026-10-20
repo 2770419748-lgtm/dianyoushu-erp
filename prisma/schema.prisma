@@ -86,6 +86,22 @@ enum TradeInStatus {
   @@map("trade_in_status")
 }
 
+/// 服务权益状态（口径第 12 节）：过没过期按到期日算，不单独存
+enum EntitlementStatus {
+  ACTIVE // 有效
+  VOIDED // 失效：退货退掉了服务，或销售单作废
+
+  @@map("entitlement_status")
+}
+
+/// 到期提醒的档位：剩 8～30 天一档、剩 0～7 天一档，每档对同一条权益只提醒一次
+enum ReminderStage {
+  T30 // 剩 8～30 天
+  T7  // 剩 0～7 天
+
+  @@map("reminder_stage")
+}
+
 enum DailyCloseStatus {
   PENDING   // 未确认
   CONFIRMED // 已确认
@@ -169,6 +185,7 @@ model Store {
   returnOrders    ReturnOrder[]
   tradeInOrders   TradeInOrder[]
   dailyCloses     DailyClose[]
+  entitlements    ServiceEntitlement[]
   kpiTargets      KpiTarget[]
 
   @@index([regionId])
@@ -207,6 +224,7 @@ model User {
   dailyClosesConfirmed  DailyClose[]
   ledgers               StockLedger[]
   auditLogs             AuditLog[]
+  remindersContacted    EntitlementReminder[]
 
   @@index([storeId])
   @@index([regionId])
@@ -271,6 +289,8 @@ model Sku {
   guidePriceFen Int      @map("guide_price_fen") // 指导价
   costPriceFen  Int      @default(0) @map("cost_price_fen") // 参考成本（小件按它算毛利）
   safetyQty     Int      @default(0) @map("safety_qty") // 小件安全库存：门店数量低于它标红；0 = 不预警
+  isService     Boolean  @default(false) @map("is_service") // 服务类商品（碎屏险、延保）：开单生成权益，不管库存
+  serviceMonths Int?     @map("service_months") // 服务期限（月），服务类必填 1～120（数据库 CHECK）
   isActive      Boolean  @default(true) @map("is_active")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
@@ -288,6 +308,7 @@ model Sku {
   salesItems      SalesOrderItem[]
   returnItems     ReturnOrderItem[]
   tradeInOrders   TradeInOrder[]
+  entitlements    ServiceEntitlement[]
 
   @@index([modelId])
   @@map("skus")
@@ -340,6 +361,7 @@ model Device {
   stocktakeItems StocktakeItem[]
   salesItems     SalesOrderItem[]
   returnItems    ReturnOrderItem[]
+  entitlements   ServiceEntitlement[]
 
   @@index([storeId, status])
   @@index([skuId])
@@ -579,6 +601,7 @@ model Customer {
   salesOrders   SalesOrder[]
   returnOrders  ReturnOrder[]
   tradeInOrders TradeInOrder[]
+  entitlements  ServiceEntitlement[]
 
   @@map("customers")
 }
@@ -614,6 +637,7 @@ model SalesOrder {
   items        SalesOrderItem[]
   payments     Payment[]
   returnOrders ReturnOrder[]
+  entitlements ServiceEntitlement[]
 
   @@index([storeId, bizDate])
   @@index([salespersonId, bizDate])
@@ -639,6 +663,7 @@ model SalesOrderItem {
   device Device?    @relation(fields: [deviceId], references: [id])
 
   returnItems ReturnOrderItem[]
+  entitlement ServiceEntitlement?
 
   @@index([orderId])
   @@index([deviceId])
@@ -804,6 +829,54 @@ model KpiTarget {
 
   @@unique([storeId, year, month])
   @@map("kpi_targets")
+}
+
+/// 服务权益（碎屏险、延保）：开单时每个服务行一条；退货退掉服务或销售单作废时置失效，不删除（口径第 12 节）
+model ServiceEntitlement {
+  id               Int               @id @default(autoincrement())
+  customerId       Int               @map("customer_id")
+  storeId          Int               @map("store_id") // 开单门店：到期名单按门店范围看
+  salesOrderId     Int               @map("sales_order_id")
+  salesOrderItemId Int               @unique @map("sales_order_item_id") // 服务行一行一份
+  skuId            Int               @map("sku_id")
+  deviceId         Int?              @map("device_id") // 保的哪台机器：开单时店员选，同单没有机器时为空
+  startedOn        DateTime          @map("started_on") @db.Date // 生效日 = 销售单营业日
+  expiresOn        DateTime          @map("expires_on") @db.Date // 到期日（当天 24:00 失效），数据库 CHECK >= 生效日
+  status           EntitlementStatus @default(ACTIVE)
+  voidedAt         DateTime?         @map("voided_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  customer       Customer       @relation(fields: [customerId], references: [id])
+  store          Store          @relation(fields: [storeId], references: [id])
+  salesOrder     SalesOrder     @relation(fields: [salesOrderId], references: [id])
+  salesOrderItem SalesOrderItem @relation(fields: [salesOrderItemId], references: [id])
+  sku            Sku            @relation(fields: [skuId], references: [id])
+  device         Device?        @relation(fields: [deviceId], references: [id])
+
+  reminders EntitlementReminder[]
+
+  @@index([customerId, status])
+  @@index([storeId, expiresOn])
+  @@index([expiresOn, status])
+  @@map("service_entitlements")
+}
+
+/// 到期提醒：扫描时每条权益每档生成一条（唯一约束保证只提醒一次），门店跟进后记“已联系”
+model EntitlementReminder {
+  id            Int           @id @default(autoincrement())
+  entitlementId Int           @map("entitlement_id")
+  stage         ReminderStage
+  contactedAt   DateTime?     @map("contacted_at") // 门店联系过客户的时间
+  contactedById Int?          @map("contacted_by_id")
+  note          String? // 联系结果，如“已续保”“不需要”
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  entitlement ServiceEntitlement @relation(fields: [entitlementId], references: [id])
+  contactedBy User?              @relation(fields: [contactedById], references: [id])
+
+  @@unique([entitlementId, stage])
+  @@map("entitlement_reminders")
 }
 
 /// 操作日志：谁、什么时候、做了什么、对哪条记录

@@ -33,6 +33,9 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
   const refundFen = refundYuan === null ? suggestedFen : yuanToFen(refundYuan) || 0;
   const overCap = refundFen > capFen;
   const selectedCount = Object.values(qtys).filter((q) => q > 0).length;
+  // 退了机器、却没退保这台机器的服务：提醒一下（不强制，客户可能只退机器）
+  const returningDevices = new Set(ctx.items.filter((i) => i.deviceId && (qtys[i.id] ?? 0) > 0).map((i) => i.deviceId));
+  const orphanServices = ctx.items.filter((i) => i.serviceForDeviceId && returningDevices.has(i.serviceForDeviceId) && i.returnableQty > 0 && (qtys[i.id] ?? 0) === 0);
 
   const columns: TableColumnsType<Item> = [
     {
@@ -75,9 +78,17 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
     >
       {ctx.todayClosed ? <Alert type="warning" showIcon title="这家店今天已经日结确认了，不能再退货；确实要退请总部先撤销今天的日结。" style={{ marginBottom: 16 }} /> : null}
       <Typography.Paragraph type="secondary">
-        勾选要退的机器、填配件数量。退回后机器回在库（回收机回良品）、配件加回数量。退款走原单用过的收款方式；以旧换新抵扣的 {formatFen(ctx.tradeInFen)} 元不退（旧机已回收）。
+        勾选要退的机器、填配件数量。退回后机器回在库（回收机回良品）、配件加回数量；退掉的碎屏险、延保跟着失效。退款走原单用过的收款方式；以旧换新抵扣的 {formatFen(ctx.tradeInFen)} 元不退（旧机已回收）。
       </Typography.Paragraph>
       <Table rowKey="id" size="small" pagination={false} columns={columns} dataSource={ctx.items} scroll={{ x: true }} />
+      {orphanServices.length > 0 ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginTop: 12 }}
+          title={`要退的机器还买了 ${orphanServices.map((i) => i.name).join("、")}：客户不要这台机器了，一般服务也一起退（勾上它）；不退的话服务照常有效。`}
+        />
+      ) : null}
       <Space orientation="vertical" style={{ marginTop: 16 }} size="middle">
         <Typography.Text>
           原单应收 {formatFen(ctx.order.totalFen)} 元，已退 {formatFen(ctx.refundedFen)} 元；这次勾选的商品最多退 <Typography.Text strong>{formatFen(capFen)}</Typography.Text> 元

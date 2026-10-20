@@ -51,6 +51,8 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "trade_in.create": "开回收单",
   "trade_in.refurbish": "回收机转良品",
   "return.create": "退货",
+  "entitlement.reminder_scan": "生成到期提醒",
+  "entitlement.reminder_contacted": "到期提醒已联系",
   "daily_close.confirm": "日结确认",
   "daily_close.reopen": "撤销日结",
 };
@@ -72,6 +74,7 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   return_order: "退货单",
   device: "机器",
   daily_close: "日结",
+  entitlement_reminder: "到期提醒",
 };
 
 export function auditActionLabel(action: string): string {

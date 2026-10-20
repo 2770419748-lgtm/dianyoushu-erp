@@ -106,6 +106,16 @@ export function canManageKpi(role: Role): boolean {
   return role === "HQ";
 }
 
+/** 谁能跟进到期提醒（记“已联系”）：店员、店长、总部；区域经理只看 */
+export function canFollowUpReminders(role: Role): boolean {
+  return role === "STAFF" || role === "STORE_MANAGER" || role === "HQ";
+}
+
+/** 谁能手动生成到期提醒：店长（本店）、总部 */
+export function canRunReminderScan(role: Role): boolean {
+  return role === "STORE_MANAGER" || role === "HQ";
+}
+
 /** 谁能看成本（机器成本、商品参考成本、销售明细成本）：店长、区域经理、总部；店员拿到的数据里就是 0（2026-10-18 坤总定） */
 export function canSeeCost(role: Role): boolean {
   return role !== "STAFF";
@@ -131,6 +141,7 @@ const MENU_STAFF: MenuEntry[] = [
   { key: "stock", label: "查库存", href: "/stock" },
   { key: "products", label: "商品查价", href: "/products" },
   { key: "customers", label: "客户", href: "/customers" },
+  { key: "entitlements", label: "到期名单", href: "/entitlements" },
   { key: "sales-list", label: "我的订单", href: "/sales" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
@@ -157,6 +168,7 @@ const MENU_REGIONAL: MenuEntry[] = [
   { key: "stock", label: "库存", href: "/stock" },
   { key: "m-stock", label: "手机查库存", href: "/m/stock" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
+  { key: "entitlements", label: "到期名单", href: "/entitlements" },
   ROADMAP,
 ];
 
@@ -172,6 +184,7 @@ const MENU_HQ: MenuEntry[] = [
   { key: "sales-new", label: "开单", href: "/sales/new" },
   { key: "sales-list", label: "销售", href: "/sales" },
   { key: "customers", label: "客户", href: "/customers" },
+  { key: "entitlements", label: "到期名单", href: "/entitlements" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },

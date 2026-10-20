@@ -137,7 +137,7 @@ export async function getPurchaseOrderForEdit(user: CurrentUser, id: number) {
 /** 新建采购单时要选的商品：在售 SKU（带品类大件/小件） */
 export async function listSkuOptions() {
   return prisma.sku.findMany({
-    where: { isActive: true },
+    where: { isActive: true, isService: false }, // 碎屏险、延保这类服务没有库存，不用采购
     orderBy: [{ model: { brand: { name: "asc" } } }, { model: { name: "asc" } }, { name: "asc" }],
     select: {
       id: true,
@@ -152,9 +152,16 @@ export type SkuOption = Awaited<ReturnType<typeof listSkuOptions>>[number];
 
 // ---------- 采购单 ----------
 
+/** 服务类商品（碎屏险、延保）不进库存，不能开采购单 */
+async function assertNoServiceSkus(skuIds: number[]) {
+  const services = await prisma.sku.findMany({ where: { id: { in: skuIds }, isService: true }, select: { name: true } });
+  if (services.length > 0) throw new PurchaseError(`${services.map((s) => s.name).join("、")} 是服务类商品，不用采购入库`);
+}
+
 export async function createPurchaseOrder(actor: Actor, input: PurchaseOrderInput) {
   assertCanManage(actor);
   const data = parseOrder(input);
+  await assertNoServiceSkus(data.items.map((i) => i.skuId));
   const order = await prisma.$transaction(async (tx) => {
     const orderNo = await nextDocNo(tx, "PO");
     return tx.purchaseOrder.create({
@@ -175,6 +182,7 @@ export async function createPurchaseOrder(actor: Actor, input: PurchaseOrderInpu
 export async function updatePurchaseOrder(actor: Actor, id: number, input: PurchaseOrderInput) {
   assertCanManage(actor);
   const data = parseOrder(input);
+  await assertNoServiceSkus(data.items.map((i) => i.skuId));
   await prisma.$transaction(async (tx) => {
     // 锁住采购单再查状态：改单和提交、作废同时发生时排队，不会把已提交的单改掉
     if (!(await lockRow(tx, "purchase_orders", id))) throw new PurchaseError("采购单不存在");

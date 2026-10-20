@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { App, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag } from "antd";
+import { App, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag } from "antd";
 import type { TableColumnsType } from "antd";
 import { formatFen, yuanToFen } from "@/lib/format";
 import type { Catalog, SkuRow } from "@/server/products/product-service";
@@ -27,6 +27,8 @@ type SkuFormValues = {
   guidePriceYuan: number;
   costPriceYuan?: number;
   safetyQty?: number;
+  isService?: boolean;
+  serviceMonths?: number;
 };
 
 export function ProductsView({
@@ -89,6 +91,8 @@ export function ProductsView({
         guidePriceYuan: record.guidePriceFen / 100,
         costPriceYuan: record.costPriceFen / 100,
         safetyQty: record.safetyQty,
+        isService: record.isService,
+        serviceMonths: record.serviceMonths ?? undefined,
       });
     }
     setModal({ open: true, record });
@@ -104,6 +108,8 @@ export function ProductsView({
       guidePriceFen: yuanToFen(values.guidePriceYuan),
       costPriceFen: yuanToFen(values.costPriceYuan ?? 0),
       safetyQty: values.safetyQty ?? 0,
+      isService: values.isService === true,
+      serviceMonths: values.isService ? values.serviceMonths : undefined,
     };
     submit(
       () => (modal.record ? updateSkuAction(modal.record.id, input) : createSkuAction(input)),
@@ -121,6 +127,7 @@ export function ProductsView({
         <Space size={4}>
           {r.model.category.name}
           <Tag color={r.model.category.kind === "DEVICE" ? "blue" : "default"}>{r.model.category.kind === "DEVICE" ? "大件" : "小件"}</Tag>
+          {r.isService ? <Tag color="purple">服务 {r.serviceMonths} 个月</Tag> : null}
         </Space>
       ),
     },
@@ -249,6 +256,20 @@ export function ProductsView({
           <Form.Item name="safetyQty" label="安全库存（小件用，门店数量低于它标红；0 = 不预警）">
             <InputNumber min={0} precision={0} style={{ width: 160 }} />
           </Form.Item>
+          <Space size="large" align="start">
+            <Form.Item name="isService" label="服务类商品（碎屏险、延保）" valuePropName="checked" extra="开单时不扣库存、必须选客户，自动记保障到期日">
+              <Switch />
+            </Form.Item>
+            <Form.Item noStyle shouldUpdate={(a, b) => a.isService !== b.isService}>
+              {({ getFieldValue }) =>
+                getFieldValue("isService") ? (
+                  <Form.Item name="serviceMonths" label="服务期限（月）" rules={[{ required: true, message: "填 1 到 120 个月" }]}>
+                    <InputNumber min={1} max={120} precision={0} style={{ width: 120 }} />
+                  </Form.Item>
+                ) : null
+              }
+            </Form.Item>
+          </Space>
         </Form>
       </Modal>
     </Card>

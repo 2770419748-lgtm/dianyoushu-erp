@@ -4,6 +4,7 @@ import { PrismaClient } from "../src/generated/prisma/client";
 import type { DeviceStatus, LedgerDocType, PaymentMethod } from "../src/generated/prisma/enums";
 import { formatDate } from "../src/lib/format";
 import { describeIntegrity, integrityOk, runIntegrityChecks } from "./integrity-checks";
+import { daysUntil, entitlementExpiresOn } from "../src/lib/entitlement";
 
 // 模拟经营数据 v1（第 9 周）：10 家店、3 个月（截至昨天）的采购到货、销售、以旧换新、回收机转良品再卖、作废、退货、日结。
 // 规则和真实业务一致：库存每次变动都有流水、配件余额 = 流水合计、日结系统数 = 当天收款汇总。
@@ -126,7 +127,7 @@ const METHOD_WEIGHTS: [PaymentMethod, number][] = [
 
 // ---------- 内存里的行（id 自己分配，最后批量写） ----------
 type Row = Record<string, unknown>;
-const ids = { customer: 0, po: 0, poItem: 0, receipt: 0, receiptItem: 0, tradeIn: 0, device: 0, close: 0, closeLine: 0, sale: 0, saleItem: 0, payment: 0, ret: 0, retItem: 0, ledger: 0, kpi: 0 };
+const ids = { customer: 0, po: 0, poItem: 0, receipt: 0, receiptItem: 0, tradeIn: 0, device: 0, close: 0, closeLine: 0, sale: 0, saleItem: 0, payment: 0, ret: 0, retItem: 0, ledger: 0, kpi: 0, entitlement: 0, reminder: 0 };
 const out = {
   customers: [] as Row[],
   purchaseOrders: [] as Row[],
@@ -144,7 +145,24 @@ const out = {
   returnItems: [] as Row[],
   ledgers: [] as Row[],
   kpis: [] as Row[],
+  entitlements: [] as EntitlementRec[],
+  reminders: [] as Row[],
 };
+interface EntitlementRec {
+  id: number;
+  customerId: number;
+  storeId: number;
+  salesOrderId: number;
+  salesOrderItemId: number;
+  skuId: number;
+  deviceId: number | null;
+  startedOn: Date;
+  expiresOn: Date;
+  status: "ACTIVE" | "VOIDED";
+  voidedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 interface DeviceRec {
   id: number;
@@ -227,7 +245,11 @@ async function main() {
   if (!genericSku) throw new Error("缺少“回收机（其他机型）”SKU，先跑 pnpm db:seed");
 
   const deviceSkus = skus.filter((s) => s.model.category.kind === "DEVICE" && s.guidePriceFen > 0);
-  const accessorySkus = skus.filter((s) => s.model.category.kind === "ACCESSORY");
+  const accessorySkus = skus.filter((s) => s.model.category.kind === "ACCESSORY" && !s.isService);
+  // 服务类商品（碎屏险、延保）：买新机的约两成加一份，不进库存，单上必须有客户
+  const serviceSkus = skus.filter((s) => s.isService && s.serviceMonths);
+  const serviceSkuIds = new Set(serviceSkus.map((s) => s.id));
+  const SERVICE_WEIGHT: Record<string, number> = { "碎屏险 1 年": 5, "碎屏险 季度版": 3, "延保 1 年": 2 };
   const BRAND_WEIGHT: Record<string, number> = { 苹果: 3.2, 华为: 3, 小米: 2, 荣耀: 1.4, OPPO: 1.2, vivo: 1.2, 一加: 0.6, 三星: 0.4 };
   // 热销程度：品牌权重 × 价格越低越好卖 × 平板少一些
   const deviceWeight = (s: (typeof deviceSkus)[number]) =>
@@ -323,7 +345,7 @@ async function main() {
         const sale = saleById.get(saleId)!;
         if (sale.status !== "COMPLETED") continue;
         const items = out.saleItems.filter((i) => i.orderId === sale.id && i.returnedQty < i.qty);
-        const item = items.find((i) => i.deviceId) ?? items[0];
+        const item = items.find((i) => i.deviceId) ?? items.find((i) => !serviceSkuIds.has(i.skuId));
         if (!item) continue;
         const t = at(bizDate, between(10, 12), between(0, 59));
         const salePays = out.payments.filter((p) => p.salesOrderId === sale.id && p.amountFen > 0);
@@ -390,10 +412,19 @@ async function main() {
         }
 
         if (items.length === 0) continue; // 规划时的良品被前面的单卖掉了
+        // 买新机的约两成加一份服务，保的就是这台新机
+        let service: { item: SaleItemRec; months: number; deviceId: number } | null = null;
+        const newDeviceItem = plan.deviceSku ? items[items.length - 1 - plan.accessories.length] : undefined;
+        if (newDeviceItem?.deviceId && serviceSkus.length > 0 && chance(0.2)) {
+          const sv = weighted(serviceSkus, (x) => SERVICE_WEIGHT[x.name] ?? 1);
+          const item: SaleItemRec = { id: ++ids.saleItem, orderId: saleId, skuId: sv.id, deviceId: null, qty: 1, unitPriceFen: sv.guidePriceFen, discountFen: 0, lineTotalFen: sv.guidePriceFen, costFen: sv.costPriceFen, returnedQty: 0 };
+          items.push(item);
+          service = { item, months: sv.serviceMonths!, deviceId: newDeviceItem.deviceId };
+        }
         const subtotalFen = items.reduce((s, i) => s + i.lineTotalFen, 0);
         const discountFen = plan.deviceSku && chance(0.3) ? Math.min(between(5, 30) * 1000, Math.floor(subtotalFen * 0.08 / 1000) * 1000) : 0;
         const totalFen = subtotalFen - discountFen;
-        const customerId = customerFor(plan.tradeIn);
+        const customerId = customerFor(plan.tradeIn || service !== null);
 
         // 以旧换新：先收旧机（开单前 5 到 15 分钟）
         if (plan.tradeIn && customerId) {
@@ -432,6 +463,10 @@ async function main() {
         out.saleItems.push(...items);
         out.payments.push(...pays);
         saleById.set(saleId, sale);
+        const entitlement: EntitlementRec | null = service
+          ? { id: ++ids.entitlement, customerId: customerId!, storeId: store.id, salesOrderId: saleId, salesOrderItemId: service.item.id, skuId: service.item.skuId, deviceId: service.deviceId, startedOn: bizDate, expiresOn: entitlementExpiresOn(bizDate, service.months), status: "ACTIVE", voidedAt: null, createdAt: plan.time, updatedAt: plan.time }
+          : null;
+        if (entitlement) out.entitlements.push(entitlement);
 
         // 少量当天作废（不含以旧换新的单）：库存回来，收款不计入日结
         if (!tradeInId && chance(0.012)) {
@@ -441,6 +476,11 @@ async function main() {
           sale.voidedAt = t;
           sale.voidReason = pick(["客户反悔", "开错单", "价格录错"]);
           sale.updatedAt = t;
+          if (entitlement) {
+            entitlement.status = "VOIDED";
+            entitlement.voidedAt = t;
+            entitlement.updatedAt = t;
+          }
           for (const item of items) {
             if (item.deviceId) {
               const device = out.devices[item.deviceId - 1]!;
@@ -450,7 +490,7 @@ async function main() {
               device.updatedAt = t;
               if (back === "REFURBISHED") refurbished.push(device);
               else inStock.get(device.skuId)!.push(device);
-            } else {
+            } else if (!serviceSkuIds.has(item.skuId)) {
               const bal = (accessoryBal.get(item.skuId) ?? 0) + item.qty;
               accessoryBal.set(item.skuId, bal);
               ledger({ docType: "SALE_VOID", docNo: no, storeId: store.id, skuId: item.skuId, qtyDelta: item.qty, balanceAfter: bal, operatorId: manager.id, note: sale.voidReason, createdAt: t });
@@ -530,6 +570,8 @@ async function main() {
     customerPool = customerPool.slice(-400);
   }
 
+  buildReminders();
+
   // KPI 目标：已过完的月份 = 实际 × 0.9～1.15（完成率有高有低），当月 = 上月日均 × 当月天数 × 1.05
   buildKpis(stores.map((s) => s.id));
 
@@ -539,6 +581,26 @@ async function main() {
 }
 
 const accessoryRows: { storeId: number; skuId: number; qty: number }[] = [];
+
+/** 到期提醒：每档在进入区间那天（剩 30 天、剩 7 天，不早于开单日）早上 9 点生成；两天前的有六成门店已联系 */
+function buildReminders() {
+  const yesterday = bizDateOf(-1);
+  const salesById = new Map(out.sales.map((x) => [x.id, x]));
+  const NOTES = ["已续保", "客户说再考虑", "电话没接通，已发短信", "不需要续保", "约了周末来店"];
+  for (const e of out.entitlements) {
+    if (e.status !== "ACTIVE") continue;
+    const salespersonId = salesById.get(e.salesOrderId)!.salespersonId;
+    for (const [stage, days] of [["T30", 30], ["T7", 7]] as const) {
+      const windowEnd = stage === "T30" ? 8 : 0; // 这一档区间的最后一天（剩几天）
+      const enter = new Date(Math.max(e.expiresOn.getTime() - days * DAY_MS, e.startedOn.getTime()));
+      if (enter > yesterday || daysUntil(e.expiresOn, enter) < windowEnd) continue; // 还没到这一档，或者开单时就已经过了这一档
+      const createdAt = at(enter, 9, 0);
+      const contacted = daysUntil(yesterday, enter) >= 2 && chance(0.6);
+      const contactedAt = contacted ? at(new Date(enter.getTime() + between(0, 1) * DAY_MS), between(10, 20), between(0, 59)) : null;
+      out.reminders.push({ id: ++ids.reminder, entitlementId: e.id, stage, createdAt, contactedAt, contactedById: contacted ? salespersonId : null, note: contacted ? pick(NOTES) : null });
+    }
+  }
+}
 
 function buildKpis(storeIds: number[]) {
   const monthKey = (d: Date) => d.toISOString().slice(0, 7);
@@ -607,6 +669,8 @@ async function write() {
   await insert("退货单", out.returns, (c) => prisma.returnOrder.createMany({ data: c as never }));
   await insert("退货明细", out.returnItems, (c) => prisma.returnOrderItem.createMany({ data: c as never }));
   await insert("收款", out.payments as unknown as Row[], (c) => prisma.payment.createMany({ data: c as never }));
+  await insert("服务权益", out.entitlements as unknown as Row[], (c) => prisma.serviceEntitlement.createMany({ data: c as never }));
+  await insert("到期提醒", out.reminders, (c) => prisma.entitlementReminder.createMany({ data: c as never }));
   await insert("配件库存", accessoryRows, (c) => prisma.accessoryStock.createMany({ data: c as never }));
   await insert("库存流水", out.ledgers, (c) => prisma.stockLedger.createMany({ data: c as never }));
   await insert("KPI 目标", out.kpis, (c) => prisma.kpiTarget.createMany({ data: c as never }));
@@ -614,18 +678,18 @@ async function write() {
     await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   // 自己指定了 id，自增序列要跟上，后面正常开单才不会撞号
-  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets"];
+  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders"];
   for (const t of tables) {
     await prisma.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM "${t}"), 0), 1), (SELECT COUNT(*) > 0 FROM "${t}"))`);
   }
 }
 
-/** 自检：4 条对账 SQL 抽到 integrity-checks.ts，上线后 pnpm db:check 也用同一套 */
+/** 自检：对账 SQL 抽到 integrity-checks.ts，上线后 pnpm db:check 也用同一套 */
 async function verify() {
   const result = await runIntegrityChecks(prisma);
   const sales = out.sales.filter((s) => s.status === "COMPLETED");
   console.log(
-    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结。`,
+    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保。`,
   );
   console.log(`自检：${describeIntegrity(result)}`);
   if (!integrityOk(result)) process.exitCode = 1;

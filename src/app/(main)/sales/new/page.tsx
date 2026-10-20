@@ -2,7 +2,7 @@ import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { canSell } from "@/server/auth/permissions";
 import { listStoresInScope } from "@/server/org/store-query";
-import { listSellableAccessories } from "@/server/sales/sales-service";
+import { listSellableAccessories, listSellableServices } from "@/server/sales/sales-service";
 import { listAvailableTradeIns, listTradeInSkuOptions } from "@/server/tradein/trade-in-service";
 import { SaleForm } from "./sale-form";
 
@@ -21,8 +21,9 @@ export default async function NewSalePage({ searchParams }: PageProps<"/sales/ne
   if (stores.length === 0) return <NoAccess title="你没有可开单的门店" />;
   const requested = Number(one(params.storeId));
   const storeId = stores.some((s) => s.id === requested) ? requested : (user.storeId ?? stores[0]!.id);
-  const [accessories, tradeIns, tradeInSkuOptions] = await Promise.all([
+  const [accessories, services, tradeIns, tradeInSkuOptions] = await Promise.all([
     listSellableAccessories(user, storeId),
+    listSellableServices(user, storeId),
     listAvailableTradeIns(user, storeId),
     listTradeInSkuOptions(),
   ]);
@@ -33,6 +34,7 @@ export default async function NewSalePage({ searchParams }: PageProps<"/sales/ne
       stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))}
       storeId={storeId}
       accessories={accessories}
+      services={services}
       availableTradeIns={tradeIns}
       tradeInSkuOptions={tradeInSkuOptions}
     />

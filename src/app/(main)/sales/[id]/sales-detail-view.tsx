@@ -17,7 +17,22 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
   const [reason, setReason] = useState("");
 
   const itemColumns: TableColumnsType<Item> = [
-    { title: "商品", render: (_, i) => i.sku.name },
+    {
+      title: "商品",
+      render: (_, i) =>
+        i.entitlement ? (
+          <Space orientation="vertical" size={0}>
+            <span>
+              {i.sku.name} {i.entitlement.status === "VOIDED" ? <Tag>已失效</Tag> : null}
+            </span>
+            <Typography.Text type="secondary">
+              {i.entitlement.device ? `保 ${i.entitlement.device.code}，` : ""}到 {formatDate(i.entitlement.expiresOn)} 止
+            </Typography.Text>
+          </Space>
+        ) : (
+          i.sku.name
+        ),
+    },
     { title: "机器 / 数量", render: (_, i) => (i.device ? <Link href={`/stock/devices/${i.device.code}`}>{i.device.code}</Link> : `× ${i.qty}`) },
     {
       title: "单价（元）",
@@ -106,7 +121,12 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
           column={{ xs: 1, md: 3 }}
           items={[
             { key: "store", label: "门店", children: `${order.store.code} ${order.store.name}` },
-            { key: "customer", label: "客户", children: order.customer ? `${order.customer.name} ${order.customer.phoneMasked}` : "散客" },
+            {
+              key: "customer",
+              label: "客户",
+              // 客户详情只给店员、店长、总部（区域经理不进客户详情）
+              children: order.customer ? canSell ? <Link href={`/customers/${order.customer.id}`}>{order.customer.name} {order.customer.phoneMasked}</Link> : `${order.customer.name} ${order.customer.phoneMasked}` : "散客",
+            },
             { key: "sales", label: "销售员", children: order.salesperson.name },
             { key: "date", label: "营业日", children: formatDate(order.bizDate) },
             { key: "created", label: "开单时间", children: formatDateTime(order.createdAt) },

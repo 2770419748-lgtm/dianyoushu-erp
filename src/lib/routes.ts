@@ -17,6 +17,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/transfers/new": "新建调拨",
   "/stocktakes": "盘点",
   "/customers": "客户",
+  "/entitlements": "到期名单",
   "/sales": "销售单",
   "/sales/new": "开单",
   "/trade-ins": "回收单",

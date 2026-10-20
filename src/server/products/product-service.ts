@@ -244,6 +244,8 @@ export interface SkuInput {
   guidePriceFen: unknown;
   costPriceFen?: unknown;
   safetyQty?: unknown;
+  isService?: unknown; // 服务类商品（碎屏险、延保）
+  serviceMonths?: unknown; // 服务期限（月）
 }
 
 function parseSku(input: SkuInput) {
@@ -251,6 +253,9 @@ function parseSku(input: SkuInput) {
   if (barcode && !/^[A-Za-z0-9-]+$/.test(barcode)) throw new ProductError("条码只能是数字、字母和横线");
   const safetyQty = Number(input.safetyQty ?? 0);
   if (!Number.isInteger(safetyQty) || safetyQty < 0) throw new ProductError("安全库存必须是不小于 0 的整数");
+  const isService = input.isService === true;
+  const serviceMonths = isService ? Number(input.serviceMonths) : null;
+  if (serviceMonths !== null && (!Number.isInteger(serviceMonths) || serviceMonths < 1 || serviceMonths > 120)) throw new ProductError("服务期限要填 1 到 120 个月");
   return {
     modelId: requireId(input.modelId, "型号"),
     name: requireText(input.name, "商品名称", 80),
@@ -259,13 +264,31 @@ function parseSku(input: SkuInput) {
     barcode,
     guidePriceFen: requireFen(input.guidePriceFen, "指导价"),
     costPriceFen: requireFen(input.costPriceFen ?? 0, "参考成本"),
-    safetyQty,
+    safetyQty: isService ? 0 : safetyQty, // 服务没有库存，不预警
+    isService,
+    serviceMonths,
   };
+}
+
+/**
+ * 服务类商品的规矩（口径第 12 节）：建在小件品类下；有过库存记录的商品不能改成服务（库存对不上），
+ * 卖出过服务的不能改回普通商品（权益没法收回）。
+ */
+async function assertServiceSwitch(data: { modelId: number; isService: boolean }, skuId?: number) {
+  const model = await prisma.productModel.findUnique({ where: { id: data.modelId }, select: { category: { select: { kind: true } } } });
+  if (!model) throw new ProductError("型号不存在");
+  if (data.isService && model.category.kind !== "ACCESSORY") throw new ProductError("服务类商品要建在小件品类下（比如“服务”）");
+  if (skuId === undefined) return;
+  const current = await prisma.sku.findUnique({ where: { id: skuId }, select: { isService: true } });
+  if (!current || current.isService === data.isService) return;
+  if (data.isService && (await prisma.stockLedger.count({ where: { skuId } })) > 0) throw new ProductError("这个商品已经有库存记录，不能改成服务类；另建一个服务商品");
+  if (!data.isService && (await prisma.serviceEntitlement.count({ where: { skuId } })) > 0) throw new ProductError("这个服务已经卖出过，不能改回普通商品");
 }
 
 export async function createSku(actor: Actor, input: SkuInput) {
   assertCanManage(actor);
   const data = parseSku(input);
+  await assertServiceSwitch(data);
   try {
     const row = await prisma.sku.create({ data });
     await writeAudit({ userId: actor.id, action: "sku.create", entity: "sku", entityId: row.id, detail: data });
@@ -279,6 +302,7 @@ export async function createSku(actor: Actor, input: SkuInput) {
 export async function updateSku(actor: Actor, id: number, input: SkuInput) {
   assertCanManage(actor);
   const data = parseSku(input);
+  await assertServiceSwitch(data, id);
   try {
     const row = await prisma.sku.update({ where: { id }, data });
     await writeAudit({ userId: actor.id, action: "sku.update", entity: "sku", entityId: id, detail: data });

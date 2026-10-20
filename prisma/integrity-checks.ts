@@ -9,6 +9,8 @@ import type { PrismaClient } from "../src/generated/prisma/client";
 // 5. 每台机器：状态和归属店 = 它最后一条流水记的状态和门店；没有流水的机器不该存在；
 //    "已售"的机器要有一张没退的有效销售单，反过来不是"已售"的机器不该挂着没退的有效销售单
 //    （例外：卖出去之后又被回收单收回来的，看那之后有没有回收入库流水）。
+// 6. 服务权益：每个服务行有且只有一条权益；单作废了或服务退了，权益就该失效，反过来也一样；
+//    服务类商品不该有库存余额和流水。
 
 export interface IntegrityResult {
   accessory: number;
@@ -16,6 +18,7 @@ export interface IntegrityResult {
   payment: number;
   dailyClose: number;
   deviceState: number;
+  entitlement: number;
 }
 
 export async function runIntegrityChecks(prisma: PrismaClient): Promise<IntegrityResult> {
@@ -67,19 +70,32 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
         SELECT 1 FROM sales_order_items si JOIN sales_orders o ON o.id = si.order_id
         WHERE si.device_id = d.id AND o.status = 'COMPLETED' AND si.returned_qty < si.qty
           AND NOT EXISTS (SELECT 1 FROM stock_ledgers l WHERE l.device_id = d.id AND l.doc_type = 'TRADE_IN' AND l.created_at > o.created_at)))`;
+  const [entitlement] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT (
+      (SELECT COUNT(*) FROM sales_order_items si JOIN skus k ON k.id = si.sku_id
+        WHERE k.is_service AND NOT EXISTS (SELECT 1 FROM service_entitlements e WHERE e.sales_order_item_id = si.id))
+      + (SELECT COUNT(*) FROM service_entitlements e
+        JOIN sales_order_items si ON si.id = e.sales_order_item_id
+        JOIN sales_orders o ON o.id = e.sales_order_id
+        WHERE si.order_id <> e.sales_order_id
+          OR (e.status = 'ACTIVE') <> (o.status = 'COMPLETED' AND si.returned_qty < si.qty))
+      + (SELECT COUNT(*) FROM stock_ledgers l JOIN skus k ON k.id = l.sku_id WHERE k.is_service)
+      + (SELECT COUNT(*) FROM accessory_stocks a JOIN skus k ON k.id = a.sku_id WHERE k.is_service)
+    )::bigint AS n`;
   return {
     accessory: Number(accessory!.n) + Number(accessoryLast!.n) + Number(accessoryOrphan!.n),
     device: Number(device!.n),
     payment: Number(payment!.n),
     dailyClose: closeRows.length,
     deviceState: Number(deviceLedger!.n) + Number(deviceSale!.n),
+    entitlement: Number(entitlement!.n),
   };
 }
 
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {
-  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState === 0;
+  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement === 0;
 }

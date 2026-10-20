@@ -44,6 +44,7 @@ export async function lookupForSale(user: CurrentUser, storeId: number, rawCode:
   });
   if (sku) {
     if (sku.model.category.kind === "DEVICE") return { kind: "error", message: `这是 ${sku.name} 的商品条码，大件要扫机器上的串号` };
+    if (sku.isService) return { kind: "error", message: `${sku.name} 是服务，在电脑开单页的“服务”里选` };
     const stockQty = sku.accessoryStocks[0]?.qty ?? 0;
     if (stockQty <= 0) return { kind: "error", message: `${sku.name} 本店没货了` };
     return { kind: "accessory", skuId: sku.id, name: sku.name, priceFen: effectivePriceFen(sku.guidePriceFen, sku.storePrices[0]?.priceFen ?? null), stockQty };

@@ -127,7 +127,7 @@ async function main() {
     users: await prisma.user.count(),
   };
   console.log(
-    `种子数据完成：区域 ${counts.regions}、门店 ${counts.stores}、员工 ${counts.users}；机型 ${products.deviceModels}、配件 ${products.accessories}、SKU ${products.skus}（演示账号 hq / regional / manager / staff，密码见 README）`,
+    `种子数据完成：区域 ${counts.regions}、门店 ${counts.stores}、员工 ${counts.users}；机型 ${products.deviceModels}、配件 ${products.accessories}、服务 ${products.services}、SKU ${products.skus}（演示账号 hq / regional / manager / staff，密码见 README）`,
   );
   await prisma.$disconnect();
 }

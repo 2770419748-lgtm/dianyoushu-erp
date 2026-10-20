@@ -9,6 +9,7 @@ import { writeAudit } from "@/server/audit";
 import { DeviceStateError } from "@/server/stock/device-state";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
+import { voidEntitlementsTx } from "@/server/entitlement/entitlement-service";
 import { maxRefundableFen, MANUAL_PAYMENT_METHODS, returnRefundCapFen } from "./payments";
 import { lockRow } from "@/server/db-lock";
 import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
@@ -34,7 +35,7 @@ export async function getReturnContext(user: CurrentUser, salesOrderId: number) 
     where: { id: salesOrderId },
     include: {
       store: { select: { id: true, code: true, name: true, regionId: true } },
-      items: { orderBy: { id: "asc" }, include: { sku: { select: { name: true } }, device: { select: { code: true } } } },
+      items: { orderBy: { id: "asc" }, include: { sku: { select: { name: true } }, device: { select: { code: true } }, entitlement: { select: { deviceId: true, status: true } } } },
       payments: true,
       returnOrders: { select: { refundFen: true } },
     },
@@ -55,6 +56,9 @@ export async function getReturnContext(user: CurrentUser, salesOrderId: number) 
       returnedQty: i.returnedQty,
       returnableQty: i.qty - i.returnedQty,
       lineTotalFen: i.lineTotalFen,
+      deviceId: i.deviceId,
+      // 服务行（碎屏险、延保）保的是本单哪台机器：退这台机器时提示一起退服务
+      serviceForDeviceId: i.entitlement?.status === "ACTIVE" ? i.entitlement.deviceId : null,
     })),
     refundMethods: Array.from(new Set(salePayments.map((p) => p.method).filter((m) => m !== "TRADE_IN"))),
     tradeInFen: salePayments.filter((p) => p.method === "TRADE_IN").reduce((s, p) => s + p.amountFen, 0),
@@ -79,7 +83,7 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
   await lockRow(tx, "sales_orders", salesOrderId);
   const order = await tx.salesOrder.findUnique({
     where: { id: salesOrderId },
-    include: { store: true, items: true, payments: true, returnOrders: { select: { refundFen: true } } },
+    include: { store: true, items: { include: { sku: { select: { isService: true } } } }, payments: true, returnOrders: { select: { refundFen: true } } },
   });
   if (!order) throw new ReturnError("原销售单不存在");
   assertStoreAccess(user, order.store);
@@ -161,10 +165,12 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
     for (const plan of plans) {
       if (plan.item.deviceId) {
         await applyDeviceAction(tx, { deviceId: plan.item.deviceId, action: "RETURN", docType: "RETURN", docNo: orderNo, operatorId: user.id, note: reason ?? undefined });
-      } else {
+      } else if (!plan.item.sku.isService) {
         await changeAccessoryStock(tx, { storeId: order.storeId, skuId: plan.item.skuId, qtyDelta: plan.qty, docType: "RETURN", docNo: orderNo, operatorId: user.id, note: reason ?? undefined });
       }
       await tx.salesOrderItem.update({ where: { id: plan.item.id }, data: { returnedQty: { increment: plan.qty } } });
+      // 退掉的是服务（一行一份，退了就是全退）：这份碎屏险、延保失效
+      if (plan.item.sku.isService) await voidEntitlementsTx(tx, { salesOrderItemIds: [plan.item.id] });
     }
   } catch (error) {
     if (error instanceof StockError || error instanceof DeviceStateError) throw new ReturnError(error.message);

@@ -15,10 +15,12 @@ import { isValidFen, isValidQty, MAX_AMOUNT_FEN, MAX_QTY } from "@/lib/limits";
 import { buildSalePayments, PaymentError } from "./payments";
 import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
 import { lockRow } from "@/server/db-lock";
+import { createEntitlementsTx, voidEntitlementsTx } from "@/server/entitlement/entitlement-service";
 
 // 开单服务层：选机器和配件、改价优惠、以旧换新抵扣（关联回收单）、多种收款拆分（合计必须等于应收）。
 // 口径第 11 节第 3 条：销售单、明细、收款、扣库存、写流水在一个事务里，失败全部回滚。
 // *Tx 版本接收调用方的事务（测试里可以回滚），不带 Tx 的版本自己开事务。
+// 服务类商品（碎屏险、延保，口径第 12 节）：不动库存、不写流水，一行一份，必须选客户，开单时生成服务权益。
 
 export class SalesError extends Error {}
 
@@ -26,7 +28,8 @@ type Tx = Prisma.TransactionClient;
 
 export interface SalesItemInput {
   deviceId?: unknown; // 大件：机器 id
-  skuId?: unknown; // 小件：SKU id
+  skuId?: unknown; // 小件或服务：SKU id
+  serviceDeviceId?: unknown; // 服务行保的是本单哪台机器（机器 id），可不选
   qty?: unknown; // 小件数量
   unitPriceFen?: unknown; // 不填按门店售价 / 指导价
 }
@@ -61,7 +64,7 @@ function parseOrder(input: SalesOrderInput) {
   const customerId = input.customerId ? requireId(input.customerId, "客户") : null;
   if (!Array.isArray(input.items) || input.items.length === 0) throw new SalesError("至少要有一件商品");
   const deviceLines: { deviceId: number; unitPriceFen: number | null }[] = [];
-  const accessoryLines: { skuId: number; qty: number; unitPriceFen: number | null }[] = [];
+  const accessoryLines: { skuId: number; qty: number; unitPriceFen: number | null; serviceDeviceId: number | null }[] = [];
   input.items.forEach((item, index) => {
     const unitPriceFen = optionalFen(item.unitPriceFen, `第 ${index + 1} 行单价`);
     if (item.deviceId) {
@@ -70,7 +73,8 @@ function parseOrder(input: SalesOrderInput) {
       const qty = Number(item.qty ?? 1);
       if (!Number.isInteger(qty) || qty <= 0) throw new SalesError(`第 ${index + 1} 行数量必须是正整数`);
       if (!isValidQty(qty)) throw new SalesError(`数量不对：第 ${index + 1} 行最多 ${MAX_QTY} 件`);
-      accessoryLines.push({ skuId: requireId(item.skuId, "配件"), qty, unitPriceFen });
+      const serviceDeviceId = item.serviceDeviceId ? requireId(item.serviceDeviceId, "服务保的机器") : null;
+      accessoryLines.push({ skuId: requireId(item.skuId, "配件"), qty, unitPriceFen, serviceDeviceId });
     }
   });
   if (new Set(deviceLines.map((d) => d.deviceId)).size !== deviceLines.length) throw new SalesError("同一台机器选了两次");
@@ -109,6 +113,8 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
 
   type Line = { skuId: number; deviceId: number | null; qty: number; listPriceFen: number; unitPriceFen: number; lineTotalFen: number; costFen: number };
   const lines: Line[] = [];
+  // 服务行另记一份：保哪台机器、期限几个月（和 lines 按下标对应）
+  const serviceOf = new Map<number, { deviceId: number | null; months: number }>();
   for (const d of data.deviceLines) {
     const device = await tx.device.findUnique({ where: { id: d.deviceId }, include: { sku: { select: { id: true, name: true, guidePriceFen: true } } } });
     if (!device) throw new SalesError("机器不存在");
@@ -124,6 +130,15 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     const sku = await tx.sku.findUnique({ where: { id: a.skuId }, include: { model: { include: { category: true } } } });
     if (!sku || !sku.isActive) throw new SalesError("配件不存在或已停售");
     if (sku.model.category.kind !== "ACCESSORY") throw new SalesError(`${sku.name} 是大件，要按机器选`);
+    if (sku.isService) {
+      if (a.qty !== 1) throw new SalesError(`${sku.name} 是服务，一行只能 1 份；两台机器各买一份就加两行`);
+      if (a.serviceDeviceId !== null && !data.deviceLines.some((d) => d.deviceId === a.serviceDeviceId)) throw new SalesError(`${sku.name} 保的机器要是这张单里卖的机器`);
+      const key = `${sku.id}:${a.serviceDeviceId ?? "无"}`;
+      if (Array.from(serviceOf.entries()).some(([i, s]) => `${lines[i]!.skuId}:${s.deviceId ?? "无"}` === key)) throw new SalesError(`同一台机器的 ${sku.name} 选了两次`);
+      serviceOf.set(lines.length, { deviceId: a.serviceDeviceId, months: sku.serviceMonths ?? 0 });
+    } else if (a.serviceDeviceId !== null) {
+      throw new SalesError(`${sku.name} 不是服务类商品，不用选保哪台机器`);
+    }
     const listPriceFen = await resolveUnitPrice(tx, data.storeId, sku.id, sku.guidePriceFen);
     const unitPriceFen = a.unitPriceFen ?? listPriceFen;
     lines.push({ skuId: sku.id, deviceId: null, qty: a.qty, listPriceFen, unitPriceFen, lineTotalFen: unitPriceFen * a.qty, costFen: sku.costPriceFen * a.qty });
@@ -144,6 +159,10 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     tradeIn = { id: t.id, orderNo: t.orderNo, appraisedFen: t.appraisedFen, customerId: t.customerId };
   }
 
+  // 服务记在客户名下（到期要提醒），所以单里有服务就必须有客户；以旧换新回收单上的客户也算
+  const customerId = data.customerId ?? tradeIn?.customerId ?? null;
+  if (serviceOf.size > 0 && customerId === null) throw new SalesError("单里有碎屏险、延保这类服务，要先选客户（服务记在客户名下，到期要提醒）");
+
   // 收款：抵扣 + 手工收款，合计必须正好等于应收
   const manual = Array.isArray(input.payments)
     ? input.payments
@@ -163,7 +182,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     data: {
       orderNo,
       storeId: data.storeId,
-      customerId: data.customerId ?? tradeIn?.customerId ?? null,
+      customerId,
       salespersonId: user.id,
       bizDate,
       subtotalFen,
@@ -171,7 +190,6 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
       totalFen,
       note: data.note,
       tradeInOrderId: tradeIn?.id ?? null,
-      items: { create: lines },
       payments: {
         create: payments.map((p) =>
           p.method === "TRADE_IN" && tradeIn ? { method: p.method, amountFen: p.amountFen, tradeInOrderId: tradeIn.id, reference: tradeIn.orderNo } : { method: p.method, amountFen: p.amountFen },
@@ -180,19 +198,32 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     },
   });
 
+  // 明细一行一行建，拿到每行的 id（服务权益要指向具体的服务行）
+  const itemIds: number[] = [];
+  for (const line of lines) itemIds.push((await tx.salesOrderItem.create({ data: { ...line, orderId: order.id } })).id);
+
   try {
-    for (const line of lines) {
+    for (const [index, line] of lines.entries()) {
       if (line.deviceId) {
         await applyDeviceAction(tx, { deviceId: line.deviceId, action: "SELL", docType: "SALE", docNo: orderNo, operatorId: user.id });
-      } else {
+      } else if (!serviceOf.has(index)) {
         await changeAccessoryStock(tx, { storeId: data.storeId, skuId: line.skuId, qtyDelta: -line.qty, docType: "SALE", docNo: orderNo, operatorId: user.id });
       }
     }
   } catch (error) {
     wrapStockError(error);
   }
+  if (serviceOf.size > 0) {
+    await createEntitlementsTx(tx, {
+      customerId: customerId!,
+      storeId: data.storeId,
+      salesOrderId: order.id,
+      bizDate,
+      lines: Array.from(serviceOf.entries()).map(([index, s]) => ({ salesOrderItemId: itemIds[index]!, skuId: lines[index]!.skuId, deviceId: s.deviceId, months: s.months })),
+    });
+  }
 
-  await writeAudit({ userId: user.id, action: "sale.create", entity: "sales_order", entityId: order.id, detail: { orderNo, totalFen, lines: lines.length, tradeIn: tradeIn?.orderNo ?? null, payments: payments.map((p) => p.method), priceChanges: lines.filter((l) => l.unitPriceFen !== l.listPriceFen).map((l) => ({ skuId: l.skuId, deviceId: l.deviceId, listPriceFen: l.listPriceFen, unitPriceFen: l.unitPriceFen })) } }, tx);
+  await writeAudit({ userId: user.id, action: "sale.create", entity: "sales_order", entityId: order.id, detail: { orderNo, totalFen, lines: lines.length, services: serviceOf.size, tradeIn: tradeIn?.orderNo ?? null, payments: payments.map((p) => p.method), priceChanges: lines.filter((l) => l.unitPriceFen !== l.listPriceFen).map((l) => ({ skuId: l.skuId, deviceId: l.deviceId, listPriceFen: l.listPriceFen, unitPriceFen: l.unitPriceFen })) } }, tx);
   return { id: order.id, orderNo };
 }
 
@@ -218,7 +249,7 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
   // 拿到这家店这一天的锁之后再读整张单做检查：两个人同时点作废，后一个会看到“已经作废了”；日结确认和作废也不会交错
   await lockStoreDay(tx, head.storeId, head.bizDate);
   await lockRow(tx, "sales_orders", orderId); // 和同时进行的退货排队（见 return-service）
-  const order = await tx.salesOrder.findUniqueOrThrow({ where: { id: orderId }, include: { store: true, items: true, _count: { select: { returnOrders: true } } } });
+  const order = await tx.salesOrder.findUniqueOrThrow({ where: { id: orderId }, include: { store: true, items: { include: { sku: { select: { isService: true } } } }, _count: { select: { returnOrders: true } } } });
   if (order.status !== "COMPLETED") throw new SalesError("这张单已经作废了");
   if (order.dailyCloseId) throw new SalesError("当日已日结确认，不能作废");
   if (order._count.returnOrders > 0) throw new SalesError("这张单已经有退货记录，不能作废，剩下的继续走退货");
@@ -228,7 +259,7 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
     for (const item of order.items) {
       if (item.deviceId) {
         await applyDeviceAction(tx, { deviceId: item.deviceId, action: "VOID_SALE", docType: "SALE_VOID", docNo: order.orderNo, operatorId: user.id, note: voidReason ?? undefined });
-      } else {
+      } else if (!item.sku.isService) {
         await changeAccessoryStock(tx, { storeId: order.storeId, skuId: item.skuId, qtyDelta: item.qty, docType: "SALE_VOID", docNo: order.orderNo, operatorId: user.id, note: voidReason ?? undefined });
       }
     }
@@ -239,6 +270,7 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
   if (order.tradeInOrderId) {
     await tx.payment.updateMany({ where: { salesOrderId: orderId, tradeInOrderId: order.tradeInOrderId }, data: { tradeInOrderId: null } });
   }
+  await voidEntitlementsTx(tx, { salesOrderId: orderId }); // 单作废了，单上的碎屏险、延保跟着失效
   await tx.salesOrder.update({ where: { id: orderId }, data: { status: "VOIDED", voidedById: user.id, voidedAt: new Date(), voidReason, tradeInOrderId: null } });
   await writeAudit({ userId: user.id, action: "sale.void", entity: "sales_order", entityId: orderId, detail: { reason: voidReason } }, tx);
 }
@@ -290,7 +322,7 @@ export async function getSalesOrder(user: CurrentUser, id: number) {
       customer: { select: { id: true, name: true, phone: true } },
       salesperson: { select: { id: true, name: true } },
       voidedBy: { select: { name: true } },
-      items: { include: { sku: { select: { name: true } }, device: { select: { code: true } } } },
+      items: { include: { sku: { select: { name: true, isService: true } }, device: { select: { code: true } }, entitlement: { select: { id: true, status: true, expiresOn: true, device: { select: { code: true } } } } } },
       payments: { orderBy: { id: "asc" } },
       tradeInOrder: { select: { id: true, orderNo: true, modelName: true, deviceCode: true, appraisedFen: true } },
       returnOrders: {
@@ -368,3 +400,18 @@ export async function listSellableAccessories(user: CurrentUser, storeId: number
 }
 
 export type SellableAccessory = Awaited<ReturnType<typeof listSellableAccessories>>[number];
+
+/** 开单时可选的服务类商品（碎屏险、延保）：不看库存，在售就能卖 */
+export async function listSellableServices(user: CurrentUser, storeId: number) {
+  const store = await prisma.store.findUnique({ where: { id: storeId }, select: { id: true, regionId: true } });
+  if (!store) throw new SalesError("门店不存在");
+  assertStoreAccess(user, store);
+  const skus = await prisma.sku.findMany({
+    where: { isService: true, isActive: true },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true, serviceMonths: true, guidePriceFen: true, storePrices: { where: { storeId }, select: { priceFen: true } } },
+  });
+  return skus.map((s) => ({ skuId: s.id, name: s.name, months: s.serviceMonths ?? 0, priceFen: effectivePriceFen(s.guidePriceFen, s.storePrices[0]?.priceFen ?? null) }));
+}
+
+export type SellableService = Awaited<ReturnType<typeof listSellableServices>>[number];

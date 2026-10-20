@@ -8,7 +8,7 @@ import type { PaymentMethod } from "@/generated/prisma/enums";
 import { ScanButton } from "@/components/scan-button";
 import { formatFen, yuanToFen } from "@/lib/format";
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS_FOR_SALE } from "@/lib/sales-labels";
-import type { SellableAccessory, SellableDevice } from "@/server/sales/sales-service";
+import type { SellableAccessory, SellableDevice, SellableService } from "@/server/sales/sales-service";
 import type { AvailableTradeIn } from "@/server/tradein/trade-in-service";
 import { createCustomerAction, searchCustomersAction } from "../../customers/actions";
 import { TradeInForm, type CreatedTradeIn, type TradeInSkuOption } from "../../trade-ins/trade-in-form";
@@ -16,7 +16,8 @@ import { createSalesOrderAction, lookupForSaleAction, searchSellableDevicesActio
 
 interface Line {
   key: string;
-  kind: "device" | "accessory";
+  kind: "device" | "accessory" | "service";
+  serviceDeviceId?: number; // 服务行：保本单哪台机器
   deviceId?: number;
   skuId: number;
   name: string;
@@ -47,17 +48,20 @@ interface CustomerPick {
   phoneMasked: string;
 }
 
-// 开单：选客户 → 选机器/加配件 → 改价优惠 → 以旧换新抵扣（可选）→ 多种收款拆分 → 提交（一个事务扣库存）。
+// 开单：选客户 → 选机器/加配件/加服务 → 改价优惠 → 以旧换新抵扣（可选）→ 多种收款拆分 → 提交（一个事务扣库存）。
+// 服务（碎屏险、延保）不扣库存，记在客户名下，所以要先选客户；一行一份，选保本单哪台机器。
 export function SaleForm({
   stores,
   storeId,
   accessories,
+  services,
   availableTradeIns,
   tradeInSkuOptions,
 }: {
   stores: { id: number; label: string }[];
   storeId: number;
   accessories: SellableAccessory[];
+  services: SellableService[];
   availableTradeIns: AvailableTradeIn[];
   tradeInSkuOptions: TradeInSkuOption[];
 }) {
@@ -74,6 +78,8 @@ export function SaleForm({
   const [searching, setSearching] = useState(false);
   const [accessorySkuId, setAccessorySkuId] = useState<number | undefined>();
   const [accessoryQty, setAccessoryQty] = useState<number>(1);
+  const [serviceSkuId, setServiceSkuId] = useState<number | undefined>();
+  const [serviceDeviceId, setServiceDeviceId] = useState<number | undefined>();
 
   const [lines, setLines] = useState<Line[]>([]);
   const [discountYuan, setDiscountYuan] = useState<number>(0);
@@ -167,17 +173,47 @@ export function SaleForm({
     setAccessoryQty(1);
   }
 
+  const deviceLines = lines.filter((l) => l.kind === "device");
+
+  function addService() {
+    const sv = services.find((s) => s.skuId === serviceSkuId);
+    if (!sv) return message.warning("先选服务");
+    // 本单只有一台机器时默认保它；有好几台要店员选
+    const deviceId = serviceDeviceId ?? (deviceLines.length === 1 ? deviceLines[0]!.deviceId : undefined);
+    if (deviceLines.length > 1 && deviceId === undefined) return message.warning("本单有好几台机器，选一下这份服务保哪台");
+    const device = deviceLines.find((l) => l.deviceId === deviceId);
+    const key = `s-${sv.skuId}-${deviceId ?? 0}`;
+    if (lines.some((l) => l.key === key)) return message.warning(`这台机器已经加过 ${sv.name}`);
+    setLines([...lines, { key, kind: "service", skuId: sv.skuId, name: sv.name, code: device?.code, serviceDeviceId: deviceId, qty: 1, unitPriceFen: sv.priceFen, listPriceFen: sv.priceFen }]);
+    setServiceSkuId(undefined);
+    setServiceDeviceId(undefined);
+  }
+
+  /** 删机器时，保这台机器的服务一起删掉（服务只能保本单的机器） */
+  function removeLine(line: Line) {
+    const attached = line.kind === "device" ? lines.filter((l) => l.kind === "service" && l.serviceDeviceId === line.deviceId) : [];
+    if (attached.length > 0) message.info(`保这台机器的 ${attached.map((l) => l.name).join("、")} 也一起删了`);
+    setLines(lines.filter((x) => x.key !== line.key && !attached.includes(x)));
+  }
+
   function updateLine(key: string, patch: Partial<Line>) {
     setLines(lines.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   }
 
   function submit() {
     if (lines.length === 0) return message.warning("还没加商品");
+    if (lines.some((l) => l.kind === "service") && !customer && !tradeIn) return message.warning("单里有碎屏险、延保这类服务，要先选客户（服务记在客户名下，到期要提醒）");
     startTransition(async () => {
       const result = await createSalesOrderAction({
         storeId,
         customerId: customer?.id,
-        items: lines.map((l) => (l.kind === "device" ? { deviceId: l.deviceId, unitPriceFen: l.unitPriceFen } : { skuId: l.skuId, qty: l.qty, unitPriceFen: l.unitPriceFen })),
+        items: lines.map((l) =>
+          l.kind === "device"
+            ? { deviceId: l.deviceId, unitPriceFen: l.unitPriceFen }
+            : l.kind === "service"
+              ? { skuId: l.skuId, qty: 1, unitPriceFen: l.unitPriceFen, serviceDeviceId: l.serviceDeviceId }
+              : { skuId: l.skuId, qty: l.qty, unitPriceFen: l.unitPriceFen },
+        ),
         discountFen,
         tradeInOrderId: tradeIn?.id,
         payments: payments.map((p) => ({ method: p.method, amountFen: paymentFen(p) })),
@@ -194,7 +230,7 @@ export function SaleForm({
 
   const lineColumns: TableColumnsType<Line> = [
     { title: "商品", dataIndex: "name" },
-    { title: "机器 / 数量", render: (_, l) => (l.kind === "device" ? <Tag>{l.code}</Tag> : <InputNumber min={1} max={l.maxQty} precision={0} value={l.qty} style={{ width: 80 }} onChange={(v) => updateLine(l.key, { qty: Math.max(1, Math.floor(Number(v) || 1)) })} />) },
+    { title: "机器 / 数量", render: (_, l) => (l.kind === "device" ? <Tag>{l.code}</Tag> : l.kind === "service" ? <Tag color="purple">{l.code ? `保 ${l.code}` : "不绑机器"}</Tag> : <InputNumber min={1} max={l.maxQty} precision={0} value={l.qty} style={{ width: 80 }} onChange={(v) => updateLine(l.key, { qty: Math.max(1, Math.floor(Number(v) || 1)) })} />) },
     {
       title: "单价（元）",
       render: (_, l) => (
@@ -205,7 +241,7 @@ export function SaleForm({
       ),
     },
     { title: "小计（元）", align: "right", render: (_, l) => formatFen(l.unitPriceFen * l.qty) },
-    { title: "", width: 50, render: (_, l) => <Button type="link" danger onClick={() => setLines(lines.filter((x) => x.key !== l.key))}>删</Button> },
+    { title: "", width: 50, render: (_, l) => <Button type="link" danger onClick={() => removeLine(l)}>删</Button> },
   ];
 
   const deviceColumns: TableColumnsType<SellableDevice> = [
@@ -263,6 +299,34 @@ export function SaleForm({
             <InputNumber min={1} precision={0} value={accessoryQty} onChange={(v) => setAccessoryQty(Number(v) || 1)} style={{ width: 80 }} />
             <Button onClick={addAccessory}>加入</Button>
           </Space>
+
+          {services.length > 0 ? (
+            <>
+              <Typography.Title level={5} style={{ marginTop: 16 }}>服务（碎屏险、延保）</Typography.Title>
+              <Space wrap>
+                <Select
+                  placeholder="选服务"
+                  style={{ width: "min(260px, calc(100vw - 72px))" }}
+                  value={serviceSkuId}
+                  onChange={setServiceSkuId}
+                  options={services.map((s) => ({ value: s.skuId, label: `${s.name}（${formatFen(s.priceFen)} 元，${s.months} 个月）` }))}
+                />
+                <Select
+                  allowClear
+                  placeholder={deviceLines.length === 0 ? "本单没有机器，不绑机器" : deviceLines.length === 1 ? `保 ${deviceLines[0]!.code}` : "保哪台机器"}
+                  style={{ width: "min(260px, calc(100vw - 72px))" }}
+                  value={serviceDeviceId}
+                  onChange={setServiceDeviceId}
+                  disabled={deviceLines.length === 0}
+                  options={deviceLines.map((l) => ({ value: l.deviceId, label: `${l.code} ${l.name}` }))}
+                />
+                <Button onClick={addService}>加服务</Button>
+              </Space>
+              <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0 }}>
+                服务不扣库存，记在客户名下，到期前会进到期名单提醒，所以要先选客户；一台机器一份。
+              </Typography.Paragraph>
+            </>
+          ) : null}
         </Card>
       </Col>
       <Col xs={24} lg={10}>

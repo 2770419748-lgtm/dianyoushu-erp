@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { App, Button, Card, Form, Input, Modal, Space, Table, Typography } from "antd";
 import type { TableColumnsType } from "antd";
@@ -38,7 +39,7 @@ export function CustomersView({ rows, total, page, pageSize, q }: { rows: Custom
   }
 
   const columns: TableColumnsType<CustomerRow> = [
-    { title: "姓名", dataIndex: "name" },
+    { title: "姓名", dataIndex: "name", render: (name: string, r) => <Link href={`/customers/${r.id}`}>{name}</Link> },
     { title: "手机号", dataIndex: "phoneMasked" },
     { title: "备注", dataIndex: "note", render: (v: string | null) => v ?? "-" },
     { title: "下单次数", dataIndex: "orders", align: "right" },
