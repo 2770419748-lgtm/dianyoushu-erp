@@ -58,6 +58,13 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "repair.finish": "维修完成",
   "repair.pickup": "取机结算",
   "repair.void": "作废维修单",
+  "carrier.rule.save": "改运营商佣金政策",
+  "carrier.register": "登记运营商业务",
+  "carrier.activate": "确认运营商业务开通",
+  "carrier.fail": "运营商业务办理失败",
+  "carrier.void": "作废运营商业务",
+  "carrier.sync_simulated": "模拟同步运营商状态",
+  "carrier.settlement.import": "导入运营商结算单",
   "entitlement.reminder_scan": "生成到期提醒",
   "entitlement.reminder_contacted": "到期提醒已联系",
   "wecom.bind": "客户绑定企业微信",
@@ -88,6 +95,9 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   daily_close: "日结",
   entitlement_reminder: "到期提醒",
   repair_order: "维修单",
+  carrier_business: "运营商业务单",
+  carrier_rule: "运营商佣金政策",
+  carrier_settlement: "运营商结算单",
 };
 
 export function auditActionLabel(action: string): string {

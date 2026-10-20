@@ -134,6 +134,56 @@ enum RepairOutcome {
   @@map("repair_outcome")
 }
 
+/// 运营商（口径第 14 节）
+enum Carrier {
+  CMCC // 中国移动
+  CUCC // 中国联通
+  CTCC // 中国电信
+  CBN  // 中国广电
+
+  @@map("carrier")
+}
+
+/// 运营商业务类型
+enum CarrierBizType {
+  NEW_LINE       // 新号入网
+  PORT_IN        // 携号转入
+  CONTRACT_PHONE // 合约机（购机送话费）
+  BROADBAND      // 宽带
+  PLAN_UPGRADE   // 套餐升级
+
+  @@map("carrier_biz_type")
+}
+
+/// 运营商业务单状态
+enum CarrierBizStatus {
+  SUBMITTED   // 已登记
+  ACTIVATED   // 已开通
+  FAILED      // 办理失败
+  SETTLED     // 已结算（收到佣金）
+  CLAWED_BACK // 已返销（佣金被扣回）
+  VOIDED      // 已作废
+
+  @@map("carrier_biz_status")
+}
+
+/// 运营商结算单从哪来
+enum CarrierSettlementSource {
+  FILE      // 导入运营商渠道系统导出的 CSV
+  SIMULATED // 演示里生成的模拟结算单
+
+  @@map("carrier_settlement_source")
+}
+
+/// 结算单一行的对账结果
+enum CarrierLineResult {
+  MATCHED   // 对上了，金额也一样
+  DIFF      // 对上了，佣金和预计的不一样
+  UNMATCHED // 运营商有、我们没登记
+
+  @@map("carrier_line_result")
+}
+
 /// 故障类型
 enum FaultCategory {
   SCREEN   // 屏幕
@@ -266,6 +316,7 @@ model Store {
   dailyCloses     DailyClose[]
   entitlements    ServiceEntitlement[]
   repairOrders    RepairOrder[]
+  carrierBusiness CarrierBusiness[]
   wecomBindCodes  WecomBindCode[]
   kpiTargets      KpiTarget[]
 
@@ -310,6 +361,9 @@ model User {
   repairsReceived       RepairOrder[] @relation("RepairReceivedBy")
   repairsClosed         RepairOrder[] @relation("RepairClosedBy")
   repairsVoided         RepairOrder[] @relation("RepairVoidedBy")
+  carrierHandled        CarrierBusiness[] @relation("CarrierHandledBy")
+  carrierVoided         CarrierBusiness[] @relation("CarrierVoidedBy")
+  carrierSettlements    CarrierSettlement[]
   wecomFollows          WecomFollow[]
   wecomBindCodes        WecomBindCode[]
 
@@ -696,6 +750,7 @@ model Customer {
   tradeInOrders TradeInOrder[]
   entitlements  ServiceEntitlement[]
   repairOrders  RepairOrder[]
+  carrierBusiness CarrierBusiness[]
   wecomFollows  WecomFollow[]
   wecomTags     WecomCustomerTag[]
   wecomBindCodes WecomBindCode[]
@@ -737,6 +792,7 @@ model SalesOrder {
   entitlements ServiceEntitlement[]
   wecomBindCodes WecomBindCode[]
   repairOrders RepairOrder[]
+  carrierBusiness CarrierBusiness[]
 
   @@index([storeId, bizDate])
   @@index([salespersonId, bizDate])
@@ -1038,6 +1094,113 @@ model RepairOrder {
   @@index([deviceCode])
   @@index([customerId])
   @@map("repair_orders")
+}
+
+/// 运营商佣金政策（口径第 14 节）：运营商 × 业务类型一条，总部维护
+model CarrierCommissionRule {
+  id             Int            @id @default(autoincrement())
+  carrier        Carrier
+  bizType        CarrierBizType @map("biz_type")
+  commissionFen  Int            @map("commission_fen") // 每笔佣金（数据库 CHECK >= 0）
+  clawbackMonths Int            @map("clawback_months") // 返销期：几个月内销户要扣回（0～24）
+  isActive       Boolean        @default(true) @map("is_active")
+  note           String?
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  @@unique([carrier, bizType])
+  @@map("carrier_commission_rules")
+}
+
+/// 运营商业务单：门店办一笔登记一笔；佣金按登记时的政策记预计，按月结算单记实收或返销
+model CarrierBusiness {
+  id                    Int              @id @default(autoincrement())
+  orderNo               String           @unique @map("order_no") // YY + yyyyMMdd + 4 位
+  storeId               Int              @map("store_id")
+  handledById           Int              @map("handled_by_id") // 经办店员（提成算给他）
+  customerId            Int?             @map("customer_id")
+  carrier               Carrier
+  bizType               CarrierBizType   @map("biz_type")
+  phone                 String // 办理的号码（宽带填联系电话），列表脱敏；不存身份证号
+  packageName           String           @map("package_name")
+  monthlyFeeFen         Int?             @map("monthly_fee_fen")
+  carrierOrderNo        String?          @map("carrier_order_no") // 运营商系统的受理单号（对账用）
+  salesOrderId          Int?             @map("sales_order_id") // 合约机：本店卖机器的那张单
+  bizDate               DateTime         @map("biz_date") @db.Date // 登记营业日（结算月份按它算）
+  expectedCommissionFen Int              @map("expected_commission_fen") // 登记时按政策记下的预计佣金
+  clawbackMonths        Int              @map("clawback_months")
+  status                CarrierBizStatus @default(SUBMITTED)
+  activatedAt           DateTime?        @map("activated_at")
+  failedReason          String?          @map("failed_reason")
+  settlementId          Int?             @map("settlement_id")
+  settledFen            Int?             @map("settled_fen") // 结算单里实给的佣金
+  clawbackFen           Int?             @map("clawback_fen") // 被扣回的金额
+  voidedAt              DateTime?        @map("voided_at")
+  voidedById            Int?             @map("voided_by_id")
+  voidReason            String?          @map("void_reason")
+  note                  String?
+  createdAt             DateTime         @default(now()) @map("created_at")
+  updatedAt             DateTime         @updatedAt @map("updated_at")
+
+  store      Store              @relation(fields: [storeId], references: [id])
+  handledBy  User               @relation("CarrierHandledBy", fields: [handledById], references: [id])
+  voidedBy   User?              @relation("CarrierVoidedBy", fields: [voidedById], references: [id])
+  customer   Customer?          @relation(fields: [customerId], references: [id])
+  salesOrder SalesOrder?        @relation(fields: [salesOrderId], references: [id])
+  settlement CarrierSettlement? @relation(fields: [settlementId], references: [id])
+
+  settlementLines CarrierSettlementLine[]
+
+  @@index([storeId, bizDate])
+  @@index([carrier, status])
+  @@index([carrierOrderNo])
+  @@index([phone])
+  @@map("carrier_business")
+}
+
+/// 运营商结算单：一个运营商一个月一张，只能对一次（口径第 14 节）
+model CarrierSettlement {
+  id                 Int                     @id @default(autoincrement())
+  settlementNo       String                  @unique @map("settlement_no") // JS + yyyyMMdd + 4 位
+  carrier            Carrier
+  month              String // 结算月份，如 2026-09
+  source             CarrierSettlementSource
+  importedById       Int                     @map("imported_by_id")
+  lineCount          Int                     @map("line_count")
+  matchedCount       Int                     @map("matched_count")
+  diffCount          Int                     @map("diff_count")
+  unmatchedCount     Int                     @map("unmatched_count")
+  missingCount       Int                     @map("missing_count") // 我们登记了、结算单里没有的
+  totalCommissionFen Int                     @map("total_commission_fen")
+  totalClawbackFen   Int                     @map("total_clawback_fen")
+  createdAt          DateTime                @default(now()) @map("created_at")
+
+  importedBy User @relation(fields: [importedById], references: [id])
+
+  lines      CarrierSettlementLine[]
+  businesses CarrierBusiness[]
+
+  @@unique([carrier, month])
+  @@map("carrier_settlements")
+}
+
+/// 结算单的一行
+model CarrierSettlementLine {
+  id             Int               @id @default(autoincrement())
+  settlementId   Int               @map("settlement_id")
+  carrierOrderNo String?           @map("carrier_order_no")
+  phone          String?
+  bizType        CarrierBizType?   @map("biz_type")
+  commissionFen  Int               @map("commission_fen")
+  clawbackFen    Int               @map("clawback_fen")
+  businessId     Int?              @map("business_id") // 对上的业务单
+  result         CarrierLineResult
+
+  settlement CarrierSettlement @relation(fields: [settlementId], references: [id])
+  business   CarrierBusiness?  @relation(fields: [businessId], references: [id])
+
+  @@index([settlementId])
+  @@map("carrier_settlement_lines")
 }
 
 /// 企业微信跟进关系：员工 × 外部联系人（口径第 12 节）。客户可以先有跟进关系、后绑定档案（customerId 为空 = 还没绑定）

@@ -13,6 +13,8 @@ import type { PrismaClient } from "../src/generated/prisma/client";
 //    权益的门店、客户和销售单一致；保的机器退了、服务没退的要记“机器已退回”；服务类商品不该有库存余额和流水；
 //    “已理赔”的碎屏险要有一张修好、用碎屏险付、已完结的维修单。
 // 7. 维修单（口径第 13 节）：已完结的收款合计 = 客户应付，没完结的没有收款；作废、没完结的不该算营业日。
+// 8. 运营商结算（口径第 14 节）：结算单的行数、对上 / 不符 / 没登记的笔数、佣金和扣回合计 = 它的明细；
+//    “已结算”的业务要挂在一张结算单上、有实收，且那张单里有一行对上它；“已返销”的要有扣回金额；没结算过的不该有实收。
 
 export interface IntegrityResult {
   accessory: number;
@@ -22,6 +24,7 @@ export interface IntegrityResult {
   deviceState: number;
   entitlement: number;
   repair: number;
+  carrier: number;
 }
 
 export async function runIntegrityChecks(prisma: PrismaClient): Promise<IntegrityResult> {
@@ -101,6 +104,21 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
           OR (r.status <> 'CLOSED' AND p.s IS NOT NULL)
           OR ((r.status = 'CLOSED') <> (r.biz_date IS NOT NULL)))
     )::bigint AS n`;
+  const [carrier] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT (
+      (SELECT COUNT(*) FROM carrier_settlements s
+        LEFT JOIN (SELECT settlement_id, COUNT(*) AS c,
+            COUNT(*) FILTER (WHERE result = 'MATCHED') AS m, COUNT(*) FILTER (WHERE result = 'DIFF') AS d, COUNT(*) FILTER (WHERE result = 'UNMATCHED') AS u,
+            SUM(commission_fen) AS cf, SUM(clawback_fen) AS kf
+          FROM carrier_settlement_lines GROUP BY settlement_id) l ON l.settlement_id = s.id
+        WHERE s.line_count <> COALESCE(l.c, 0) OR s.matched_count <> COALESCE(l.m, 0) OR s.diff_count <> COALESCE(l.d, 0) OR s.unmatched_count <> COALESCE(l.u, 0)
+          OR s.total_commission_fen <> COALESCE(l.cf, 0) OR s.total_clawback_fen <> COALESCE(l.kf, 0))
+      + (SELECT COUNT(*) FROM carrier_business b
+        WHERE (b.status = 'SETTLED' AND (b.settlement_id IS NULL OR b.settled_fen IS NULL OR NOT EXISTS (
+            SELECT 1 FROM carrier_settlement_lines l WHERE l.settlement_id = b.settlement_id AND l.business_id = b.id AND l.result IN ('MATCHED', 'DIFF') AND l.commission_fen = b.settled_fen)))
+          OR (b.status = 'CLAWED_BACK' AND COALESCE(b.clawback_fen, 0) <= 0)
+          OR (b.status NOT IN ('SETTLED', 'CLAWED_BACK') AND (b.settlement_id IS NOT NULL OR b.settled_fen IS NOT NULL OR b.clawback_fen IS NOT NULL)))
+    )::bigint AS n`;
   return {
     accessory: Number(accessory!.n) + Number(accessoryLast!.n) + Number(accessoryOrphan!.n),
     device: Number(device!.n),
@@ -109,13 +127,14 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
     deviceState: Number(deviceLedger!.n) + Number(deviceSale!.n),
     entitlement: Number(entitlement!.n),
     repair: Number(repair!.n),
+    carrier: Number(carrier!.n),
   };
 }
 
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {
-  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair === 0;
+  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier === 0;
 }

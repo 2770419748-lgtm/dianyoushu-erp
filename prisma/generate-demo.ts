@@ -6,6 +6,7 @@ import { formatDate } from "../src/lib/format";
 import { describeIntegrity, integrityOk, runIntegrityChecks } from "./integrity-checks";
 import { daysUntil, entitlementExpiresOn } from "../src/lib/entitlement";
 import { payerOptions, repairChargeFen, type FaultCategoryKey, type RepairPayerKey } from "../src/lib/repair";
+import { monthRange, reconcileStatement, type CarrierBizTypeKey, type CarrierKey, type StatementLine } from "../src/lib/carrier";
 
 // 模拟经营数据 v1（第 9 周）：10 家店、3 个月（截至昨天）的采购到货、销售、以旧换新、回收机转良品再卖、作废、退货、日结。
 // 规则和真实业务一致：库存每次变动都有流水、配件余额 = 流水合计、日结系统数 = 当天收款汇总。
@@ -794,6 +795,9 @@ async function main() {
   // KPI 目标：已过完的月份 = 实际 × 0.9～1.15（完成率有高有低），当月 = 上月日均 × 当月天数 × 1.05
   buildKpis(stores.map((s) => s.id));
 
+  // 运营商业务（放最后：只用剩下的随机数）
+  buildCarrierDemo(stores.map((s) => s.id), users, hq.id, storeFactor);
+
   await write();
   await verify();
   await prisma.$disconnect();
@@ -948,6 +952,196 @@ function buildKpis(storeIds: number[]) {
   }
 }
 
+/**
+ * 运营商业务演示数据（口径第 14 节）：4 个运营商 × 5 种业务的佣金政策（广电合约机故意不配）；每家店每天 0～2 笔号卡、合约机、宽带，
+ * 合约机挂当天本店有客户的大额销售单；最近两天的大多还是“已登记”（留给演示点“同步运营商状态”），更早的基本都开通了，少数失败、作废。
+ * 已经过完的月份里，最近一个月留给演示“生成模拟结算单”，更早的都按模拟结算单对过账（同一套对账函数）。
+ * 放在最后生成：只用剩下的随机数，前面的销售、回收、维修等数据不受影响。
+ */
+const CARRIER_RULES: [CarrierKey, CarrierBizTypeKey, number, number][] = [
+  ["CMCC", "NEW_LINE", 8000, 6], ["CMCC", "PORT_IN", 15000, 6], ["CMCC", "CONTRACT_PHONE", 20000, 12], ["CMCC", "BROADBAND", 12000, 12], ["CMCC", "PLAN_UPGRADE", 3000, 3],
+  ["CUCC", "NEW_LINE", 7000, 6], ["CUCC", "PORT_IN", 14000, 6], ["CUCC", "CONTRACT_PHONE", 18000, 12], ["CUCC", "BROADBAND", 11000, 12], ["CUCC", "PLAN_UPGRADE", 2500, 3],
+  ["CTCC", "NEW_LINE", 7500, 6], ["CTCC", "PORT_IN", 14000, 6], ["CTCC", "CONTRACT_PHONE", 19000, 12], ["CTCC", "BROADBAND", 13000, 12], ["CTCC", "PLAN_UPGRADE", 2500, 3],
+  ["CBN", "NEW_LINE", 6000, 6], ["CBN", "PORT_IN", 12000, 6], ["CBN", "BROADBAND", 9000, 12], ["CBN", "PLAN_UPGRADE", 2000, 3],
+];
+const CARRIER_WEIGHTS: [CarrierKey, number][] = [["CMCC", 45], ["CUCC", 25], ["CTCC", 25], ["CBN", 5]];
+const CARRIER_TYPE_WEIGHTS: [CarrierBizTypeKey, number][] = [["NEW_LINE", 30], ["PORT_IN", 12], ["CONTRACT_PHONE", 15], ["BROADBAND", 20], ["PLAN_UPGRADE", 23]];
+const CARRIER_PACKAGES: Record<CarrierBizTypeKey, [string, number | null][]> = {
+  NEW_LINE: [["5G 畅享 129 元套餐", 12900], ["5G 智享 99 元套餐", 9900], ["59 元基础套餐", 5900], ["39 元流量王卡", 3900]],
+  PORT_IN: [["携转 99 元融合套餐", 9900], ["携转 129 元套餐", 12900]],
+  CONTRACT_PHONE: [["购机送费 199 元档 24 个月", 19900], ["购机送费 129 元档 24 个月", 12900], ["购机直降 99 元档 12 个月", 9900]],
+  BROADBAND: [["千兆宽带 1 年", null], ["300M 宽带 1 年", null], ["融合宽带（手机 + 宽带）", 15900]],
+  PLAN_UPGRADE: [["79 升 129 元套餐", 12900], ["59 升 99 元套餐", 9900], ["加 30G 流量包", 3000]],
+};
+const CARRIER_ORDER_PREFIX: Record<CarrierKey, string> = { CMCC: "CM", CUCC: "CU", CTCC: "CT", CBN: "CB" };
+const CARRIER_FAIL_REASONS = ["客户实名核验没过", "号码已被占用", "宽带地址不在覆盖范围", "客户临时不办了"];
+interface CarrierRec {
+  id: number;
+  orderNo: string;
+  storeId: number;
+  handledById: number;
+  customerId: number | null;
+  carrier: CarrierKey;
+  bizType: CarrierBizTypeKey;
+  phone: string;
+  packageName: string;
+  monthlyFeeFen: number | null;
+  carrierOrderNo: string | null;
+  salesOrderId: number | null;
+  bizDate: Date;
+  expectedCommissionFen: number;
+  clawbackMonths: number;
+  status: "SUBMITTED" | "ACTIVATED" | "FAILED" | "SETTLED" | "CLAWED_BACK" | "VOIDED";
+  activatedAt: Date | null;
+  failedReason: string | null;
+  settlementId: number | null;
+  settledFen: number | null;
+  clawbackFen: number | null;
+  voidedAt: Date | null;
+  voidedById: number | null;
+  voidReason: string | null;
+  note: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+const carrierOut = { rules: [] as Row[], business: [] as CarrierRec[], settlements: [] as Row[], lines: [] as Row[] };
+
+function buildCarrierDemo(storeIds: number[], users: { id: number; role: string; storeId: number | null }[], hqId: number, storeFactor: Map<number, number>) {
+  const now = new Date();
+  const ruleOf = new Map(CARRIER_RULES.map(([c, t, fen, months]) => [`${c}-${t}`, { fen, months }]));
+  const ruleTime = at(bizDateOf(-DAYS), 9, 0);
+  CARRIER_RULES.forEach(([carrier, bizType, commissionFen, clawbackMonths], i) => carrierOut.rules.push({ id: i + 1, carrier, bizType, commissionFen, clawbackMonths, isActive: true, note: "2026 年下半年渠道政策", createdAt: ruleTime, updatedAt: ruleTime }));
+  // 合约机：当天本店有客户、金额过千五的销售单（买新机）
+  const bigSales = new Map<string, SaleRec[]>();
+  for (const s of out.sales) {
+    if (s.status !== "COMPLETED" || !s.customerId || s.totalFen < 150000) continue;
+    const k = `${s.storeId}-${s.bizDate.getTime()}`;
+    bigSales.set(k, [...(bigSales.get(k) ?? []), s]);
+  }
+  const customerPhone = new Map(out.customers.map((c) => [c.id as number, c.phone as string]));
+  let seq = 0;
+  let orderSeq = 0;
+  for (const storeId of storeIds) {
+    const staff = users.filter((u) => u.storeId === storeId && (u.role === "STAFF" || u.role === "STORE_MANAGER"));
+    const manager = staff.find((u) => u.role === "STORE_MANAGER");
+    if (staff.length === 0) continue;
+    for (let day = -DAYS; day <= -1; day++) {
+      const bizDate = bizDateOf(day);
+      const n = chance(0.5 * storeFactor.get(storeId)!) ? (chance(0.3) ? 2 : 1) : 0;
+      const usedSales = new Set<number>();
+      for (let k = 0; k < n; k++) {
+        let bizType = weighted(CARRIER_TYPE_WEIGHTS, ([, w]) => w)[0];
+        let carrier = weighted(CARRIER_WEIGHTS, ([, w]) => w)[0];
+        let sale: SaleRec | undefined;
+        if (bizType === "CONTRACT_PHONE") {
+          sale = (bigSales.get(`${storeId}-${bizDate.getTime()}`) ?? []).find((s) => !usedSales.has(s.id));
+          if (sale) usedSales.add(sale.id);
+          else bizType = "NEW_LINE";
+          if (carrier === "CBN" && bizType === "CONTRACT_PHONE") carrier = "CMCC"; // 广电合约机没配政策
+        }
+        const rule = ruleOf.get(`${carrier}-${bizType}`)!;
+        const customerId = sale ? sale.customerId : chance(0.45) && out.customers.length > 0 ? (pick(out.customers).id as number) : null;
+        const phone = customerId && (bizType === "PORT_IN" || bizType === "PLAN_UPGRADE" || bizType === "BROADBAND") ? customerPhone.get(customerId)! : newPhone();
+        const [packageName, monthlyFeeFen] = pick(CARRIER_PACKAGES[bizType]);
+        const handledById = sale ? sale.salespersonId : pick(staff).id;
+        const createdAt = sale ? new Date(sale.createdAt.getTime() + between(5, 30) * 60000) : at(bizDate, between(10, 20), between(0, 59));
+        const rec: CarrierRec = {
+          id: ++seq,
+          orderNo: docNo("YY", bizDate),
+          storeId,
+          handledById,
+          customerId,
+          carrier,
+          bizType,
+          phone,
+          packageName,
+          monthlyFeeFen,
+          carrierOrderNo: chance(0.85) ? `${CARRIER_ORDER_PREFIX[carrier]}${ymd(bizDate)}${String(++orderSeq).padStart(6, "0")}` : null,
+          salesOrderId: sale?.id ?? null,
+          bizDate,
+          expectedCommissionFen: rule.fen,
+          clawbackMonths: rule.months,
+          status: "SUBMITTED",
+          activatedAt: null,
+          failedReason: null,
+          settlementId: null,
+          settledFen: null,
+          clawbackFen: null,
+          voidedAt: null,
+          voidedById: null,
+          voidReason: null,
+          note: null,
+          createdAt,
+          updatedAt: createdAt,
+        };
+        // 最近两天的大多还没确认；更早的基本都开通了
+        const r = rnd();
+        const recent = day >= -2;
+        if (recent ? r < 0.35 : r < 0.93) {
+          rec.status = "ACTIVATED";
+          rec.activatedAt = new Date(Math.min(createdAt.getTime() + between(2, recent ? 20 : 40) * 3600000, now.getTime() - 3600000));
+          rec.updatedAt = rec.activatedAt;
+        } else if (recent ? r < 0.4 : r < 0.98) {
+          rec.status = "FAILED";
+          rec.failedReason = pick(CARRIER_FAIL_REASONS);
+          rec.updatedAt = new Date(createdAt.getTime() + between(1, 6) * 3600000);
+        } else if (!recent) {
+          rec.status = "VOIDED";
+          rec.voidedAt = new Date(createdAt.getTime() + between(1, 3) * 3600000);
+          rec.voidedById = manager?.id ?? hqId;
+          rec.voidReason = pick(["登记重复了", "号码填错了，重新登记"]);
+          rec.updatedAt = rec.voidedAt;
+        }
+        carrierOut.business.push(rec);
+      }
+    }
+  }
+
+  // 已过完的月份：最近一个留给演示，更早的按模拟结算单对过账
+  const currentMonth = bizDateOf(0).toISOString().slice(0, 7);
+  const months = [...new Set(carrierOut.business.map((b) => b.bizDate.toISOString().slice(0, 7)))].filter((m) => m < currentMonth).sort();
+  const byId = new Map(carrierOut.business.map((b) => [b.id, b]));
+  let lineSeq = 0;
+  for (const month of months.slice(0, -1)) {
+    const { from, to } = monthRange(month);
+    const importDate = new Date(to.getTime() + 4 * DAY_MS); // 次月 5 号导入
+    for (const [carrier] of CARRIER_WEIGHTS) {
+      const candidates = carrierOut.business.filter((b) => b.carrier === carrier && (b.status === "ACTIVATED" || b.status === "SETTLED") && b.bizDate < to);
+      const lines: StatementLine[] = [];
+      for (const b of candidates.filter((c) => c.status === "ACTIVATED" && c.bizDate >= from)) {
+        const r = rnd();
+        if (r < 0.02) continue; // 运营商漏给
+        lines.push({ carrierOrderNo: b.carrierOrderNo, phone: b.phone, bizType: b.bizType, commissionFen: r < 0.05 ? Math.max(0, b.expectedCommissionFen - 1000) : b.expectedCommissionFen, clawbackFen: 0 });
+      }
+      for (const b of candidates.filter((c) => c.status === "SETTLED")) if (chance(0.04)) lines.push({ carrierOrderNo: b.carrierOrderNo, phone: b.phone, bizType: b.bizType, commissionFen: 0, clawbackFen: b.settledFen ?? 0 });
+      if (chance(0.5)) lines.push({ carrierOrderNo: `${CARRIER_ORDER_PREFIX[carrier]}${month.replace("-", "")}X${between(100, 999)}`, phone: newPhone(), bizType: "NEW_LINE", commissionFen: ruleOf.get(`${carrier}-NEW_LINE`)!.fen, clawbackFen: 0 });
+      if (lines.length === 0) continue;
+      const result = reconcileStatement(lines, candidates.map((c) => ({ ...c, inMonth: c.bizDate >= from && c.bizDate < to })));
+      const settlementId = carrierOut.settlements.length + 1;
+      const t = at(importDate, 10, between(0, 59));
+      carrierOut.settlements.push({
+        id: settlementId,
+        settlementNo: docNo("JS", importDate),
+        carrier,
+        month,
+        source: "SIMULATED",
+        importedById: hqId,
+        lineCount: lines.length,
+        matchedCount: result.lines.filter((l) => l.result === "MATCHED").length,
+        diffCount: result.lines.filter((l) => l.result === "DIFF").length,
+        unmatchedCount: result.lines.filter((l) => l.result === "UNMATCHED").length,
+        missingCount: result.missing.length,
+        totalCommissionFen: lines.reduce((s, l) => s + l.commissionFen, 0),
+        totalClawbackFen: lines.reduce((s, l) => s + l.clawbackFen, 0),
+        createdAt: t,
+      });
+      for (const l of result.lines) carrierOut.lines.push({ id: ++lineSeq, settlementId, carrierOrderNo: l.carrierOrderNo, phone: l.phone, bizType: l.bizType, commissionFen: l.commissionFen, clawbackFen: l.clawbackFen, businessId: l.businessId, result: l.result });
+      for (const s of result.settle) Object.assign(byId.get(s.id)!, { status: "SETTLED", settledFen: s.settledFen, settlementId, updatedAt: t });
+      for (const c of result.clawback) Object.assign(byId.get(c.id)!, { status: "CLAWED_BACK", clawbackFen: c.clawbackFen, updatedAt: t });
+    }
+  }
+}
+
 async function insert<T extends Row>(label: string, rows: T[], fn: (chunk: T[]) => Promise<unknown>) {
   for (let i = 0; i < rows.length; i += 2000) await fn(rows.slice(i, i + 2000));
   console.log(`  ${label}：${rows.length}`);
@@ -971,6 +1165,10 @@ async function write() {
   await insert("服务权益", out.entitlements as unknown as Row[], (c) => prisma.serviceEntitlement.createMany({ data: c as never }));
   await insert("维修单", out.repairs as unknown as Row[], (c) => prisma.repairOrder.createMany({ data: c as never }));
   await insert("收款", out.payments as unknown as Row[], (c) => prisma.payment.createMany({ data: c as never }));
+  await insert("运营商佣金政策", carrierOut.rules, (c) => prisma.carrierCommissionRule.createMany({ data: c as never }));
+  await insert("运营商结算单", carrierOut.settlements, (c) => prisma.carrierSettlement.createMany({ data: c as never }));
+  await insert("运营商业务", carrierOut.business as unknown as Row[], (c) => prisma.carrierBusiness.createMany({ data: c as never }));
+  await insert("运营商结算明细", carrierOut.lines, (c) => prisma.carrierSettlementLine.createMany({ data: c as never }));
   await insert("到期提醒", out.reminders, (c) => prisma.entitlementReminder.createMany({ data: c as never }));
   // 企业微信：店员、店长、总部的企业微信账号 = 登录账号（演示用；总部现场开单也能生成加微二维码）
   await prisma.$executeRaw`UPDATE users SET wecom_userid = username WHERE role IN ('STAFF', 'STORE_MANAGER', 'HQ') AND is_active`;
@@ -984,7 +1182,7 @@ async function write() {
     await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   // 自己指定了 id，自增序列要跟上，后面正常开单才不会撞号
-  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders"];
+  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines"];
   for (const t of tables) {
     await prisma.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM "${t}"), 0), 1), (SELECT COUNT(*) > 0 FROM "${t}"))`);
   }
@@ -995,7 +1193,7 @@ async function verify() {
   const result = await runIntegrityChecks(prisma);
   const sales = out.sales.filter((s) => s.status === "COMPLETED");
   console.log(
-    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${out.wecomFollows.length} 条企业微信好友关系。`,
+    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${carrierOut.business.length} 笔运营商业务（${carrierOut.settlements.length} 张往月结算单）、${out.wecomFollows.length} 条企业微信好友关系。`,
   );
   console.log(`自检：${describeIntegrity(result)}`);
   if (!integrityOk(result)) process.exitCode = 1;
