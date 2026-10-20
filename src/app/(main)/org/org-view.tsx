@@ -74,7 +74,7 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
   const [takeoverId, setTakeoverId] = useState<number | undefined>(undefined);
 
   const [regionForm] = Form.useForm<{ name: string }>();
-  const [storeForm] = Form.useForm<{ code: string; name: string; regionId: number; address?: string }>();
+  const [storeForm] = Form.useForm<{ code: string; name: string; regionId: number; address?: string; wecomWebhookUrl?: string }>();
   const [userForm] = Form.useForm<{ username: string; name: string; role: Role; storeId?: number; regionId?: number; password?: string; wecomUserid?: string }>();
   const [passwordForm] = Form.useForm<{ password: string }>();
   const watchedRole = Form.useWatch("role", userForm);
@@ -233,6 +233,7 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
     { title: "门店", dataIndex: "name" },
     { title: "区域", render: (_, s) => regionById.get(s.regionId)?.name ?? "-" },
     { title: "地址", dataIndex: "address", render: (v: string | null) => v ?? "-" },
+    { title: "门店群", dataIndex: "hasWebhook", render: (v: boolean) => (v ? <Tag color="green">已填</Tag> : <Typography.Text type="secondary">未填</Typography.Text>) },
     { title: "状态", dataIndex: "isActive", render: (v: boolean) => <StatusTag active={v} /> },
     {
       title: "操作",
@@ -431,6 +432,13 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
           </Form.Item>
           <Form.Item name="address" label="地址">
             <Input maxLength={200} />
+          </Form.Item>
+          <Form.Item
+            name="wecomWebhookUrl"
+            label="企业微信门店群机器人地址（智能提醒推送用）"
+            extra={storeModal.record?.hasWebhook ? "已经填过（带密钥，不显示）。留空不改，填“无”清掉。" : "在门店的企业微信群里添加机器人，复制它的 Webhook 地址；不填就只发系统内消息。"}
+          >
+            <Input maxLength={200} placeholder={storeModal.record?.hasWebhook ? "已填，留空不改" : "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…"} />
           </Form.Item>
         </Form>
       </Modal>

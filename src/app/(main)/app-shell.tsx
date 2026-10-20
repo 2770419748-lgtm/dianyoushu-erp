@@ -7,6 +7,8 @@ import { Breadcrumb, Button, Grid, Layout, Menu, Space, Tag, Typography } from "
 import type { MenuEntry } from "@/server/auth/permissions";
 import { breadcrumbFor } from "@/lib/routes";
 import { logout } from "@/app/(auth)/login/actions";
+import type { MyNotifications } from "@/server/alerts/alert-service";
+import { NotificationBell } from "./notification-bell";
 
 const { Header, Sider, Content } = Layout;
 
@@ -22,10 +24,12 @@ const noopSubscribe = () => () => {};
 export function AppShell({
   user,
   menu,
+  notifications,
   children,
 }: {
   user: ShellUser;
   menu: MenuEntry[];
+  notifications: MyNotifications;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -78,6 +82,7 @@ export function AppShell({
             <Tag color="blue">{user.roleLabel}</Tag>
             {compact ? null : <Typography.Text type="secondary">{user.scopeLabel}</Typography.Text>}
           </Space>
+          <NotificationBell data={notifications} compact={compact} />
           <form action={logout}>
             <Button htmlType="submit" size="small">
               退出

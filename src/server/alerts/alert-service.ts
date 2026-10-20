@@ -1,0 +1,185 @@
+import "server-only";
+import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@/generated/prisma/client";
+import { type AlertDraft, type AlertScopeKey, renderTemplateDigest, scopeKeyOf } from "@/lib/alerts";
+import { formatDate } from "@/lib/format";
+import type { CurrentUser } from "@/server/auth/current-user";
+import { PermissionError } from "@/server/auth/scope";
+import { writeAudit } from "@/server/audit";
+import type { Db } from "@/server/db-tx";
+import { type PushResult, pushToWecomGroup } from "./push";
+import { collectAlerts } from "./rules";
+
+// 智能提醒（口径第 18 节）：跑规则 → 存命中的提醒 → 每个范围（门店、区域、总部）写一份今日待办 → 发系统内消息、推门店群。
+// 今日待办由 writer 写：这一步先只有模板版；接模型（第二期）时换成“模型写、程序校验、不行就模板”的 writer。
+
+export class AlertError extends Error {}
+
+export interface DigestInput {
+  scope: AlertScopeKey;
+  title: string;
+  items: AlertDraft[];
+}
+
+export interface DigestOutput {
+  content: string;
+  source: "MODEL" | "SIMULATED" | "TEMPLATE";
+  fallbackReason: string | null;
+}
+
+export type DigestWriter = (input: DigestInput) => Promise<DigestOutput>;
+
+export const templateWriter: DigestWriter = async (input) => ({ content: renderTemplateDigest(input.title, input.items), source: "TEMPLATE", fallbackReason: null });
+
+export function getDigestWriter(): DigestWriter {
+  return templateWriter;
+}
+
+function bizDateOf(now: Date): Date {
+  return new Date(formatDate(now));
+}
+
+function dayText(d: Date): string {
+  const [, m, day] = formatDate(d).split("-").map(Number);
+  return `${m} 月 ${day} 日`;
+}
+
+/** 这个范围的今日待办发给谁 */
+async function recipients(db: Db, scope: AlertScopeKey, id: number | null) {
+  const where: Prisma.UserWhereInput =
+    scope === "STORE" ? { storeId: id, role: { in: ["STAFF", "STORE_MANAGER"] } } : scope === "REGION" ? { regionId: id, role: "REGIONAL_MANAGER" } : { role: "HQ" };
+  return db.user.findMany({ where: { ...where, isActive: true }, select: { id: true } });
+}
+
+/**
+ * 跑一遍：storeIds 给了只算这几家店（店长点“立即生成”），否则全部门店 + 各区域 + 总部。
+ * 同一天再跑：命中的更新、已经没有的删掉；今日待办内容变了才重新标未读、才再推门店群。
+ */
+export async function runAlerts(options: { db?: Db; now?: Date; storeIds?: number[]; writer?: DigestWriter; push?: (url: string | null, markdown: string) => Promise<PushResult> } = {}) {
+  const db = options.db ?? prisma;
+  const now = options.now ?? new Date();
+  const writer = options.writer ?? getDigestWriter();
+  const push = options.push ?? ((url, md) => pushToWecomGroup(url, md));
+  const bizDate = bizDateOf(now);
+  const full = !options.storeIds;
+  const { stores, drafts } = await collectAlerts(db, now, { storeIds: options.storeIds });
+  const regions = full ? await db.region.findMany({ where: { isActive: true }, select: { id: true, name: true } }) : [];
+  const scopes: { key: string; scope: AlertScopeKey; id: number | null; name: string }[] = [
+    ...stores.map((s) => ({ key: `store:${s.id}`, scope: "STORE" as const, id: s.id, name: `${s.code} ${s.name}` })),
+    ...regions.map((r) => ({ key: `region:${r.id}`, scope: "REGION" as const, id: r.id, name: r.name })),
+    ...(full ? [{ key: "hq", scope: "HQ" as const, id: null, name: "总部" }] : []),
+  ];
+
+  // 1. 命中的提醒
+  for (const d of drafts) {
+    const data = { scope: d.scope, storeId: d.storeId, regionId: d.regionId, severity: d.severity, title: d.title, detail: d.detail, link: d.link, facts: d.facts as Prisma.InputJsonValue };
+    await db.alertItem.upsert({ where: { bizDate_kind_scopeKey: { bizDate, kind: d.kind, scopeKey: scopeKeyOf(d) } }, create: { bizDate, kind: d.kind, scopeKey: scopeKeyOf(d), ...data }, update: data });
+  }
+  const keep = drafts.map((d) => ({ kind: d.kind, scopeKey: scopeKeyOf(d) }));
+  await db.alertItem.deleteMany({ where: { bizDate, scopeKey: { in: scopes.map((s) => s.key) }, ...(keep.length > 0 ? { NOT: { OR: keep } } : {}) } });
+
+  // 2. 每个范围一份今日待办、消息、推送
+  const webhooks = new Map((await db.store.findMany({ where: { id: { in: stores.map((s) => s.id) } }, select: { id: true, wecomWebhookUrl: true } })).map((s) => [s.id, s.wecomWebhookUrl]));
+  const report = { items: drafts.length, digests: 0, changed: 0, notified: 0, pushed: { SENT: 0, SIMULATED: 0, NONE: 0, FAILED: 0 } as Record<PushResult["status"], number>, sources: { MODEL: 0, SIMULATED: 0, TEMPLATE: 0 } as Record<DigestOutput["source"], number> };
+  for (const s of scopes) {
+    const items = drafts.filter((d) => scopeKeyOf(d) === s.key);
+    if (items.length === 0) {
+      await db.alertDigest.deleteMany({ where: { bizDate, scopeKey: s.key } }); // 今天的事都处理完了，消息一起删（级联）
+      continue;
+    }
+    const title = `${s.name} 今日待办（${dayText(now)}）`;
+    const out = await writer({ scope: s.scope, title, items });
+    const existing = await db.alertDigest.findUnique({ where: { bizDate_scopeKey: { bizDate, scopeKey: s.key } }, select: { content: true } });
+    const changed = !existing || existing.content !== out.content;
+    const data = { scope: s.scope, storeId: s.scope === "STORE" ? s.id : null, regionId: s.scope === "REGION" ? s.id : null, title, content: out.content, source: out.source, fallbackReason: out.fallbackReason, itemCount: items.length, generatedAt: now };
+    const digest = await db.alertDigest.upsert({ where: { bizDate_scopeKey: { bizDate, scopeKey: s.key } }, create: { bizDate, scopeKey: s.key, ...data }, update: data });
+    report.digests++;
+    report.sources[out.source]++;
+
+    const users = await recipients(db, s.scope, s.id);
+    const body = `${items.length} 件事：${[...items].sort((a, b) => b.severity - a.severity).slice(0, 3).map((i) => i.title).join("、")}${items.length > 3 ? " 等" : ""}`;
+    const created = await db.notification.createMany({ data: users.map((u) => ({ userId: u.id, digestId: digest.id, title: `今日待办：${s.name}`, body, link: `/alerts?digest=${digest.id}` })), skipDuplicates: true });
+    report.notified += created.count;
+    if (changed) {
+      report.changed++;
+      await db.notification.updateMany({ where: { digestId: digest.id }, data: { body, readAt: null } });
+      if (s.scope === "STORE") {
+        const result = await push(webhooks.get(s.id!) ?? null, out.content);
+        report.pushed[result.status]++;
+        await db.alertDigest.update({ where: { id: digest.id }, data: { pushStatus: result.status, pushError: result.status === "FAILED" ? result.error : null, pushedAt: result.status === "SENT" ? now : null } });
+      }
+    }
+  }
+  return report;
+}
+
+/** 页面上的“立即生成”：店长只生成本店，总部全部 */
+export async function runAlertsNow(user: CurrentUser) {
+  if (user.role === "STORE_MANAGER") {
+    if (!user.storeId) throw new AlertError("你还没分配门店");
+    const report = await runAlerts({ storeIds: [user.storeId] });
+    await writeAudit({ userId: user.id, action: "alerts.run", detail: { scope: `store:${user.storeId}`, ...report } as never });
+    return report;
+  }
+  if (user.role !== "HQ") throw new AlertError("只有店长和总部能立即生成");
+  const report = await runAlerts();
+  await writeAudit({ userId: user.id, action: "alerts.run", detail: { scope: "all", ...report } as never });
+  return report;
+}
+
+// ---------- 消息（顶栏小铃铛） ----------
+
+export async function listMyNotifications(userId: number) {
+  const [unread, items] = await Promise.all([
+    prisma.notification.count({ where: { userId, readAt: null } }),
+    prisma.notification.findMany({ where: { userId }, orderBy: { updatedAt: "desc" }, take: 8, select: { id: true, title: true, body: true, link: true, readAt: true, updatedAt: true } }),
+  ]);
+  return { unread, items };
+}
+
+export type MyNotifications = Awaited<ReturnType<typeof listMyNotifications>>;
+
+export async function markNotificationsRead(userId: number, ids: number[] | "all") {
+  await prisma.notification.updateMany({ where: { userId, readAt: null, ...(ids === "all" ? {} : { id: { in: ids } }) }, data: { readAt: new Date() } });
+}
+
+// ---------- 智能提醒页 ----------
+
+/** 我能看的今日待办：店员店长本店；区域经理本区域和辖区各店；总部全部 */
+async function visibleDigests(user: CurrentUser): Promise<Prisma.AlertDigestWhereInput> {
+  switch (user.role) {
+    case "STAFF":
+    case "STORE_MANAGER":
+      return { scopeKey: `store:${user.storeId ?? 0}` };
+    case "REGIONAL_MANAGER": {
+      const storeIds = (await prisma.store.findMany({ where: { regionId: user.regionId ?? 0 }, select: { id: true } })).map((s) => s.id);
+      return { OR: [{ scopeKey: `region:${user.regionId ?? 0}` }, { scope: "STORE", storeId: { in: storeIds } }] };
+    }
+    case "HQ":
+      return {};
+  }
+}
+
+export async function getAlertsPage(user: CurrentUser, query: { date?: string; digestId?: number }) {
+  const date = query.date && /^\d{4}-\d{2}-\d{2}$/.test(query.date) ? new Date(query.date) : bizDateOf(new Date());
+  const where = await visibleDigests(user);
+  const digests = await prisma.alertDigest.findMany({
+    where: { ...where, bizDate: date },
+    orderBy: [{ scope: "desc" }, { scopeKey: "asc" }],
+    select: { id: true, scope: true, scopeKey: true, title: true, content: true, source: true, fallbackReason: true, itemCount: true, pushStatus: true, pushError: true, generatedAt: true },
+  });
+  const scopeKeys = digests.map((d) => d.scopeKey);
+  const items = await prisma.alertItem.findMany({ where: { bizDate: date, scopeKey: { in: scopeKeys } }, orderBy: [{ severity: "desc" }, { id: "asc" }], select: { id: true, kind: true, scope: true, scopeKey: true, severity: true, title: true, detail: true, link: true } });
+  if (query.digestId) await prisma.notification.updateMany({ where: { userId: user.id, digestId: query.digestId, readAt: null }, data: { readAt: new Date() } });
+  return {
+    date: formatDate(date),
+    digests,
+    items,
+    canRun: user.role === "STORE_MANAGER" || user.role === "HQ",
+    selected: query.digestId && digests.some((d) => d.id === query.digestId) ? query.digestId : (digests[0]?.id ?? null),
+  };
+}
+
+export type AlertsPage = Awaited<ReturnType<typeof getAlertsPage>>;
+
+export { PermissionError };

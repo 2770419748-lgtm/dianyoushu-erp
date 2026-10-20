@@ -36,6 +36,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/wecom/sidebar": "企微侧边栏",
   "/wecom/kf": "微信客服",
   "/wecom/transfers": "客户继承",
+  "/alerts": "智能提醒",
   "/sales": "销售单",
   "/sales/new": "开单",
   "/trade-ins": "回收单",

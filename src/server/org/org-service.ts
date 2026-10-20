@@ -8,6 +8,7 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { getWecomClient, WecomError } from "@/server/wecom/client";
 import { WECOM_USERID_PATTERN, wecomMode } from "@/server/wecom/config";
 import { writeAudit } from "@/server/audit";
+import { isWecomWebhookUrl } from "@/lib/alerts";
 import { createResignedTransfers, WecomTransferError } from "@/server/wecom/transfer-service";
 
 // 组织管理服务层：区域、门店、员工的新增、编辑、停用。只有总部能调；每次写入记操作日志。
@@ -63,7 +64,7 @@ export async function getOrgTree() {
         isActive: true,
         stores: {
           orderBy: { code: "asc" },
-          select: { id: true, code: true, name: true, address: true, regionId: true, isActive: true },
+          select: { id: true, code: true, name: true, address: true, regionId: true, isActive: true, wecomWebhookUrl: true },
         },
       },
     }),
@@ -73,7 +74,11 @@ export async function getOrgTree() {
     }),
   ]);
   // activeFollows：跟进中的企业微信客户数，停用时提示安排接手人（口径第 12 节第三步）
-  return { regions, users: users.map(({ _count, ...u }) => ({ ...u, activeFollows: _count.wecomFollows })) };
+  // 群机器人地址带密钥，不发到浏览器，只说有没有填
+  return {
+    regions: regions.map((r) => ({ ...r, stores: r.stores.map(({ wecomWebhookUrl, ...s }) => ({ ...s, hasWebhook: wecomWebhookUrl !== null })) })),
+    users: users.map(({ _count, ...u }) => ({ ...u, activeFollows: _count.wecomFollows })),
+  };
 }
 
 export type OrgTree = Awaited<ReturnType<typeof getOrgTree>>;
@@ -127,6 +132,17 @@ export interface StoreInput {
   name: unknown;
   regionId: unknown;
   address?: unknown;
+  /** 企业微信门店群机器人地址（口径第 18 节）：不填 = 不改（新建就是没有），填“无” = 清掉 */
+  wecomWebhookUrl?: unknown;
+}
+
+/** 群机器人地址：undefined 表示不改 */
+function parseWebhook(raw: unknown): string | null | undefined {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (!text) return undefined;
+  if (text === "无") return null;
+  if (!isWecomWebhookUrl(text)) throw new OrgError("群机器人地址不对：在企业微信群里添加机器人后复制它的 Webhook 地址（https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…）");
+  return text;
 }
 
 function parseStoreInput(input: StoreInput) {
@@ -143,9 +159,10 @@ function parseStoreInput(input: StoreInput) {
 export async function createStore(actor: Actor, input: StoreInput) {
   assertCanManage(actor);
   const data = parseStoreInput(input);
+  const webhook = parseWebhook(input.wecomWebhookUrl);
   try {
-    const store = await prisma.store.create({ data });
-    await writeAudit({ userId: actor.id, action: "store.create", entity: "store", entityId: store.id, detail: data });
+    const store = await prisma.store.create({ data: { ...data, wecomWebhookUrl: webhook ?? null } });
+    await writeAudit({ userId: actor.id, action: "store.create", entity: "store", entityId: store.id, detail: { ...data, webhook: webhook ? "已填" : "没填" } });
     return store;
   } catch (error) {
     if (isUniqueViolation(error)) throw new OrgError("门店编码已经存在");
@@ -156,9 +173,10 @@ export async function createStore(actor: Actor, input: StoreInput) {
 export async function updateStore(actor: Actor, id: number, input: StoreInput) {
   assertCanManage(actor);
   const data = parseStoreInput(input);
+  const webhook = parseWebhook(input.wecomWebhookUrl);
   try {
-    const store = await prisma.store.update({ where: { id }, data });
-    await writeAudit({ userId: actor.id, action: "store.update", entity: "store", entityId: id, detail: data });
+    const store = await prisma.store.update({ where: { id }, data: { ...data, ...(webhook !== undefined ? { wecomWebhookUrl: webhook } : {}) } });
+    await writeAudit({ userId: actor.id, action: "store.update", entity: "store", entityId: id, detail: { ...data, ...(webhook !== undefined ? { webhook: webhook ? "改了" : "清掉了" } : {}) } });
     return store;
   } catch (error) {
     if (isUniqueViolation(error)) throw new OrgError("门店编码已经存在");

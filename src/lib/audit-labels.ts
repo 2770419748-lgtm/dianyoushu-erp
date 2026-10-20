@@ -93,6 +93,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "wecom.transfer.resigned": "安排离职继承",
   "wecom.transfer.done": "企业微信客户接替完毕",
   "wecom.transfer.process": "查客户继承进度",
+  "alerts.run": "生成智能提醒",
   "daily.run": "每日任务（到期提醒、企业微信清理）",
   "daily_close.confirm": "日结确认",
   "daily_close.reopen": "撤销日结",

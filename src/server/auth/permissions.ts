@@ -203,6 +203,7 @@ export interface MenuEntry {
 }
 
 const ROADMAP: MenuEntry = { key: "roadmap", label: "后续规划", href: "/roadmap" };
+const ALERTS: MenuEntry = { key: "alerts", label: "智能提醒", href: "/alerts" };
 
 const MENU_STAFF: MenuEntry[] = [
   { key: "m-sale", label: "手机开单", href: "/m/sale" },
@@ -212,6 +213,7 @@ const MENU_STAFF: MenuEntry[] = [
   { key: "products", label: "商品查价", href: "/products" },
   { key: "customers", label: "客户", href: "/customers" },
   { key: "entitlements", label: "到期名单", href: "/entitlements" },
+  ALERTS,
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
   { key: "subsidy", label: "国补", href: "/subsidy" },
@@ -239,6 +241,7 @@ const MENU_STORE_MANAGER: MenuEntry[] = [
 
 const MENU_REGIONAL: MenuEntry[] = [
   { key: "dashboard", label: "看板", href: "/dashboard" },
+  ALERTS,
   { key: "stores", label: "辖区门店", href: "/stores" },
   { key: "stock", label: "库存", href: "/stock" },
   { key: "m-stock", label: "手机查库存", href: "/m/stock" },
@@ -254,6 +257,7 @@ const MENU_REGIONAL: MenuEntry[] = [
 
 const MENU_HQ: MenuEntry[] = [
   { key: "dashboard", label: "看板", href: "/dashboard" },
+  ALERTS,
   { key: "org", label: "组织管理", href: "/org" },
   { key: "products", label: "商品", href: "/products" },
   { key: "prices", label: "门店售价", href: "/products/prices" },

@@ -223,6 +223,40 @@ enum WecomEventStatus {
 }
 
 /// 客户标签从哪来
+/// 智能提醒的规则（口径第 18 节）
+enum AlertKind {
+  STALE_DEVICES    // 滞销机器
+  LOW_ACCESSORY    // 配件缺货
+  KPI_BEHIND       // KPI 落后
+  DAILY_CLOSE      // 日结没做完
+  TRANSFER_PENDING // 调拨没收货
+  STOCKTAKE_OPEN   // 盘点没确认
+  TRADE_IN_IDLE    // 回收机没处理
+  APPROVAL_PENDING // 待审批
+  TRANSFER_SUGGEST // 调拨建议
+  INTEGRITY        // 对账自检
+
+  @@map("alert_kind")
+}
+
+/// 提醒和今日待办是给谁的
+enum AlertScope {
+  STORE  // 门店（店长、店员）
+  REGION // 区域（区域经理）
+  HQ     // 总部
+
+  @@map("alert_scope")
+}
+
+/// 今日待办是谁写的
+enum AlertDigestSource {
+  MODEL     // 真大模型
+  SIMULATED // 模拟模型（演示站没配模型时）
+  TEMPLATE  // 模板（没开模型，或模型出错、超额、写了清单外的数字）
+
+  @@map("alert_digest_source")
+}
+
 /// 企业微信客户继承的种类（口径第 12 节第三步）
 enum WecomTransferKind {
   ON_JOB   // 在职转接：店长、总部把一个员工的客户转给另一个员工
@@ -412,6 +446,7 @@ model Store {
   name      String
   regionId  Int      @map("region_id")
   address   String?
+  wecomWebhookUrl String? @map("wecom_webhook_url") // 企业微信门店群机器人地址（带密钥，页面只显示有没有填；智能提醒推送用，口径第 18 节）
   isActive  Boolean  @default(true) @map("is_active") // 停用不删
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -495,6 +530,7 @@ model User {
   wecomTransfersFrom    WecomTransfer[] @relation("WecomTransferFrom")
   wecomTransfersTo      WecomTransfer[] @relation("WecomTransferTo")
   wecomTransfersCreated WecomTransfer[] @relation("WecomTransferCreatedBy")
+  notifications         Notification[]
 
   @@index([storeId])
   @@index([regionId])
@@ -1626,6 +1662,74 @@ model WecomEvent {
 
   @@index([status, receivedAt])
   @@map("wecom_events")
+}
+
+/// 智能提醒命中的一条（口径第 18 节）：同一天同一个范围同一类只有一条，再生成就更新
+model AlertItem {
+  id        Int        @id @default(autoincrement())
+  bizDate   DateTime   @map("biz_date") @db.Date
+  kind      AlertKind
+  scope     AlertScope
+  scopeKey  String     @map("scope_key") // store:门店id / region:区域id / hq
+  storeId   Int?       @map("store_id")
+  regionId  Int?       @map("region_id")
+  severity  Int // 1 一般、2 要紧、3 很急（程序定，数据库 CHECK 1～3）
+  title     String
+  detail    String // 程序写的一句话，模板版就用它
+  link      String?
+  facts     Json // 程序算好的数字，交给模型的就是这些
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@unique([bizDate, kind, scopeKey])
+  @@index([scopeKey, bizDate])
+  @@map("alert_items")
+}
+
+/// 今日待办：一个范围一天一份（门店、区域、总部），再生成就更新
+model AlertDigest {
+  id             Int               @id @default(autoincrement())
+  bizDate        DateTime          @map("biz_date") @db.Date
+  scope          AlertScope
+  scopeKey       String            @map("scope_key")
+  storeId        Int?              @map("store_id")
+  regionId       Int?              @map("region_id")
+  title          String
+  content        String // markdown
+  source         AlertDigestSource
+  fallbackReason String?           @map("fallback_reason") // 为什么没用模型写（没开、出错、超额、数字对不上）
+  itemCount      Int               @map("item_count")
+  pushStatus     String?           @map("push_status") // SENT 发了 / SIMULATED 演示没真发 / FAILED 没发出去 / NONE 门店没填群地址
+  pushError      String?           @map("push_error")
+  pushedAt       DateTime?         @map("pushed_at")
+  generatedAt    DateTime          @map("generated_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  notifications Notification[]
+
+  @@unique([bizDate, scopeKey])
+  @@map("alert_digests")
+}
+
+/// 系统内消息（顶栏小铃铛）：一个人一份今日待办一条；内容变了重新标未读
+model Notification {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  digestId  Int?      @map("digest_id")
+  title     String
+  body      String // 一两行摘要
+  link      String?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  user   User         @relation(fields: [userId], references: [id])
+  digest AlertDigest? @relation(fields: [digestId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, digestId])
+  @@index([userId, readAt])
+  @@map("notifications")
 }
 
 /// 企业微信客户继承（口径第 12 节第三步）：一个客户的一条跟进关系一条；同一条跟进关系同时只能有一个没办完的（部分唯一索引）
