@@ -253,6 +253,7 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
   if (order.status !== "COMPLETED") throw new SalesError("这张单已经作废了");
   if (order.dailyCloseId) throw new SalesError("当日已日结确认，不能作废");
   if (order._count.returnOrders > 0) throw new SalesError("这张单已经有退货记录，不能作废，剩下的继续走退货");
+  if (await tx.serviceEntitlement.count({ where: { salesOrderId: orderId, status: "CLAIMED" } })) throw new SalesError("这张单上的碎屏险已经在维修单上理赔过了，不能作废");
   const voidReason = typeof reason === "string" ? reason.trim().slice(0, 200) || null : null;
 
   try {

@@ -51,6 +51,13 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "trade_in.create": "开回收单",
   "trade_in.refurbish": "回收机转良品",
   "return.create": "退货",
+  "repair.create": "售后接件",
+  "repair.quote": "维修报价",
+  "repair.approve": "客户同意维修",
+  "repair.decline": "客户不修",
+  "repair.finish": "维修完成",
+  "repair.pickup": "取机结算",
+  "repair.void": "作废维修单",
   "entitlement.reminder_scan": "生成到期提醒",
   "entitlement.reminder_contacted": "到期提醒已联系",
   "wecom.bind": "客户绑定企业微信",
@@ -80,6 +87,7 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   device: "机器",
   daily_close: "日结",
   entitlement_reminder: "到期提醒",
+  repair_order: "维修单",
 };
 
 export function auditActionLabel(action: string): string {

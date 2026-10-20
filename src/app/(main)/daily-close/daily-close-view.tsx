@@ -15,6 +15,7 @@ import { confirmDailyCloseAction, reopenDailyCloseAction, saveDailyCloseAction, 
 
 type Order = View["orders"][number];
 type Ret = View["returns"][number];
+type Rep = View["repairs"][number];
 
 export function DailyCloseView({
   stores,
@@ -131,6 +132,14 @@ export function DailyCloseView({
     { title: "时间", dataIndex: "createdAt", render: (v: Date) => formatDateTime(v).slice(11) },
   ];
 
+  const repairColumns: TableColumnsType<Rep> = [
+    { title: "维修单", render: (_, r) => <Link href={`/repairs/${r.id}`}>{r.orderNo}</Link> },
+    { title: "客户", dataIndex: "customer" },
+    { title: "收款", render: (_, r) => r.payments.map((p) => `${PAYMENT_METHOD_LABELS[p.method]} ${formatFen(p.amountFen)}`).join(" + ") || "不收钱（保修、碎屏险、延保或没修）" },
+    { title: "结算人", dataIndex: "closedBy" },
+    { title: "时间", dataIndex: "closedAt", render: (v: Date | null) => (v ? formatDateTime(v).slice(11) : "-") },
+  ];
+
   return (
     <Space orientation="vertical" size="large" style={{ width: "100%" }}>
       <Card
@@ -209,6 +218,12 @@ export function DailyCloseView({
       {view.returns.length > 0 ? (
         <Card title={`当日退货（${view.returns.length}）`}>
           <Table rowKey="id" size="small" pagination={false} columns={returnColumns} dataSource={view.returns} scroll={{ x: true }} />
+        </Card>
+      ) : null}
+      {view.repairs.length > 0 ? (
+        <Card title={`当日维修取机（${view.repairs.length}）`}>
+          <Typography.Paragraph type="secondary">维修取机结算的收款算在取机这天，已经加进上面各收款方式的系统数里。</Typography.Paragraph>
+          <Table rowKey="id" size="small" pagination={false} columns={repairColumns} dataSource={view.repairs} scroll={{ x: true }} />
         </Card>
       ) : null}
     </Space>

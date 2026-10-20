@@ -1,6 +1,9 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import type { Prisma, PrismaClient } from "@/generated/prisma/client";
+import { asTx, type Db, withTx } from "@/server/db-tx";
+
+export { asTx, withTx };
+export type { Db };
 import { wecomMode } from "./config";
 
 // 企业微信接口封装（口径第 12 节）。业务代码只认 WecomClient 这个接口，有两种实现：
@@ -64,19 +67,6 @@ const TOKEN_LOCK_KEY = 7311001; // 咨询锁的键（单个 bigint，和门店�
 
 export function tokenNeedsRefresh(expiresAt: Date | null | undefined, now: Date): boolean {
   return !expiresAt || expiresAt.getTime() - now.getTime() <= TOKEN_REFRESH_MARGIN_MS;
-}
-
-export type Db = PrismaClient | Prisma.TransactionClient;
-type Tx = Prisma.TransactionClient;
-
-/** 传进来的是客户端就开事务，已经是事务（测试里回滚用）就直接用。事务客户端上也有 $transaction，但没有 $connect，按它区分 */
-export function withTx<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
-  return "$connect" in db ? db.$transaction(fn, { timeout: 20000 }) : fn(db);
-}
-
-/** 写操作日志时：在事务里就跟着事务写 */
-export function asTx(db: Db): Tx | undefined {
-  return "$connect" in db ? undefined : db;
 }
 
 // ---------- 真实现 ----------

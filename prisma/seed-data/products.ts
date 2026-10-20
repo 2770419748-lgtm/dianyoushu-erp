@@ -27,9 +27,9 @@ export const CATEGORY_SEED = [
 
 /** 服务类商品（口径第 12 节）：开单生成服务权益，到期提醒。季度版碎屏险让演示数据里有快到期的 */
 export const SERVICE_SEED = [
-  { name: "碎屏险 1 年", months: 12, guideYuan: 199, costYuan: 80 },
-  { name: "碎屏险 季度版", months: 3, guideYuan: 69, costYuan: 25 },
-  { name: "延保 1 年", months: 12, guideYuan: 299, costYuan: 120 },
+  { name: "碎屏险 1 年", months: 12, guideYuan: 199, costYuan: 80, kind: "SCREEN_INSURANCE" as const },
+  { name: "碎屏险 季度版", months: 3, guideYuan: 69, costYuan: 25, kind: "SCREEN_INSURANCE" as const },
+  { name: "延保 1 年", months: 12, guideYuan: 299, costYuan: 120, kind: "EXTENDED_WARRANTY" as const },
 ];
 
 const v = (storage: string, guideYuan: number) => ({ storage, guideYuan });
@@ -215,7 +215,7 @@ export async function seedProducts(prisma: PrismaClient) {
       create: { brandId: serviceBrand.id, categoryId: serviceCategoryId, name: sv.name },
     });
     const barcode = stableBarcode(`门店服务|${sv.name}`);
-    const data = { modelId: model.id, name: sv.name, guidePriceFen: sv.guideYuan * 100, costPriceFen: sv.costYuan * 100, safetyQty: 0, isService: true, serviceMonths: sv.months };
+    const data = { modelId: model.id, name: sv.name, guidePriceFen: sv.guideYuan * 100, costPriceFen: sv.costYuan * 100, safetyQty: 0, isService: true, serviceMonths: sv.months, serviceKind: sv.kind };
     await prisma.sku.upsert({ where: { barcode }, update: { ...data, isActive: true }, create: { ...data, barcode } });
     skuCount++;
   }

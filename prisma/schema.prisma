@@ -88,10 +88,63 @@ enum TradeInStatus {
 
 /// 服务权益状态（口径第 12 节）：过没过期按到期日算，不单独存
 enum EntitlementStatus {
-  ACTIVE // 有效
-  VOIDED // 失效：退货退掉了服务，或销售单作废
+  ACTIVE  // 有效
+  VOIDED  // 失效：退货退掉了服务，或销售单作废
+  CLAIMED // 已理赔：碎屏险在维修单上用掉了（口径第 13 节，只能用一次）
 
   @@map("entitlement_status")
+}
+
+/// 服务类商品的种类（口径第 13 节）：决定维修时能不能用、能用几次
+enum ServiceKind {
+  SCREEN_INSURANCE  // 碎屏险：屏幕故障，理赔一次
+  EXTENDED_WARRANTY // 延保：非人为故障，期内不限次数
+  OTHER             // 其他：不能用来维修
+
+  @@map("service_kind")
+}
+
+/// 维修单状态（口径第 13 节）
+enum RepairStatus {
+  RECEIVED  // 已接件
+  QUOTED    // 已报价，等客户确认
+  REPAIRING // 维修中
+  READY     // 待取机（修好了，或客户不修、修不好）
+  CLOSED    // 已完结（客户取走、结清）
+  VOIDED    // 已作废
+
+  @@map("repair_status")
+}
+
+/// 维修谁来付
+enum RepairPayer {
+  CUSTOMER          // 客户自费
+  WARRANTY          // 保修（本店卖出 12 个月内，非屏幕、进水）
+  SCREEN_INSURANCE  // 碎屏险理赔
+  EXTENDED_WARRANTY // 延保
+
+  @@map("repair_payer")
+}
+
+/// 维修结果
+enum RepairOutcome {
+  REPAIRED     // 修好了
+  NOT_REPAIRED // 客户不修，或修不好
+
+  @@map("repair_outcome")
+}
+
+/// 故障类型
+enum FaultCategory {
+  SCREEN   // 屏幕
+  BATTERY  // 电池
+  BOARD    // 主板
+  CAMERA   // 摄像头
+  WATER    // 进水
+  SOFTWARE // 软件
+  OTHER    // 其他
+
+  @@map("fault_category")
 }
 
 /// 到期提醒的档位：剩 8～30 天一档、剩 0～7 天一档，每档对同一条权益只提醒一次
@@ -212,6 +265,7 @@ model Store {
   tradeInOrders   TradeInOrder[]
   dailyCloses     DailyClose[]
   entitlements    ServiceEntitlement[]
+  repairOrders    RepairOrder[]
   wecomBindCodes  WecomBindCode[]
   kpiTargets      KpiTarget[]
 
@@ -253,6 +307,9 @@ model User {
   ledgers               StockLedger[]
   auditLogs             AuditLog[]
   remindersContacted    EntitlementReminder[]
+  repairsReceived       RepairOrder[] @relation("RepairReceivedBy")
+  repairsClosed         RepairOrder[] @relation("RepairClosedBy")
+  repairsVoided         RepairOrder[] @relation("RepairVoidedBy")
   wecomFollows          WecomFollow[]
   wecomBindCodes        WecomBindCode[]
 
@@ -321,6 +378,7 @@ model Sku {
   safetyQty     Int      @default(0) @map("safety_qty") // 小件安全库存：门店数量低于它标红；0 = 不预警
   isService     Boolean  @default(false) @map("is_service") // 服务类商品（碎屏险、延保）：开单生成权益，不管库存
   serviceMonths Int?     @map("service_months") // 服务期限（月），服务类必填 1～120（数据库 CHECK）
+  serviceKind   ServiceKind? @map("service_kind") // 服务种类：碎屏险 / 延保 / 其他（维修核销用，口径第 13 节）
   isActive      Boolean  @default(true) @map("is_active")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
@@ -392,6 +450,7 @@ model Device {
   salesItems     SalesOrderItem[]
   returnItems    ReturnOrderItem[]
   entitlements   ServiceEntitlement[]
+  repairOrders   RepairOrder[]
 
   @@index([storeId, status])
   @@index([skuId])
@@ -636,6 +695,7 @@ model Customer {
   returnOrders  ReturnOrder[]
   tradeInOrders TradeInOrder[]
   entitlements  ServiceEntitlement[]
+  repairOrders  RepairOrder[]
   wecomFollows  WecomFollow[]
   wecomTags     WecomCustomerTag[]
   wecomBindCodes WecomBindCode[]
@@ -676,6 +736,7 @@ model SalesOrder {
   returnOrders ReturnOrder[]
   entitlements ServiceEntitlement[]
   wecomBindCodes WecomBindCode[]
+  repairOrders RepairOrder[]
 
   @@index([storeId, bizDate])
   @@index([salespersonId, bizDate])
@@ -714,6 +775,7 @@ model Payment {
   id             Int           @id @default(autoincrement())
   salesOrderId   Int?          @map("sales_order_id")
   returnOrderId  Int?          @map("return_order_id")
+  repairOrderId  Int?          @map("repair_order_id") // 维修取机结算的收款（口径第 13 节）；三个单据有且只有一个（数据库 CHECK）
   method         PaymentMethod
   amountFen      Int           @map("amount_fen")
   tradeInOrderId Int?          @unique @map("trade_in_order_id") // method = TRADE_IN 时指向回收单
@@ -723,9 +785,11 @@ model Payment {
   salesOrder   SalesOrder?   @relation(fields: [salesOrderId], references: [id])
   returnOrder  ReturnOrder?  @relation(fields: [returnOrderId], references: [id])
   tradeInOrder TradeInOrder? @relation(fields: [tradeInOrderId], references: [id])
+  repairOrder  RepairOrder?  @relation(fields: [repairOrderId], references: [id])
 
   @@index([salesOrderId])
   @@index([returnOrderId])
+  @@index([repairOrderId])
   @@map("payments")
 }
 
@@ -831,6 +895,7 @@ model DailyClose {
   lines        DailyCloseLine[]
   salesOrders  SalesOrder[]
   returnOrders ReturnOrder[]
+  repairOrders RepairOrder[]
 
   @@unique([storeId, bizDate])
   @@map("daily_closes")
@@ -893,7 +958,8 @@ model ServiceEntitlement {
   sku            Sku            @relation(fields: [skuId], references: [id])
   device         Device?        @relation(fields: [deviceId], references: [id])
 
-  reminders EntitlementReminder[]
+  reminders    EntitlementReminder[]
+  repairOrders RepairOrder[]
 
   @@index([customerId, status])
   @@index([storeId, expiresOn])
@@ -916,6 +982,62 @@ model EntitlementReminder {
 
   @@unique([entitlementId, stage])
   @@map("entitlement_reminders")
+}
+
+/// 维修单（口径第 13 节）：接件 → 检测报价 → 维修 → 取机结算。客户的机器不算门店库存，不写库存流水
+model RepairOrder {
+  id               Int            @id @default(autoincrement())
+  orderNo          String         @unique @map("order_no") // WX + yyyyMMdd + 4 位
+  storeId          Int            @map("store_id") // 接件门店
+  customerId       Int            @map("customer_id")
+  receivedById     Int            @map("received_by_id") // 接件人
+  deviceId         Int?           @map("device_id") // 本系统卖出的机器；外面买的为空
+  deviceCode       String         @map("device_code") // 接件时的码（系统里的机器存主码）
+  modelName        String         @map("model_name")
+  salesOrderId     Int?           @map("sales_order_id") // 本店卖这台机器的销售单
+  purchasedOn      DateTime?      @map("purchased_on") @db.Date // 购买营业日，保修从这天算
+  faultCategory    FaultCategory  @map("fault_category")
+  faultDescription String         @map("fault_description")
+  appearance       String? // 外观、随机附件
+  status           RepairStatus   @default(RECEIVED)
+  partsFen         Int?           @map("parts_fen") // 配件费
+  laborFen         Int?           @map("labor_fen") // 工时费
+  costFen          Int?           @map("cost_fen") // 维修成本（店长以上看）
+  payer            RepairPayer?
+  entitlementId    Int?           @map("entitlement_id") // 用的碎屏险 / 延保
+  chargeFen        Int            @default(0) @map("charge_fen") // 客户应付（数据库 CHECK >= 0）
+  outcome          RepairOutcome?
+  repairNote       String?        @map("repair_note")
+  quotedAt         DateTime?      @map("quoted_at")
+  approvedAt       DateTime?      @map("approved_at")
+  readyAt          DateTime?      @map("ready_at")
+  closedAt         DateTime?      @map("closed_at")
+  closedById       Int?           @map("closed_by_id")
+  bizDate          DateTime?      @map("biz_date") @db.Date // 取机结算的营业日：收款算在这天的日结里
+  dailyCloseId     Int?           @map("daily_close_id")
+  voidedAt         DateTime?      @map("voided_at")
+  voidedById       Int?           @map("voided_by_id")
+  voidReason       String?        @map("void_reason")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  store       Store               @relation(fields: [storeId], references: [id])
+  customer    Customer            @relation(fields: [customerId], references: [id])
+  receivedBy  User                @relation("RepairReceivedBy", fields: [receivedById], references: [id])
+  closedBy    User?               @relation("RepairClosedBy", fields: [closedById], references: [id])
+  voidedBy    User?               @relation("RepairVoidedBy", fields: [voidedById], references: [id])
+  device      Device?             @relation(fields: [deviceId], references: [id])
+  salesOrder  SalesOrder?         @relation(fields: [salesOrderId], references: [id])
+  entitlement ServiceEntitlement? @relation(fields: [entitlementId], references: [id])
+  dailyClose  DailyClose?         @relation(fields: [dailyCloseId], references: [id])
+
+  payments Payment[]
+
+  @@index([storeId, status])
+  @@index([storeId, bizDate])
+  @@index([deviceCode])
+  @@index([customerId])
+  @@map("repair_orders")
 }
 
 /// 企业微信跟进关系：员工 × 外部联系人（口径第 12 节）。客户可以先有跟进关系、后绑定档案（customerId 为空 = 还没绑定）

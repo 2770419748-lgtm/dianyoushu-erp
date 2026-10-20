@@ -10,16 +10,18 @@ import { SALES_STATUS_COLORS, SALES_STATUS_LABELS } from "@/lib/sales-labels";
 import type { CustomerDetail } from "@/server/customers/customer-service";
 import type { CustomerEntitlement } from "@/server/entitlement/entitlement-service";
 import type { CustomerWecom } from "@/server/wecom/contact-service";
+import type { RepairHistoryRow } from "@/server/repair/repair-service";
+import { RepairHistory } from "../../repairs/repair-history";
 
 type OrderRow = CustomerDetail["orders"][number];
 
-const STATE_COLORS: Record<string, string> = { 保障中: "green", 即将到期: "orange", 已过期: "default", 已失效: "default" };
+const STATE_COLORS: Record<string, string> = { 保障中: "green", 即将到期: "orange", 已过期: "default", 已失效: "default", 已理赔: "purple" };
 
 type FollowRow = CustomerWecom["follows"][number];
 
 const TAG_SOURCE_LABELS: Record<string, string> = { AUTO: "系统", MANUAL: "员工", WECOM: "企业微信" };
 
-export function CustomerDetailView({ detail, wecom }: { detail: CustomerDetail; wecom: CustomerWecom | null }) {
+export function CustomerDetailView({ detail, wecom, repairs }: { detail: CustomerDetail; wecom: CustomerWecom | null; repairs: RepairHistoryRow[] }) {
   const { customer, orders, orderCount, entitlements } = detail;
 
   const entitlementColumns: TableColumnsType<CustomerEntitlement> = [
@@ -85,6 +87,8 @@ export function CustomerDetailView({ detail, wecom }: { detail: CustomerDetail; 
       </Card>
 
       {wecom ? <WecomSection wecom={wecom} /> : null}
+
+      {repairs.length > 0 ? <RepairHistory rows={repairs} /> : null}
 
       <Card title={`买过的单（${orderCount}${orderCount > orders.length ? `，显示最近 ${orders.length} 张` : ""}）`}>
         <Typography.Paragraph type="secondary">客户全公司共享：别的门店、别的店员开的单也列出来，但只显示摘要，打不开明细。</Typography.Paragraph>

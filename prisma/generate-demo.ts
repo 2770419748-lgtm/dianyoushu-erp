@@ -5,6 +5,7 @@ import type { DeviceStatus, LedgerDocType, PaymentMethod } from "../src/generate
 import { formatDate } from "../src/lib/format";
 import { describeIntegrity, integrityOk, runIntegrityChecks } from "./integrity-checks";
 import { daysUntil, entitlementExpiresOn } from "../src/lib/entitlement";
+import { payerOptions, repairChargeFen, type FaultCategoryKey, type RepairPayerKey } from "../src/lib/repair";
 
 // 模拟经营数据 v1（第 9 周）：10 家店、3 个月（截至昨天）的采购到货、销售、以旧换新、回收机转良品再卖、作废、退货、日结。
 // 规则和真实业务一致：库存每次变动都有流水、配件余额 = 流水合计、日结系统数 = 当天收款汇总。
@@ -116,6 +117,27 @@ const OLD_PHONES: { name: string; min: number; max: number }[] = [
   { name: "荣耀 70 256GB", min: 500, max: 900 },
 ];
 const CONDITIONS = ["95 新", "9 成新", "9 成新", "8 成新", "有损"];
+// 售后：故障类型的比例、配件费 / 工时费区间（元）、描述
+const FAULT_WEIGHTS: [FaultCategoryKey, number][] = [["SCREEN", 35], ["BATTERY", 25], ["SOFTWARE", 12], ["BOARD", 8], ["WATER", 8], ["CAMERA", 7], ["OTHER", 5]];
+const FAULT_PRICE: Record<FaultCategoryKey, [number, number, number, number]> = {
+  SCREEN: [600, 1500, 50, 100],
+  BATTERY: [150, 300, 30, 50],
+  BOARD: [400, 1200, 100, 200],
+  CAMERA: [300, 800, 50, 80],
+  WATER: [200, 600, 100, 150],
+  SOFTWARE: [0, 0, 50, 100],
+  OTHER: [100, 300, 50, 80],
+};
+const FAULT_TEXT: Record<FaultCategoryKey, string[]> = {
+  SCREEN: ["摔了一下，外屏碎了，触摸正常", "屏幕有一条绿线", "屏幕碎裂，局部触摸失灵"],
+  BATTERY: ["电池不耐用，半天就没电", "电池鼓包，后盖翘起", "充电很慢、发烫"],
+  BOARD: ["突然黑屏开不了机", "反复重启", "信号时有时无"],
+  CAMERA: ["后摄拍照模糊", "前摄打不开", "相机对不上焦"],
+  WATER: ["掉水里了，捞起来开不了机", "进水后喇叭没声音"],
+  SOFTWARE: ["系统卡顿，想重装", "忘了锁屏密码", "升级后耗电很快"],
+  OTHER: ["按键失灵", "听筒有杂音", "充电口接触不良"],
+};
+const REPAIR_METHODS: [PaymentMethod, number][] = [["WECHAT", 50], ["ALIPAY", 25], ["CASH", 20], ["CARD", 5]];
 const METHOD_WEIGHTS: [PaymentMethod, number][] = [
   ["WECHAT", 45],
   ["ALIPAY", 25],
@@ -127,7 +149,7 @@ const METHOD_WEIGHTS: [PaymentMethod, number][] = [
 
 // ---------- 内存里的行（id 自己分配，最后批量写） ----------
 type Row = Record<string, unknown>;
-const ids = { customer: 0, po: 0, poItem: 0, receipt: 0, receiptItem: 0, tradeIn: 0, device: 0, close: 0, closeLine: 0, sale: 0, saleItem: 0, payment: 0, ret: 0, retItem: 0, ledger: 0, kpi: 0, entitlement: 0, reminder: 0 };
+const ids = { customer: 0, po: 0, poItem: 0, receipt: 0, receiptItem: 0, tradeIn: 0, device: 0, close: 0, closeLine: 0, sale: 0, saleItem: 0, payment: 0, ret: 0, retItem: 0, ledger: 0, kpi: 0, entitlement: 0, reminder: 0, repair: 0 };
 const out = {
   customers: [] as Row[],
   purchaseOrders: [] as Row[],
@@ -147,10 +169,44 @@ const out = {
   kpis: [] as Row[],
   entitlements: [] as EntitlementRec[],
   reminders: [] as Row[],
+  repairs: [] as RepairRec[],
   wecomFollows: [] as Row[],
   wecomTags: [] as Row[],
   wecomCustomerTags: [] as Row[],
 };
+interface RepairRec {
+  id: number;
+  orderNo: string;
+  storeId: number;
+  customerId: number;
+  receivedById: number;
+  deviceId: number | null;
+  deviceCode: string;
+  modelName: string;
+  salesOrderId: number | null;
+  purchasedOn: Date | null;
+  faultCategory: FaultCategoryKey;
+  faultDescription: string;
+  appearance: string | null;
+  status: "RECEIVED" | "QUOTED" | "REPAIRING" | "READY" | "CLOSED";
+  partsFen: number | null;
+  laborFen: number | null;
+  costFen: number | null;
+  payer: RepairPayerKey | null;
+  entitlementId: number | null;
+  chargeFen: number;
+  outcome: "REPAIRED" | "NOT_REPAIRED" | null;
+  repairNote: string | null;
+  quotedAt: Date | null;
+  approvedAt: Date | null;
+  readyAt: Date | null;
+  closedAt: Date | null;
+  closedById: number | null;
+  bizDate: Date | null;
+  dailyCloseId: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 interface EntitlementRec {
   id: number;
   customerId: number;
@@ -161,7 +217,7 @@ interface EntitlementRec {
   deviceId: number | null;
   startedOn: Date;
   expiresOn: Date;
-  status: "ACTIVE" | "VOIDED";
+  status: "ACTIVE" | "VOIDED" | "CLAIMED";
   voidedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -219,6 +275,7 @@ interface PaymentRec {
   id: number;
   salesOrderId: number | null;
   returnOrderId: number | null;
+  repairOrderId?: number | null;
   method: PaymentMethod;
   amountFen: number;
   tradeInOrderId: number | null;
@@ -252,6 +309,7 @@ async function main() {
   // 服务类商品（碎屏险、延保）：买新机的约两成加一份，不进库存，单上必须有客户
   const serviceSkus = skus.filter((s) => s.isService && s.serviceMonths);
   const serviceSkuIds = new Set(serviceSkus.map((s) => s.id));
+  const SERVICE_KIND_BY_SKU = new Map(serviceSkus.map((s) => [s.id, (s.serviceKind ?? "OTHER") as "SCREEN_INSURANCE" | "EXTENDED_WARRANTY" | "OTHER"]));
   const SERVICE_WEIGHT: Record<string, number> = { "碎屏险 1 年": 5, "碎屏险 季度版": 3, "延保 1 年": 2 };
   const BRAND_WEIGHT: Record<string, number> = { 苹果: 3.2, 华为: 3, 小米: 2, 荣耀: 1.4, OPPO: 1.2, vivo: 1.2, 一加: 0.6, 三星: 0.4 };
   // 热销程度：品牌权重 × 价格越低越好卖 × 平板少一些
@@ -286,6 +344,11 @@ async function main() {
     const accessoryBal = new Map<number, number>();
     const scheduledReturns = new Map<number, number[]>(); // 第几天 → 销售单 id
     const saleById = new Map<number, SaleRec>();
+    // 售后（口径第 13 节）：卖出去满一周、没排退货的机器才可能拿回来修；取机那天收款进当天日结
+    const soldDevices: { deviceId: number; saleId: number; bizDate: Date; customerId: number | null }[] = [];
+    const returnScheduled = new Set<number>();
+    const repairPickups = new Map<number, RepairRec[]>(); // 第几天 → 那天来取机的维修单
+    const openRepairCodes = new Set<string>();
 
     for (let day = -DAYS; day <= -1; day++) {
       const bizDate = bizDateOf(day);
@@ -297,6 +360,7 @@ async function main() {
       const dayPayments: { method: PaymentMethod; amountFen: number }[] = [];
       const daySaleIds: number[] = [];
       const dayReturnIds: number[] = [];
+      const dayRepairs: RepairRec[] = [];
 
       // 1. 早上：到期的回收机检测转良品
       for (const p of pendingRefurb.filter((x) => x.day === day)) {
@@ -515,11 +579,43 @@ async function main() {
 
         dayPayments.push(...pays.map((p) => ({ method: p.method, amountFen: p.amountFen })));
         daySaleIds.push(saleId);
+        for (const item of items) if (item.deviceId && !serviceSkuIds.has(item.skuId)) soldDevices.push({ deviceId: item.deviceId, saleId, bizDate, customerId });
         // 少量几天后退货
         if (chance(0.015)) {
           const rd = day + between(1, 5);
           if (rd <= -1) scheduledReturns.set(rd, [...(scheduledReturns.get(rd) ?? []), saleId]);
+          returnScheduled.add(saleId);
         }
+      }
+
+      // 4b. 售后：先给今天来取机的结算（收款进今天日结），再接今天的新件
+      for (const r of repairPickups.get(day) ?? []) {
+        const t = at(bizDate, between(14, 20), between(0, 59));
+        r.status = "CLOSED";
+        r.closedAt = t;
+        r.closedById = pick(staff).id;
+        r.bizDate = bizDate;
+        r.updatedAt = t;
+        openRepairCodes.delete(r.deviceCode);
+        if (r.chargeFen > 0) {
+          const method = weighted(REPAIR_METHODS, ([, w]) => w)[0];
+          out.payments.push({ id: ++ids.payment, salesOrderId: null, returnOrderId: null, repairOrderId: r.id, method, amountFen: r.chargeFen, tradeInOrderId: null, reference: null, createdAt: t });
+          dayPayments.push({ method, amountFen: r.chargeFen });
+        }
+        if (r.outcome === "REPAIRED" && r.payer === "SCREEN_INSURANCE" && r.entitlementId) {
+          const e = out.entitlements[r.entitlementId - 1]!;
+          e.status = "CLAIMED";
+          e.updatedAt = t;
+        }
+        dayRepairs.push(r);
+      }
+      const intakes = chance(0.35 * storeFactor.get(store.id)!) ? (chance(0.25) ? 2 : 1) : 0;
+      for (let k = 0; k < intakes; k++) {
+        const repair = newRepair(day, bizDate, store.id, staff);
+        if (!repair) continue;
+        out.repairs.push(repair.rec);
+        openRepairCodes.add(repair.rec.deviceCode);
+        if (repair.pickupDay !== null) repairPickups.set(repair.pickupDay, [...(repairPickups.get(repair.pickupDay) ?? []), repair.rec]);
       }
 
       // 5. 晚上日结：系统数 = 当天收款汇总；偶尔现金长短款
@@ -534,6 +630,114 @@ async function main() {
       }
       for (const id of daySaleIds) saleById.get(id)!.dailyCloseId = closeId;
       for (const id of dayReturnIds) out.returns[id - 1]!.dailyCloseId = closeId;
+      for (const r of dayRepairs) r.dailyCloseId = closeId;
+    }
+
+    /** 接一件：七成是本店卖出去的机器（带购买记录、保修、碎屏险），三成外面买的；过去的件走完流程，最近几天的还在店里 */
+    function newRepair(day: number, bizDate: Date, storeId: number, staffList: typeof staff) {
+      const fault = weighted(FAULT_WEIGHTS, ([, w]) => w)[0];
+      const receivedAt = at(bizDate, between(10, 20), between(0, 59));
+      let deviceId: number | null = null;
+      let deviceCode: string;
+      let modelName: string;
+      let salesOrderId: number | null = null;
+      let purchasedOn: Date | null = null;
+      let customerId: number;
+      const candidates = soldDevices.filter((d) => daysUntil(bizDate, d.bizDate) >= 7 && !returnScheduled.has(d.saleId) && !openRepairCodes.has(out.devices[d.deviceId - 1]!.code));
+      if (candidates.length > 0 && chance(0.7)) {
+        const sold = pick(candidates);
+        const device = out.devices[sold.deviceId - 1]!;
+        const sku = skus.find((x) => x.id === device.skuId)!;
+        deviceId = device.id;
+        deviceCode = device.code;
+        modelName = `${sku.model.brand.name} ${sku.name}`;
+        salesOrderId = sold.saleId;
+        purchasedOn = sold.bizDate;
+        customerId = sold.customerId ?? customerFor(true)!;
+      } else {
+        deviceCode = oldPhoneCode();
+        modelName = pick(OLD_PHONES).name;
+        customerId = customerFor(true)!;
+      }
+      const [partsLo, partsHi, laborLo, laborHi] = FAULT_PRICE[fault];
+      const partsFen = between(partsLo, partsHi) * 100;
+      const laborFen = between(laborLo, laborHi) * 100;
+      const costFen = Math.round(partsFen * 0.6) + 2000;
+      // 谁付：能用碎屏险、保修、延保的九成都用上，剩下自费
+      const ents = deviceId ? out.entitlements.filter((e) => e.deviceId === deviceId && e.status === "ACTIVE").map((e) => ({ id: e.id, kind: SERVICE_KIND_BY_SKU.get(e.skuId)!, expiresOn: e.expiresOn })) : [];
+      const options = payerOptions({ fault, today: bizDate, purchasedOn, entitlements: ents.filter((e) => e.kind !== "OTHER") });
+      const covered = options.find((o) => o.payer !== "CUSTOMER" && o.allowed);
+      const option = covered && chance(0.9) ? covered : options[0]!;
+      const declined = option.payer === "CUSTOMER" && chance(0.1);
+      const failed = !declined && chance(0.05);
+      const rec: RepairRec = {
+        id: ++ids.repair,
+        orderNo: docNo("WX", bizDate),
+        storeId,
+        customerId,
+        receivedById: pick(staffList).id,
+        deviceId,
+        deviceCode,
+        modelName,
+        salesOrderId,
+        purchasedOn,
+        faultCategory: fault,
+        faultDescription: pick(FAULT_TEXT[fault]),
+        appearance: pick(["边框有磕碰", "外观正常", "带手机壳，没有充电器", "背板有划痕", null]),
+        status: "RECEIVED",
+        partsFen: null,
+        laborFen: null,
+        costFen: null,
+        payer: null,
+        entitlementId: null,
+        chargeFen: 0,
+        outcome: null,
+        repairNote: null,
+        quotedAt: null,
+        approvedAt: null,
+        readyAt: null,
+        closedAt: null,
+        closedById: null,
+        bizDate: null,
+        dailyCloseId: null,
+        createdAt: receivedAt,
+        updatedAt: receivedAt,
+      };
+      // 时间线：当天报价；客户同意后 1～4 天修好；修好后 0～3 天来取。还没到的步骤就停在那一步
+      const readyDay = declined ? day : day + between(1, 4);
+      const pickupDay = readyDay + between(0, 3);
+      if (day < -1 || chance(0.6)) { // 昨天接的件，有一些还没检测
+        rec.status = "QUOTED";
+        rec.quotedAt = new Date(receivedAt.getTime() + between(30, 120) * 60000);
+        rec.partsFen = partsFen;
+        rec.laborFen = laborFen;
+        rec.costFen = costFen;
+        rec.payer = option.payer;
+        rec.entitlementId = option.entitlementId ?? null;
+        rec.chargeFen = repairChargeFen(option.payer, partsFen, laborFen);
+        rec.repairNote = pick(["检测确认故障，按报价修", "需要换件", "客户同意按报价修"]);
+        if (declined) {
+          rec.status = "READY";
+          rec.readyAt = rec.quotedAt;
+          rec.outcome = "NOT_REPAIRED";
+          rec.chargeFen = 0;
+          rec.repairNote = "客户嫌贵，不修了";
+        } else if (readyDay <= -1 || chance(0.5)) {
+          rec.status = "REPAIRING";
+          rec.approvedAt = new Date(rec.quotedAt.getTime() + between(10, 60) * 60000);
+          if (readyDay <= -1) {
+            rec.status = "READY";
+            rec.readyAt = at(bizDateOf(readyDay), between(10, 18), between(0, 59));
+            rec.outcome = failed ? "NOT_REPAIRED" : "REPAIRED";
+            if (failed) {
+              rec.chargeFen = 0;
+              rec.repairNote = "主板损坏严重，修不了，原样退回";
+            }
+          }
+        }
+      }
+      rec.updatedAt = rec.readyAt ?? rec.approvedAt ?? rec.quotedAt ?? receivedAt;
+      return { rec, pickupDay: rec.status === "READY" && pickupDay <= -1 ? pickupDay : null };
     }
 
     // 收尾：昨晚补一次货，保证演示时每家店常卖的机型都有库存、配件不缺
@@ -764,8 +968,9 @@ async function write() {
   await insert("销售明细", out.saleItems as unknown as Row[], (c) => prisma.salesOrderItem.createMany({ data: c as never }));
   await insert("退货单", out.returns, (c) => prisma.returnOrder.createMany({ data: c as never }));
   await insert("退货明细", out.returnItems, (c) => prisma.returnOrderItem.createMany({ data: c as never }));
-  await insert("收款", out.payments as unknown as Row[], (c) => prisma.payment.createMany({ data: c as never }));
   await insert("服务权益", out.entitlements as unknown as Row[], (c) => prisma.serviceEntitlement.createMany({ data: c as never }));
+  await insert("维修单", out.repairs as unknown as Row[], (c) => prisma.repairOrder.createMany({ data: c as never }));
+  await insert("收款", out.payments as unknown as Row[], (c) => prisma.payment.createMany({ data: c as never }));
   await insert("到期提醒", out.reminders, (c) => prisma.entitlementReminder.createMany({ data: c as never }));
   // 企业微信：店员、店长、总部的企业微信账号 = 登录账号（演示用；总部现场开单也能生成加微二维码）
   await prisma.$executeRaw`UPDATE users SET wecom_userid = username WHERE role IN ('STAFF', 'STORE_MANAGER', 'HQ') AND is_active`;
@@ -779,7 +984,7 @@ async function write() {
     await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   // 自己指定了 id，自增序列要跟上，后面正常开单才不会撞号
-  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags"];
+  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders"];
   for (const t of tables) {
     await prisma.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM "${t}"), 0), 1), (SELECT COUNT(*) > 0 FROM "${t}"))`);
   }
@@ -790,7 +995,7 @@ async function verify() {
   const result = await runIntegrityChecks(prisma);
   const sales = out.sales.filter((s) => s.status === "COMPLETED");
   console.log(
-    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.wecomFollows.length} 条企业微信好友关系。`,
+    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${out.wecomFollows.length} 条企业微信好友关系。`,
   );
   console.log(`自检：${describeIntegrity(result)}`);
   if (!integrityOk(result)) process.exitCode = 1;

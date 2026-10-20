@@ -29,6 +29,7 @@ type SkuFormValues = {
   safetyQty?: number;
   isService?: boolean;
   serviceMonths?: number;
+  serviceKind?: "SCREEN_INSURANCE" | "EXTENDED_WARRANTY" | "OTHER";
 };
 
 export function ProductsView({
@@ -93,6 +94,7 @@ export function ProductsView({
         safetyQty: record.safetyQty,
         isService: record.isService,
         serviceMonths: record.serviceMonths ?? undefined,
+        serviceKind: record.serviceKind ?? undefined,
       });
     }
     setModal({ open: true, record });
@@ -110,6 +112,7 @@ export function ProductsView({
       safetyQty: values.safetyQty ?? 0,
       isService: values.isService === true,
       serviceMonths: values.isService ? values.serviceMonths : undefined,
+      serviceKind: values.isService ? values.serviceKind : undefined,
     };
     submit(
       () => (modal.record ? updateSkuAction(modal.record.id, input) : createSkuAction(input)),
@@ -127,7 +130,7 @@ export function ProductsView({
         <Space size={4}>
           {r.model.category.name}
           <Tag color={r.model.category.kind === "DEVICE" ? "blue" : "default"}>{r.model.category.kind === "DEVICE" ? "大件" : "小件"}</Tag>
-          {r.isService ? <Tag color="purple">服务 {r.serviceMonths} 个月</Tag> : null}
+          {r.isService ? <Tag color="purple">{r.serviceKind === "SCREEN_INSURANCE" ? "碎屏险" : r.serviceKind === "EXTENDED_WARRANTY" ? "延保" : "服务"} {r.serviceMonths} 个月</Tag> : null}
         </Space>
       ),
     },
@@ -263,9 +266,14 @@ export function ProductsView({
             <Form.Item noStyle shouldUpdate={(a, b) => a.isService !== b.isService}>
               {({ getFieldValue }) =>
                 getFieldValue("isService") ? (
-                  <Form.Item name="serviceMonths" label="服务期限（月）" rules={[{ required: true, message: "填 1 到 120 个月" }]}>
-                    <InputNumber min={1} max={120} precision={0} style={{ width: 120 }} />
-                  </Form.Item>
+                  <Space size="large" align="start">
+                    <Form.Item name="serviceMonths" label="服务期限（月）" rules={[{ required: true, message: "填 1 到 120 个月" }]}>
+                      <InputNumber min={1} max={120} precision={0} style={{ width: 120 }} />
+                    </Form.Item>
+                    <Form.Item name="serviceKind" label="服务种类" rules={[{ required: true, message: "请选服务种类" }]} extra="碎屏险修屏幕、理赔一次；延保管非人为故障、期内不限次">
+                      <Select style={{ width: 140 }} options={[{ value: "SCREEN_INSURANCE", label: "碎屏险" }, { value: "EXTENDED_WARRANTY", label: "延保" }, { value: "OTHER", label: "其他" }]} />
+                    </Form.Item>
+                  </Space>
                 ) : null
               }
             </Form.Item>

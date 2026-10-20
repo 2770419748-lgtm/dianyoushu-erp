@@ -83,7 +83,7 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
   await lockRow(tx, "sales_orders", salesOrderId);
   const order = await tx.salesOrder.findUnique({
     where: { id: salesOrderId },
-    include: { store: true, items: { include: { sku: { select: { isService: true } } } }, payments: true, returnOrders: { select: { refundFen: true } } },
+    include: { store: true, items: { include: { sku: { select: { isService: true } }, entitlement: { select: { status: true } } } }, payments: true, returnOrders: { select: { refundFen: true } } },
   });
   if (!order) throw new ReturnError("原销售单不存在");
   assertStoreAccess(user, order.store);
@@ -99,6 +99,7 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
     if (qty === 0) continue;
     if (!Number.isInteger(qty) || qty < 0) throw new ReturnError("退货数量必须是正整数");
     if (qty > item.qty - item.returnedQty) throw new ReturnError(`这一行最多还能退 ${item.qty - item.returnedQty} 件`);
+    if (qty > 0 && item.entitlement?.status === "CLAIMED") throw new ReturnError("这份碎屏险已经在维修单上理赔过了，不能再退");
     plans.push({ item, qty });
   }
   if (plans.length === 0) throw new ReturnError("没选要退的商品");

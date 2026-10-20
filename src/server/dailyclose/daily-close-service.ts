@@ -57,10 +57,16 @@ async function loadDay(tx: Tx | typeof prisma, storeId: number, bizDate: Date) {
       orderBy: { id: "asc" },
       include: { payments: { select: { method: true, amountFen: true } }, salesOrder: { select: { orderNo: true } }, handledBy: { select: { name: true } } },
     });
+  // 维修取机结算的收款也算在取机那天（口径第 13 节）
+  const repairs = await tx.repairOrder.findMany({
+      where: { storeId, bizDate, status: "CLOSED" },
+      orderBy: { id: "asc" },
+      include: { payments: { select: { method: true, amountFen: true } }, customer: { select: { name: true, phone: true } }, closedBy: { select: { name: true } } },
+    });
   const close = await tx.dailyClose.findUnique({ where: { storeId_bizDate: { storeId, bizDate } }, include: { lines: true, confirmedBy: { select: { name: true } } } });
   const completed = orders.filter((o) => o.status === "COMPLETED");
-  const system = summarizeByMethod([...completed.flatMap((o) => o.payments), ...returns.flatMap((r) => r.payments)]);
-  return { orders, completed, returns, close, system };
+  const system = summarizeByMethod([...completed.flatMap((o) => o.payments), ...returns.flatMap((r) => r.payments), ...repairs.flatMap((r) => r.payments)]);
+  return { orders, completed, returns, repairs, close, system };
 }
 
 // ---------- 查询 ----------
@@ -96,11 +102,13 @@ export async function getDailyCloseView(user: CurrentUser, storeId: number, bizD
     check: checkClose(lines, mismatched),
     orders,
     returns: day.returns.map((r) => ({ id: r.id, orderNo: r.orderNo, salesOrderNo: r.salesOrder.orderNo, refundFen: r.refundFen, payments: r.payments, handledBy: r.handledBy.name, createdAt: r.createdAt })),
+    repairs: day.repairs.map((r) => ({ id: r.id, orderNo: r.orderNo, chargeFen: r.chargeFen, payments: r.payments, customer: `${r.customer.name} ${maskPhone(r.customer.phone)}`, closedBy: r.closedBy?.name ?? "-", closedAt: r.closedAt })),
     totals: {
       orderCount: day.completed.length,
       voidedCount: orders.length - day.completed.length,
       salesFen: day.completed.reduce((s, o) => s + o.totalFen, 0),
       refundFen: day.returns.reduce((s, r) => s + r.refundFen, 0),
+      repairFen: day.repairs.reduce((s, r) => s + r.chargeFen, 0),
       systemFen: DAILY_CLOSE_METHODS.reduce((s, m) => s + day.system[m], 0),
     },
   };
@@ -185,6 +193,7 @@ export async function confirmDailyCloseTx(tx: Tx, user: CurrentUser, input: Clos
   await tx.dailyClose.update({ where: { id: close.id }, data: { status: "CONFIRMED", confirmedById: user.id, confirmedAt: new Date() } });
   await tx.salesOrder.updateMany({ where: { storeId: data.storeId, bizDate: data.bizDate, status: "COMPLETED" }, data: { dailyCloseId: close.id } });
   await tx.returnOrder.updateMany({ where: { storeId: data.storeId, bizDate: data.bizDate }, data: { dailyCloseId: close.id } });
+  await tx.repairOrder.updateMany({ where: { storeId: data.storeId, bizDate: data.bizDate, status: "CLOSED" }, data: { dailyCloseId: close.id } });
   await writeAudit(
     { userId: user.id, action: "daily_close.confirm", entity: "daily_close", entityId: close.id, detail: { closeNo: close.closeNo, diffs: check.diffs.length, orders: day.completed.length } },
     tx,
@@ -203,6 +212,7 @@ export async function reopenDailyCloseTx(tx: Tx, user: CurrentUser, storeId: num
   await tx.dailyClose.update({ where: { id: close.id }, data: { status: "PENDING", confirmedById: null, confirmedAt: null, note: `${close.note ? `${close.note}；` : ""}撤销：${text}` } });
   await tx.salesOrder.updateMany({ where: { dailyCloseId: close.id }, data: { dailyCloseId: null } });
   await tx.returnOrder.updateMany({ where: { dailyCloseId: close.id }, data: { dailyCloseId: null } });
+  await tx.repairOrder.updateMany({ where: { dailyCloseId: close.id }, data: { dailyCloseId: null } });
   await writeAudit({ userId: user.id, action: "daily_close.reopen", entity: "daily_close", entityId: close.id, detail: { reason: text } }, tx);
 }
 
@@ -242,6 +252,11 @@ export async function cashierReport(user: CurrentUser, query: CashierReportQuery
     }),
     prisma.dailyClose.findMany({ where: { AND: [scope, storeFilter, dateFilter] }, select: { storeId: true, bizDate: true, status: true, lines: { select: { diffFen: true } } } }),
   ]);
+  // 维修取机的收款（口径第 13 节）
+  const repairs = await prisma.payment.findMany({
+    where: { repairOrder: { AND: [scope, storeFilter, dateFilter, { status: "CLOSED" }] } },
+    select: { method: true, amountFen: true, repairOrder: { select: { storeId: true, bizDate: true } } },
+  });
   const stores = await prisma.store.findMany({ where: query.storeId ? { id: query.storeId } : {}, select: { id: true, code: true, name: true } });
   const storeById = new Map(stores.map((s) => [s.id, s]));
 
@@ -256,6 +271,7 @@ export async function cashierReport(user: CurrentUser, query: CashierReportQuery
   };
   for (const p of sales) add(p.salesOrder!.storeId, p.salesOrder!.bizDate, p.method, p.amountFen);
   for (const p of returns) add(p.returnOrder!.storeId, p.returnOrder!.bizDate, p.method, p.amountFen);
+  for (const p of repairs) add(p.repairOrder!.storeId, p.repairOrder!.bizDate!, p.method, p.amountFen);
   const closeByKey = new Map(closes.map((c) => [keyOf(c.storeId, c.bizDate), c]));
 
   return Array.from(rows.values())

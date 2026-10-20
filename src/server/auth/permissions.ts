@@ -126,6 +126,16 @@ export function canSeeWecomFollow(
   }
 }
 
+/** 谁能办售后：接件、报价、维修、取机结算（口径第 13 节）：店员、店长、总部；区域经理只看 */
+export function canHandleRepair(role: Role): boolean {
+  return role === "STAFF" || role === "STORE_MANAGER" || role === "HQ";
+}
+
+/** 谁能作废维修单：店长、总部 */
+export function canVoidRepair(role: Role): boolean {
+  return role === "STORE_MANAGER" || role === "HQ";
+}
+
 /** 谁能跟进到期提醒（记“已联系”）：店员、店长、总部；区域经理只看 */
 export function canFollowUpReminders(role: Role): boolean {
   return role === "STAFF" || role === "STORE_MANAGER" || role === "HQ";
@@ -162,6 +172,7 @@ const MENU_STAFF: MenuEntry[] = [
   { key: "products", label: "商品查价", href: "/products" },
   { key: "customers", label: "客户", href: "/customers" },
   { key: "entitlements", label: "到期名单", href: "/entitlements" },
+  { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "sales-list", label: "我的订单", href: "/sales" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
@@ -189,6 +200,7 @@ const MENU_REGIONAL: MenuEntry[] = [
   { key: "m-stock", label: "手机查库存", href: "/m/stock" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
   { key: "entitlements", label: "到期名单", href: "/entitlements" },
+  { key: "repairs", label: "售后维修", href: "/repairs" },
   ROADMAP,
 ];
 
@@ -205,6 +217,7 @@ const MENU_HQ: MenuEntry[] = [
   { key: "sales-list", label: "销售", href: "/sales" },
   { key: "customers", label: "客户", href: "/customers" },
   { key: "entitlements", label: "到期名单", href: "/entitlements" },
+  { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },

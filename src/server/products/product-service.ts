@@ -1,7 +1,7 @@
 import "server-only";
 import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
-import type { SkuKind } from "@/generated/prisma/enums";
+import type { ServiceKind, SkuKind } from "@/generated/prisma/enums";
 import { canManageProducts } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
@@ -246,6 +246,7 @@ export interface SkuInput {
   safetyQty?: unknown;
   isService?: unknown; // 服务类商品（碎屏险、延保）
   serviceMonths?: unknown; // 服务期限（月）
+  serviceKind?: unknown; // 服务种类：碎屏险 / 延保 / 其他（维修核销用）
 }
 
 function parseSku(input: SkuInput) {
@@ -256,6 +257,8 @@ function parseSku(input: SkuInput) {
   const isService = input.isService === true;
   const serviceMonths = isService ? Number(input.serviceMonths) : null;
   if (serviceMonths !== null && (!Number.isInteger(serviceMonths) || serviceMonths < 1 || serviceMonths > 120)) throw new ProductError("服务期限要填 1 到 120 个月");
+  const serviceKind = isService ? (input.serviceKind as ServiceKind) : null;
+  if (isService && !SERVICE_KINDS.includes(serviceKind!)) throw new ProductError("请选服务种类：碎屏险、延保或其他");
   return {
     modelId: requireId(input.modelId, "型号"),
     name: requireText(input.name, "商品名称", 80),
@@ -267,8 +270,11 @@ function parseSku(input: SkuInput) {
     safetyQty: isService ? 0 : safetyQty, // 服务没有库存，不预警
     isService,
     serviceMonths,
+    serviceKind,
   };
 }
+
+const SERVICE_KINDS: ServiceKind[] = ["SCREEN_INSURANCE", "EXTENDED_WARRANTY", "OTHER"];
 
 /**
  * 服务类商品的规矩（口径第 12 节）：建在小件品类下；有过库存记录的商品不能改成服务（库存对不上），

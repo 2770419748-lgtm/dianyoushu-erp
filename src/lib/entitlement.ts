@@ -42,8 +42,9 @@ export function reminderStageFor(daysLeft: number): ReminderStageKey | null {
 }
 
 /** 页面上显示的权益状态 */
-export function entitlementStateLabel(status: "ACTIVE" | "VOIDED", daysLeft: number): string {
+export function entitlementStateLabel(status: "ACTIVE" | "VOIDED" | "CLAIMED", daysLeft: number): string {
   if (status === "VOIDED") return "已失效";
+  if (status === "CLAIMED") return "已理赔"; // 碎屏险在维修单上用掉了（口径第 13 节）
   if (daysLeft < 0) return "已过期";
   if (daysLeft <= REMINDER_T30_MAX_DAYS) return "即将到期";
   return "保障中";

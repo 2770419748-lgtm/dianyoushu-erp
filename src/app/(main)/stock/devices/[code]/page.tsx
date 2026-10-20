@@ -7,6 +7,8 @@ import { docLinks } from "@/server/stock/doc-links";
 import { isValidCode } from "@/server/stock/imei";
 import { getDeviceByCode, type DeviceDetail } from "@/server/stock/stock-query";
 import { DeviceView } from "./device-view";
+import { listRepairHistory } from "@/server/repair/repair-service";
+import { RepairHistory } from "../../../repairs/repair-history";
 
 export const dynamic = "force-dynamic";
 
@@ -37,5 +39,11 @@ export default async function DevicePage({ params }: PageProps<"/stock/devices/[
   if (loaded.kind === "missing") notFound();
   if (loaded.kind === "forbidden") return <NoAccess title="没有权限看这台机器" />;
   const links = await docLinks(loaded.device.ledgers.map((l) => l.docNo), { canViewPurchase: canManagePurchase(user.role) });
-  return <DeviceView device={loaded.device} links={links} showCost={user.role !== "STAFF"} />;
+  const repairs = await listRepairHistory(user, { deviceId: loaded.device.id }); // 客户拿来修过的记录（口径第 13 节）
+  return (
+    <div style={{ display: "grid", gap: 24 }}>
+      <DeviceView device={loaded.device} links={links} showCost={user.role !== "STAFF"} />
+      {repairs.length > 0 ? <RepairHistory rows={repairs} /> : null}
+    </div>
+  );
 }

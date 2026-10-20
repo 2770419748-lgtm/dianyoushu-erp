@@ -9,7 +9,7 @@ dayjs.extend(timezone);
 
 // 单号 = 前缀 + yyyyMMdd（北京日期）+ 4 位当日流水。计数器在事务里自增，同一天不会重号。
 
-export type DocPrefix = "PO" | "RI" | "TR" | "ST" | "SO" | "RT" | "RC" | "DC";
+export type DocPrefix = "PO" | "RI" | "TR" | "ST" | "SO" | "RT" | "RC" | "DC" | "WX";
 
 export function todayBizDateText(): string {
   return dayjs().tz(APP_TIMEZONE).format("YYYYMMDD");
