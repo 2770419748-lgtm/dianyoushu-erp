@@ -1,5 +1,6 @@
 import { requireUser } from "@/server/auth/current-user";
 import { getMenuForRole, ROLE_LABELS } from "@/server/auth/permissions";
+import { wecomMode } from "@/server/wecom/config";
 import { AppShell } from "./app-shell";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
@@ -15,7 +16,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
   return (
     <AppShell
       user={{ name: user.name, roleLabel: ROLE_LABELS[user.role], scopeLabel }}
-      menu={getMenuForRole(user.role)}
+      menu={getMenuForRole(user.role, { wecom: wecomMode() !== "off" })}
     >
       {children}
     </AppShell>

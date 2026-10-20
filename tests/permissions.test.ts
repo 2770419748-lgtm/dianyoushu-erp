@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccessStore, getDataScope, getMenuForRole } from "@/server/auth/permissions";
+import { canAccessStore, canSeeWecomFollow, getDataScope, getMenuForRole } from "@/server/auth/permissions";
 
 const storeA = { id: 1, regionId: 10 }; // 华东区 A 店
 const storeB = { id: 2, regionId: 10 }; // 华东区 B 店
@@ -52,5 +52,28 @@ describe("菜单：getMenuForRole", () => {
   it("店员菜单里没有日结，店长有", () => {
     expect(getMenuForRole("STAFF").some((m) => m.key === "daily-close")).toBe(false);
     expect(getMenuForRole("STORE_MANAGER").some((m) => m.key === "daily-close")).toBe(true);
+  });
+});
+
+describe("企业微信跟进关系谁能看（口径第 12 节）", () => {
+  const follow = { userId: 7, storeId: 3, regionId: 1 };
+  it("员工本人、本店店长、辖区区域经理、总部能看；别人看不到", () => {
+    expect(canSeeWecomFollow({ id: 7, role: "STAFF", storeId: 3, regionId: null }, follow)).toBe(true);
+    expect(canSeeWecomFollow({ id: 8, role: "STAFF", storeId: 3, regionId: null }, follow)).toBe(false);
+    expect(canSeeWecomFollow({ id: 9, role: "STORE_MANAGER", storeId: 3, regionId: null }, follow)).toBe(true);
+    expect(canSeeWecomFollow({ id: 9, role: "STORE_MANAGER", storeId: 4, regionId: null }, follow)).toBe(false);
+    expect(canSeeWecomFollow({ id: 10, role: "REGIONAL_MANAGER", storeId: null, regionId: 1 }, follow)).toBe(true);
+    expect(canSeeWecomFollow({ id: 10, role: "REGIONAL_MANAGER", storeId: null, regionId: 2 }, follow)).toBe(false);
+    expect(canSeeWecomFollow({ id: 1, role: "HQ", storeId: null, regionId: null }, follow)).toBe(true);
+  });
+  it("还没对上 ERP 员工的跟进关系只有总部看得到", () => {
+    const orphan = { userId: null, storeId: null, regionId: null };
+    expect(canSeeWecomFollow({ id: 9, role: "STORE_MANAGER", storeId: 3, regionId: null }, orphan)).toBe(false);
+    expect(canSeeWecomFollow({ id: 1, role: "HQ", storeId: null, regionId: null }, orphan)).toBe(true);
+  });
+  it("企业微信对接开着时总部菜单多“企微对接”，别的角色不变", () => {
+    expect(getMenuForRole("HQ").some((m) => m.key === "wecom")).toBe(false);
+    expect(getMenuForRole("HQ", { wecom: true }).some((m) => m.key === "wecom")).toBe(true);
+    expect(getMenuForRole("STAFF", { wecom: true })).toEqual(getMenuForRole("STAFF"));
   });
 });

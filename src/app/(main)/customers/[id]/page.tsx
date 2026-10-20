@@ -3,6 +3,7 @@ import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { canSell } from "@/server/auth/permissions";
 import { getCustomerDetail } from "@/server/customers/customer-service";
+import { getCustomerWecom } from "@/server/wecom/contact-service";
 import { CustomerDetailView } from "./customer-detail-view";
 
 export const dynamic = "force-dynamic";
@@ -16,5 +17,6 @@ export default async function CustomerDetailPage({ params }: PageProps<"/custome
   if (!canSell(user.role)) return <NoAccess />;
   const detail = await getCustomerDetail(user, customerId);
   if (!detail) notFound();
-  return <CustomerDetailView detail={detail} />;
+  const wecom = await getCustomerWecom(user, customerId); // 企业微信对接关着时是 null，页面不显示这一块
+  return <CustomerDetailView detail={detail} wecom={wecom} />;
 }

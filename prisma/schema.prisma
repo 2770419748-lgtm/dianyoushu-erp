@@ -102,6 +102,32 @@ enum ReminderStage {
   @@map("reminder_stage")
 }
 
+/// 企业微信跟进关系状态（口径第 12 节）
+enum WecomFollowStatus {
+  ACTIVE  // 正常跟进中
+  DELETED // 删了：员工删了客户（del_external_contact）或客户删了员工（del_follow_user），见 deletedBy
+
+  @@map("wecom_follow_status")
+}
+
+/// 企业微信回调事件的处理状态
+enum WecomEventStatus {
+  PENDING   // 刚落库，还没处理完
+  PROCESSED // 处理完了（没有对应处理的事件也算处理完）
+  FAILED    // 处理出错，error 里有原因，每日脚本重放
+
+  @@map("wecom_event_status")
+}
+
+/// 客户标签从哪来
+enum WecomTagSource {
+  AUTO   // 系统规则打的（这一版没做自动规则）
+  MANUAL // 员工在 ERP 里打的
+  WECOM  // 企业微信那边打的，同步回来
+
+  @@map("wecom_tag_source")
+}
+
 enum DailyCloseStatus {
   PENDING   // 未确认
   CONFIRMED // 已确认
@@ -186,6 +212,7 @@ model Store {
   tradeInOrders   TradeInOrder[]
   dailyCloses     DailyClose[]
   entitlements    ServiceEntitlement[]
+  wecomBindCodes  WecomBindCode[]
   kpiTargets      KpiTarget[]
 
   @@index([regionId])
@@ -198,6 +225,7 @@ model User {
   username     String   @unique // 登录账号
   passwordHash String   @map("password_hash") // bcrypt 哈希，永远不存明文
   sessionVersion Int    @default(0) @map("session_version") // 会话版本号：改密码、停用、启用时 +1，之前签发的登录令牌立刻作废
+  wecomUserid    String? @unique @map("wecom_userid") // 员工在企业微信里的账号（userid），组织管理里填
   name         String // 姓名
   role         Role
   storeId      Int?     @map("store_id") // 店员、店长必填；区域经理、总部为空
@@ -225,6 +253,8 @@ model User {
   ledgers               StockLedger[]
   auditLogs             AuditLog[]
   remindersContacted    EntitlementReminder[]
+  wecomFollows          WecomFollow[]
+  wecomBindCodes        WecomBindCode[]
 
   @@index([storeId])
   @@index([regionId])
@@ -595,6 +625,10 @@ model Customer {
   name      String
   phone     String   @unique // 列表脱敏显示
   note      String?
+  wecomExternalUserid String?   @unique @map("wecom_external_userid") // 企业微信外部联系人 id，开单绑定码加微后写入；不按手机号自动匹配
+  wecomNickname       String?   @map("wecom_nickname") // 加微时的微信昵称（快照）
+  wecomAvatarUrl      String?   @map("wecom_avatar_url")
+  wecomBoundAt        DateTime? @map("wecom_bound_at")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -602,6 +636,9 @@ model Customer {
   returnOrders  ReturnOrder[]
   tradeInOrders TradeInOrder[]
   entitlements  ServiceEntitlement[]
+  wecomFollows  WecomFollow[]
+  wecomTags     WecomCustomerTag[]
+  wecomBindCodes WecomBindCode[]
 
   @@map("customers")
 }
@@ -638,6 +675,7 @@ model SalesOrder {
   payments     Payment[]
   returnOrders ReturnOrder[]
   entitlements ServiceEntitlement[]
+  wecomBindCodes WecomBindCode[]
 
   @@index([storeId, bizDate])
   @@index([salespersonId, bizDate])
@@ -840,6 +878,7 @@ model ServiceEntitlement {
   salesOrderItemId Int               @unique @map("sales_order_item_id") // 服务行一行一份
   skuId            Int               @map("sku_id")
   deviceId         Int?              @map("device_id") // 保的哪台机器：开单时店员选，同单没有机器时为空
+  deviceReturnedAt DateTime?         @map("device_returned_at") // 保的机器退回来了、服务没退：服务照常有效，但不再算这台机器的保障（机器可能再卖给别人）
   startedOn        DateTime          @map("started_on") @db.Date // 生效日 = 销售单营业日
   expiresOn        DateTime          @map("expires_on") @db.Date // 到期日（当天 24:00 失效），数据库 CHECK >= 生效日
   status           EntitlementStatus @default(ACTIVE)
@@ -877,6 +916,110 @@ model EntitlementReminder {
 
   @@unique([entitlementId, stage])
   @@map("entitlement_reminders")
+}
+
+/// 企业微信跟进关系：员工 × 外部联系人（口径第 12 节）。客户可以先有跟进关系、后绑定档案（customerId 为空 = 还没绑定）
+model WecomFollow {
+  id             Int               @id @default(autoincrement())
+  externalUserid String            @map("external_userid")
+  wecomUserid    String            @map("wecom_userid") // 跟进员工的企业微信 userid
+  userId         Int?              @map("user_id") // 对应的 ERP 员工（按 wecomUserid 找，可能还没对上）
+  customerId     Int?              @map("customer_id") // 绑定后指向 ERP 客户
+  status         WecomFollowStatus @default(ACTIVE)
+  deletedBy      String?           @map("deleted_by") // 谁删的谁：EMPLOYEE 员工删了客户 / CUSTOMER 客户删了员工
+  state          String? // 加好友时活码带的 state（开单绑定码），追渠道用
+  firstAddAt     DateTime          @map("first_add_at")
+  deletedAt      DateTime?         @map("deleted_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  customer Customer? @relation(fields: [customerId], references: [id])
+  user     User?     @relation(fields: [userId], references: [id])
+
+  @@unique([externalUserid, wecomUserid])
+  @@index([customerId])
+  @@index([userId, status])
+  @@map("wecom_follows")
+}
+
+/// 企业标签（企业微信标签的镜像）
+model WecomTag {
+  id        Int      @id @default(autoincrement())
+  groupName String   @map("group_name") // 标签组，如“已购机型”
+  tagId     String   @unique @map("tag_id") // 企业微信里的标签 id
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  customers WecomCustomerTag[]
+
+  @@map("wecom_tags")
+}
+
+/// 客户身上的标签
+model WecomCustomerTag {
+  customerId Int            @map("customer_id")
+  tagId      Int            @map("tag_id")
+  source     WecomTagSource
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  tag      WecomTag @relation(fields: [tagId], references: [id])
+
+  @@id([customerId, tagId])
+  @@map("wecom_customer_tags")
+}
+
+/// 开单绑定码：开单后店员点“生成加企业微信二维码”时建，带着它的活码（联系我）只认这一个客户。
+/// 客户扫码加好友，回调里的 state 就是这个码，按它精确绑定；绑定成功或过期后删掉企业微信那边的活码配置。
+model WecomBindCode {
+  code               String    @id // 短码，同时是活码的 state（企业微信限 30 个字符）
+  customerId         Int       @map("customer_id")
+  salesOrderId       Int       @map("sales_order_id")
+  storeId            Int       @map("store_id")
+  userId             Int       @map("user_id") // 接待员工 = 开单人
+  configId           String?   @unique @map("config_id") // 企业微信返回的活码配置 id
+  qrCodeUrl          String?   @map("qr_code_url") // 企业微信返回的二维码地址（模拟模式为空，页面画占位图）
+  expiresAt          DateTime  @map("expires_at") // 生成后 30 天
+  usedAt             DateTime? @map("used_at") // 绑定成功的时间
+  contactWayDeletedAt DateTime? @map("contact_way_deleted_at") // 活码配置删掉的时间
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  customer   Customer   @relation(fields: [customerId], references: [id])
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id])
+  store      Store      @relation(fields: [storeId], references: [id])
+  user       User       @relation(fields: [userId], references: [id])
+
+  @@index([salesOrderId])
+  @@index([expiresAt])
+  @@map("wecom_bind_codes")
+}
+
+/// 企业微信回调事件：先落库再处理；去重键是解密后整段明文的 sha256（企业微信重试时明文相同）
+model WecomEvent {
+  id          Int              @id @default(autoincrement())
+  eventKey    String           @unique @map("event_key")
+  source      String // CONTACT 客户联系（微信客服这一版不做）
+  simulated   Boolean          @default(false) // 演示里“模拟扫码加好友”造的事件
+  eventType   String           @map("event_type")
+  changeType  String?          @map("change_type")
+  payload     Json // 解密后的字段
+  status      WecomEventStatus @default(PENDING)
+  error       String?
+  receivedAt  DateTime         @default(now()) @map("received_at")
+  processedAt DateTime?        @map("processed_at")
+
+  @@index([status, receivedAt])
+  @@map("wecom_events")
+}
+
+/// 企业微信 access_token 缓存：不加 Redis，落库；服务层统一读写，过期前 5 分钟刷新
+model WecomTokenCache {
+  key       String   @id // 只有一种：app（自建应用 Secret 换的令牌）
+  token     String
+  expiresAt DateTime @map("expires_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("wecom_token_cache")
 }
 
 /// 操作日志：谁、什么时候、做了什么、对哪条记录

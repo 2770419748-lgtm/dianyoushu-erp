@@ -1,6 +1,15 @@
 # 一台服务器跑四样：数据库、应用、Caddy（自动申请 HTTPS 证书）、定时备份。
 # 用法见 docs/部署.md。密码和密钥都放同目录的 .env（不进仓库），这里只引用变量名。
 
+# 企业微信（口径第 12 节）：WECOM_ENABLED=1 才真对接，其余是企业微信后台给的值，都写在 .env 里
+x-wecom-env: &wecom-env
+  WECOM_ENABLED: ${WECOM_ENABLED:-0}
+  WECOM_CORP_ID: ${WECOM_CORP_ID:-}
+  WECOM_APP_SECRET: ${WECOM_APP_SECRET:-}
+  WECOM_AGENT_ID: ${WECOM_AGENT_ID:-}
+  WECOM_CALLBACK_TOKEN: ${WECOM_CALLBACK_TOKEN:-}
+  WECOM_CALLBACK_AES_KEY: ${WECOM_CALLBACK_AES_KEY:-}
+
 # 每个容器的日志最多 5 个文件 × 50MB，写满自动滚动，不会把硬盘写满
 x-logging: &default-logging
   driver: json-file
@@ -31,8 +40,9 @@ services:
     environment:
       DATABASE_URL: postgresql://erp:${POSTGRES_PASSWORD}@db:5432/dianyoushu_erp?schema=public
       SESSION_SECRET: ${SESSION_SECRET:?在 .env 里设置 SESSION_SECRET}
-      # 演示站保持 1；真给门店用改成 0（见 docs/部署.md 上线前检查清单）
-      DEMO_MODE: ${DEMO_MODE:-1}
+      # 必须在 .env 里写明：演示站 1，真给门店用 0（见 docs/部署.md 上线前检查清单）；应用启动时也会检查
+      DEMO_MODE: ${DEMO_MODE:?在 .env 里写明 DEMO_MODE：演示站 1，真给门店用 0}
+      <<: *wecom-env
       # 应用在 Caddy 后面，X-Forwarded-For 由 Caddy 写入、可信，登录限流按 IP + 用户名
       TRUST_PROXY: "1"
     depends_on:
@@ -78,7 +88,7 @@ services:
       db:
         condition: service_healthy
 
-  # 迁移和灌演示数据：docker compose run --rm tools pnpm exec prisma migrate deploy
+  # 迁移、灌演示数据、对账、每日任务：docker compose run --rm tools pnpm exec prisma migrate deploy / pnpm db:check / pnpm daily
   tools:
     build:
       context: .
@@ -87,7 +97,9 @@ services:
     environment:
       DATABASE_URL: postgresql://erp:${POSTGRES_PASSWORD}@db:5432/dianyoushu_erp?schema=public
       ALLOW_DB_RESET: "1"
-      DEMO_MODE: ${DEMO_MODE:-1}
+      DEMO_MODE: ${DEMO_MODE:?在 .env 里写明 DEMO_MODE：演示站 1，真给门店用 0}
+      # 每日任务（pnpm daily）要用企业微信配置
+      <<: *wecom-env
       # 压测（pnpm load-test）要用它签登录 cookie
       SESSION_SECRET: ${SESSION_SECRET}
     depends_on:

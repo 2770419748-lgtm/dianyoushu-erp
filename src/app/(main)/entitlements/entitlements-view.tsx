@@ -63,7 +63,18 @@ export function EntitlementsView({ data, stage, stores, storeId, mine }: { data:
       ),
     },
     { title: "服务", render: (_, r) => r.sku.name },
-    { title: "保的机器", render: (_, r) => (r.device ? <Link href={`/stock/devices/${r.device.code}`}>{r.device.code}</Link> : "-") },
+    {
+      title: "保的机器",
+      render: (_, r) =>
+        r.device ? (
+          <Space size={4}>
+            <Link href={`/stock/devices/${r.device.code}`}>{r.device.code}</Link>
+            {r.deviceReturnedAt ? <Tag>机器已退回</Tag> : null}
+          </Space>
+        ) : (
+          "-"
+        ),
+    },
     { title: "门店", render: (_, r) => `${r.store.code} ${r.store.name}` },
     { title: "开单人", render: (_, r) => r.salesOrder.salesperson.name },
     { title: "到期日", dataIndex: "expiresOn", render: (v: Date) => formatDate(v) },
@@ -115,7 +126,7 @@ export function EntitlementsView({ data, stage, stores, storeId, mine }: { data:
       }
     >
       <Typography.Paragraph type="secondary">
-        碎屏险、延保快到期的客户，分“剩 0～7 天”“剩 8～30 天”两档；每档对同一份服务只生成一次提醒（每天自动扫一遍，也可以手动点“生成提醒”）。联系过客户后点“已联系”记下结果。
+        碎屏险、延保快到期的客户，分“剩 0～7 天”“剩 8～30 天”两档；每档对同一份服务只生成一次提醒：每日任务（pnpm daily，要在服务器上配成每天定时跑）会扫一遍，没配或想马上看就手动点“生成提醒”。联系过客户后点“已联系”记下结果。
       </Typography.Paragraph>
       <Space wrap style={{ marginBottom: 12 }}>
         <Segmented<ReminderStageKey>

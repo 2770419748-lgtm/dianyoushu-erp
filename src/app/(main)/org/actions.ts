@@ -6,7 +6,7 @@ import * as org from "@/server/org/org-service";
 
 // 组织管理页的 Server Function：只做"取当前用户 → 调服务层 → 刷新页面"，规则都在服务层。
 
-export type ActionResult = { ok: true } | { ok: false; error: string };
+export type ActionResult = { ok: true; notice?: string } | { ok: false; error: string };
 
 async function run(fn: () => Promise<unknown>): Promise<ActionResult> {
   try {
@@ -57,7 +57,11 @@ export async function createUserAction(input: org.UserInput & { username: string
 
 export async function updateUserAction(id: number, input: org.UserInput) {
   const user = await requireUser();
-  return run(() => org.updateUser(user, id, input));
+  let notice: string | undefined;
+  const result = await run(async () => {
+    notice = (await org.updateUser(user, id, input)).notice;
+  });
+  return result.ok && notice ? { ok: true as const, notice } : result;
 }
 
 export async function resetUserPasswordAction(id: number, password: string) {

@@ -33,6 +33,7 @@
 | 调拨与盘点 | 申请锁定 → 发出在途 → 按码收货；盘点快照应有、录实盘、自动算盘盈盘亏 |
 | 开单 | 电脑版：选客户、加机器配件、改价优惠、以旧换新抵扣、多种收款拆分；手机版：扫码加商品、一屏提交 |
 | 回收与退货 | 现场收旧机抵扣、回收机转良品再卖；按原单退货、按原收款方式退款 |
+| 企业微信（模拟演示） | 员工填企业微信账号；开单后生成只认这个客户的加微二维码，客户扫码加店员就绑到档案（不按手机号猜）；加好友立刻发欢迎语、删好友分清谁删谁；回调验签、解密、去重。演示站不连企业微信，点“模拟客户扫码加好友”走一遍真实的回调处理；设 WECOM_ENABLED=1 即真对接 |
 | 服务权益 | 碎屏险、延保开单自动记保障到期日（不扣库存、必须选客户、选保哪台机器）；客户详情看保障和买过的单；到期名单按剩 0～7 天、8～30 天两档提醒，门店记“已联系” |
 | 日结 | 按支付方式对账、逐单比对、差异标红、确认后锁单，收银日报导出 |
 | 看板 | 日销趋势、门店月销对比、员工排名、热销机型、KPI 完成率与每天还差多少、库存周转与滞销 |
@@ -42,7 +43,7 @@
 
 ## 技术
 
-Next.js 16（App Router）+ TypeScript + Prisma 7 + PostgreSQL 17 + Ant Design 6 + ECharts；单仓库单进程，业务规则全部在 `src/server/` 服务层。测试：Vitest（单元测试和连库测试，跑完回滚）+ Playwright（电脑开单到日结、手机开单两条端到端）；GitHub Actions 起一个临时 PostgreSQL，跑 lint、类型检查、全部测试（含连库、并发、回归）、对账自检和生产构建。部署用 Docker Compose（PostgreSQL + 应用 + Caddy 自动 HTTPS + 每日备份，带健康检查 `/api/health` 和日志限额），写好了还没上线。对账自检 `pnpm db:check`，压测 `pnpm load-test`（先起生产构建）。
+Next.js 16（App Router）+ TypeScript + Prisma 7 + PostgreSQL 17 + Ant Design 6 + ECharts；单仓库单进程，业务规则全部在 `src/server/` 服务层。测试：Vitest（单元测试和连库测试，跑完回滚）+ Playwright（电脑开单到日结、手机开单两条端到端）；GitHub Actions 起一个临时 PostgreSQL，跑 lint、类型检查、全部测试（含连库、并发、回归）、对账自检和生产构建。部署用 Docker Compose（PostgreSQL + 应用 + Caddy 自动 HTTPS + 每日备份，带健康检查 `/api/health` 和日志限额），写好了还没上线。对账自检 `pnpm db:check`，每日任务 `pnpm daily`（到期提醒、企业微信清理），压测 `pnpm load-test`（先起生产构建）。
 
 为什么这么选、为什么不做 App 和人事：`docs/取舍记录.md`。
 

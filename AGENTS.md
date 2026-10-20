@@ -116,3 +116,11 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 4. 手机端页面按 PWA 做：清单 `src/app/manifest.ts`、图标 `public/icons/`（`src/proxy.ts` 已放行，不登录也能取），界面不依赖鼠标悬停，触控优先。手机专用页面放 `src/app/(main)/m/`，不显示面包屑。
 5. 不做的：React Native / Flutter 独立工程、离线同步、应用商店上架流程。这些等真要上架时再做，不进当前清单。
 - 时间显示一律用 `src/lib/format.ts` 的 `formatDateTime` / `formatDate`（固定北京时间），金额显示用 `formatFen`；不要在组件里直接 `dayjs(x).format`，否则服务端和浏览器时区不同会报 hydration 不一致。
+
+## 服务权益与企业微信（2026-10-20，口径第 12 节）
+
+- 服务类商品（`skus.is_service`）开单、退货、作废都不动库存、不写流水；权益在开单事务里生成（`src/server/entitlement/`），日期规则是纯函数 `src/lib/entitlement.ts`。
+- 企业微信在 `src/server/wecom/`：`config.ts` 三种模式（`WECOM_ENABLED=1` 真对接 / 演示站模拟 / 真用又没开时关）；`crypto.ts`、`xml.ts` 是纯函数，用官方示例向量单测（`tests/fixtures/wecom-official.ts`）；`client.ts` 的 `WecomClient` 接口有真、模拟两种实现，业务代码只认接口，测试直接传替身；`callback-service.ts` 验签、解密、落库去重、分发；`contact-service.ts` 开单绑定码和加好友、删好友；`simulator.ts` 造加密事件走真实回调处理。
+- 企业微信的服务函数都能传 `db`（测试传事务、跑完回滚）。判断是不是事务用 `"$connect" in db`：事务客户端上也有 `$transaction`，拿它判断会在事务里再开一个新事务，卡死。
+- 不要按手机号或昵称自动把企业微信客户绑到档案上，只认开单绑定码（企业微信拿不到手机号，猜会错绑）。
+- 每日任务 `scripts/daily.ts`（`pnpm daily`）要用带 `server-only` 的服务层，所以用 `tsx --conditions=react-server` 跑。

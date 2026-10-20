@@ -18,6 +18,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/stocktakes": "盘点",
   "/customers": "客户",
   "/entitlements": "到期名单",
+  "/wecom": "企微对接",
   "/sales": "销售单",
   "/sales/new": "开单",
   "/trade-ins": "回收单",

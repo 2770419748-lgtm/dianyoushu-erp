@@ -14,6 +14,7 @@ import { todayBizDate } from "@/server/stock/doc-no";
 // 服务权益（口径第 12 节）：碎屏险、延保这类服务类商品开单时每行生成一条权益，
 // 退货退掉服务或销售单作废时置失效；过没过期按到期日算，不单独存状态。
 // 到期提醒分两档（剩 8～30 天、剩 0～7 天），每档对同一条权益只生成一次（唯一约束兜底）。
+// 退了机器、没退服务时权益记 deviceReturnedAt（见 return-service），页面上标“机器已退回”。
 
 export class EntitlementError extends Error {}
 
@@ -125,7 +126,7 @@ export type ExpiringEntitlementRow = Awaited<ReturnType<typeof listExpiringEntit
 
 /**
  * 生成到期提醒：今天落在某一档区间、这一档还没提醒过的有效权益，各生成一条。
- * 每天跑一次（第二步接每日脚本），也可以在到期名单页手动点；重复跑不会重复生成（唯一约束 + skipDuplicates）。
+ * 每天由每日任务（pnpm daily，服务器上配定时任务）跑一次，也可以在到期名单页手动点；重复跑不会重复生成（唯一约束 + skipDuplicates）。
  * 第一次扫到时已经只剩 7 天以内的，只生成 0～7 天这一档。
  */
 export async function scanEntitlementReminders(options: { today?: Date; storeIds?: number[]; client?: Tx } = {}) {

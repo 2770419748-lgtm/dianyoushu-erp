@@ -132,7 +132,7 @@ describe("服务权益（连本机库，事务回滚）", () => {
     });
   });
 
-  it("退货：只退机器时服务照常有效；退掉服务时权益失效", async (ctx) => {
+  it("退货：只退机器时服务照常有效但记“机器已退回”；退掉服务时权益失效", async (ctx) => {
     if (!fixture) return ctx.skip();
     const f = fixture;
     await inRolledBackTx(async (tx) => {
@@ -141,7 +141,9 @@ describe("服务权益（连本机库，事务回滚）", () => {
       const items = await tx.salesOrderItem.findMany({ where: { orderId: sale.id }, orderBy: { id: "asc" } });
       const [deviceItem, serviceItem] = items;
       await createReturnTx(tx, f.user, { salesOrderId: sale.id, lines: [{ salesItemId: deviceItem!.id, qty: 1 }], refundFen: 0, refundMethod: "CASH" });
-      expect((await tx.serviceEntitlement.findFirstOrThrow({ where: { salesOrderId: sale.id } })).status).toBe("ACTIVE");
+      const afterDevice = await tx.serviceEntitlement.findFirstOrThrow({ where: { salesOrderId: sale.id } });
+      expect(afterDevice.status).toBe("ACTIVE");
+      expect(afterDevice.deviceReturnedAt).not.toBeNull(); // 机器回库可能再卖给别人，不能再算它的保障
       await createReturnTx(tx, f.user, { salesOrderId: sale.id, lines: [{ salesItemId: serviceItem!.id, qty: 1 }], refundFen: 0, refundMethod: "CASH" });
       expect((await tx.serviceEntitlement.findFirstOrThrow({ where: { salesOrderId: sale.id } })).status).toBe("VOIDED");
       expect(await tx.stockLedger.count({ where: { skuId: f.serviceSkuId } })).toBe(0);

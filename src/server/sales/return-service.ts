@@ -172,6 +172,11 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
       // 退掉的是服务（一行一份，退了就是全退）：这份碎屏险、延保失效
       if (plan.item.sku.isService) await voidEntitlementsTx(tx, { salesOrderItemIds: [plan.item.id] });
     }
+    // 退了机器、保它的服务没退：服务照常有效，但记上“机器已退回”。机器回库后可能再卖给别人，不能一台机器挂两个客户的保障
+    const returnedDevices = plans.map((p) => p.item.deviceId).filter((id): id is number => id !== null);
+    if (returnedDevices.length > 0) {
+      await tx.serviceEntitlement.updateMany({ where: { salesOrderId: order.id, deviceId: { in: returnedDevices }, status: "ACTIVE", deviceReturnedAt: null }, data: { deviceReturnedAt: new Date() } });
+    }
   } catch (error) {
     if (error instanceof StockError || error instanceof DeviceStateError) throw new ReturnError(error.message);
     throw error;

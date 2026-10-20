@@ -147,6 +147,9 @@ const out = {
   kpis: [] as Row[],
   entitlements: [] as EntitlementRec[],
   reminders: [] as Row[],
+  wecomFollows: [] as Row[],
+  wecomTags: [] as Row[],
+  wecomCustomerTags: [] as Row[],
 };
 interface EntitlementRec {
   id: number;
@@ -347,16 +350,27 @@ async function main() {
         const items = out.saleItems.filter((i) => i.orderId === sale.id && i.returnedQty < i.qty);
         const item = items.find((i) => i.deviceId) ?? items.find((i) => !serviceSkuIds.has(i.skuId));
         if (!item) continue;
+        // 退的机器买了碎屏险、延保的，服务一起退（退货页也是默认一起勾），演示数据里不出现“机器退了、服务还挂在它上面”
+        const svc = item.deviceId ? out.entitlements.find((e) => e.salesOrderId === sale.id && e.deviceId === item.deviceId && e.status === "ACTIVE") : undefined;
+        const svcItem = svc ? items.find((i) => i.id === svc.salesOrderItemId) : undefined;
         const t = at(bizDate, between(10, 12), between(0, 59));
         const salePays = out.payments.filter((p) => p.salesOrderId === sale.id && p.amountFen > 0);
         const cashPaid = salePays.filter((p) => p.method !== "TRADE_IN").reduce((s, p) => s + p.amountFen, 0);
-        const lineFen = Math.round((item.lineTotalFen * 1) / item.qty);
+        const lineFen = Math.round((item.lineTotalFen * 1) / item.qty) + (svcItem ? svcItem.lineTotalFen : 0);
         const refundFen = Math.min(cashPaid, Math.round((lineFen * sale.totalFen) / sale.subtotalFen));
         const method = salePays.find((p) => p.method !== "TRADE_IN")?.method ?? "CASH";
         const no = docNo("RT", bizDate);
         const retId = ++ids.ret;
         out.returns.push({ id: retId, orderNo: no, storeId: store.id, salesOrderId: sale.id, customerId: sale.customerId, handledById: manager.id, bizDate, refundFen, reason: pick(["质量问题", "客户不想要了", "颜色不喜欢", "七天无理由"]), dailyCloseId: null, createdAt: t });
-        out.returnItems.push({ id: ++ids.retItem, returnOrderId: retId, salesItemId: item.id, skuId: item.skuId, deviceId: item.deviceId, qty: 1, refundFen });
+        const svcRefund = svcItem ? Math.round((refundFen * svcItem.lineTotalFen) / lineFen) : 0;
+        out.returnItems.push({ id: ++ids.retItem, returnOrderId: retId, salesItemId: item.id, skuId: item.skuId, deviceId: item.deviceId, qty: 1, refundFen: refundFen - svcRefund });
+        if (svcItem && svc) {
+          out.returnItems.push({ id: ++ids.retItem, returnOrderId: retId, salesItemId: svcItem.id, skuId: svcItem.skuId, deviceId: null, qty: 1, refundFen: svcRefund });
+          svcItem.returnedQty += 1;
+          svc.status = "VOIDED";
+          svc.voidedAt = t;
+          svc.updatedAt = t;
+        }
         if (refundFen > 0) {
           out.payments.push({ id: ++ids.payment, salesOrderId: null, returnOrderId: retId, method, amountFen: -refundFen, tradeInOrderId: null, reference: null, createdAt: t });
           dayPayments.push({ method, amountFen: -refundFen });
@@ -571,6 +585,7 @@ async function main() {
   }
 
   buildReminders();
+  buildWecomDemo(deviceSkus.map((s) => ({ id: s.id, modelName: s.model.name })), users);
 
   // KPI 目标：已过完的月份 = 实际 × 0.9～1.15（完成率有高有低），当月 = 上月日均 × 当月天数 × 1.05
   buildKpis(stores.map((s) => s.id));
@@ -581,6 +596,87 @@ async function main() {
 }
 
 const accessoryRows: { storeId: number; skuId: number; qty: number }[] = [];
+
+/**
+ * 企业微信演示数据（口径第 12 节，模拟模式下页面不空）：店员、店长都填了企业微信账号（= 登录账号）；
+ * 约三成买过东西的客户加了开单店员的企业微信并绑到档案（买了碎屏险、延保的客户加得多些），少数后来互删了；
+ * 另有几十个加了好友、还没绑档案的；客户身上带几个“从企业微信同步回来”的标签（这一版没做自动打标规则）。
+ */
+function buildWecomDemo(deviceSkuList: { id: number; modelName: string }[], users: { id: number; username: string; role: string; storeId: number | null }[]) {
+  const yesterday = bizDateOf(-1);
+  const modelOf = new Map(deviceSkuList.map((s) => [s.id, s.modelName]));
+  // 标签：已购机型（卖得最多的 12 个型号）、客户状态、购机年份
+  const modelCount = new Map<string, number>();
+  for (const item of out.saleItems) if (item.deviceId) {
+    const name = modelOf.get(item.skuId);
+    if (name) modelCount.set(name, (modelCount.get(name) ?? 0) + 1);
+  }
+  const topModels = [...modelCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([name]) => name);
+  const tagIds = new Map<string, number>();
+  const addTag = (groupName: string, name: string) => {
+    const id = out.wecomTags.length + 1;
+    out.wecomTags.push({ id, groupName, tagId: `et${String(id).padStart(6, "0")}`, name, createdAt: at(bizDateOf(-95), 10, 0) });
+    tagIds.set(`${groupName}|${name}`, id);
+  };
+  for (const m of topModels) addTag("已购机型", m);
+  for (const t of ["保障中", "保险即将到期", "高价值客户"]) addTag("客户状态", t);
+  addTag("购机年份", `${yesterday.getUTCFullYear()} 年购机`);
+
+  const salesByCustomer = new Map<number, SaleRec[]>();
+  for (const sale of out.sales) if (sale.customerId && sale.status === "COMPLETED") salesByCustomer.set(sale.customerId, [...(salesByCustomer.get(sale.customerId) ?? []), sale]);
+  const itemsByOrder = new Map<number, SaleItemRec[]>();
+  for (const item of out.saleItems) itemsByOrder.set(item.orderId, [...(itemsByOrder.get(item.orderId) ?? []), item]);
+  const withService = new Set(out.entitlements.filter((e) => e.status === "ACTIVE").map((e) => e.customerId));
+  const staffIds = new Set(users.filter((u) => u.role === "STAFF" || u.role === "STORE_MANAGER").map((u) => u.id));
+  const usernameOf = new Map(users.map((u) => [u.id, u.username]));
+  const hex = () => Math.floor(rnd() * 0xffffffff).toString(16).padStart(8, "0");
+
+  for (const customer of out.customers) {
+    const sales = salesByCustomer.get(customer.id as number);
+    if (!sales || sales.length === 0) continue;
+    if (!chance(withService.has(customer.id as number) ? 0.6 : 0.25)) continue;
+    const last = sales[sales.length - 1]!;
+    if (!staffIds.has(last.salespersonId)) continue;
+    const externalUserid = `wm${hex()}${hex()}`;
+    const addedAt = new Date(last.createdAt.getTime() + between(2, 10) * 60000);
+    customer.wecomExternalUserid = externalUserid;
+    customer.wecomNickname = `微信用户${externalUserid.slice(-4).toUpperCase()}`;
+    customer.wecomBoundAt = addedAt;
+    const deleted = chance(0.05);
+    out.wecomFollows.push({
+      id: out.wecomFollows.length + 1,
+      externalUserid,
+      wecomUserid: usernameOf.get(last.salespersonId)!,
+      userId: last.salespersonId,
+      customerId: customer.id,
+      status: deleted ? "DELETED" : "ACTIVE",
+      deletedBy: deleted ? "CUSTOMER" : null,
+      state: `o${hex()}`.slice(0, 9),
+      firstAddAt: addedAt,
+      deletedAt: deleted ? new Date(Math.min(addedAt.getTime() + between(3, 40) * DAY_MS, at(yesterday, 20, 0).getTime())) : null,
+      createdAt: addedAt,
+      updatedAt: addedAt,
+    });
+    // 标签：买过的机型、今年购机、保障状态、累计消费
+    const tags = new Set<string>([`购机年份|${yesterday.getUTCFullYear()} 年购机`]);
+    for (const sale of sales) for (const item of itemsByOrder.get(sale.id) ?? []) {
+      const name = item.deviceId ? modelOf.get(item.skuId) : undefined;
+      if (name && tagIds.has(`已购机型|${name}`)) tags.add(`已购机型|${name}`);
+    }
+    const active = out.entitlements.filter((e) => e.customerId === customer.id && e.status === "ACTIVE" && daysUntil(e.expiresOn, yesterday) >= 0);
+    if (active.length > 0) tags.add("客户状态|保障中");
+    if (active.some((e) => daysUntil(e.expiresOn, yesterday) <= 30)) tags.add("客户状态|保险即将到期");
+    if (sales.reduce((sum, x) => sum + x.totalFen, 0) >= 1_000_000) tags.add("客户状态|高价值客户");
+    for (const key of tags) out.wecomCustomerTags.push({ customerId: customer.id, tagId: tagIds.get(key)!, source: "WECOM", createdAt: addedAt });
+  }
+  // 加了好友、还没绑档案的：别的渠道来的（门店海报、朋友介绍），等员工认领
+  const staffList = users.filter((u) => staffIds.has(u.id));
+  for (let i = 0; i < 40; i++) {
+    const staff = pick(staffList);
+    const addedAt = at(bizDateOf(-between(1, 60)), between(10, 21), between(0, 59));
+    out.wecomFollows.push({ id: out.wecomFollows.length + 1, externalUserid: `wm${hex()}${hex()}`, wecomUserid: staff.username, userId: staff.id, customerId: null, status: "ACTIVE", deletedBy: null, state: null, firstAddAt: addedAt, deletedAt: null, createdAt: addedAt, updatedAt: addedAt });
+  }
+}
 
 /** 到期提醒：每档在进入区间那天（剩 30 天、剩 7 天，不早于开单日）早上 9 点生成；两天前的有六成门店已联系 */
 function buildReminders() {
@@ -671,6 +767,11 @@ async function write() {
   await insert("收款", out.payments as unknown as Row[], (c) => prisma.payment.createMany({ data: c as never }));
   await insert("服务权益", out.entitlements as unknown as Row[], (c) => prisma.serviceEntitlement.createMany({ data: c as never }));
   await insert("到期提醒", out.reminders, (c) => prisma.entitlementReminder.createMany({ data: c as never }));
+  // 企业微信：店员、店长、总部的企业微信账号 = 登录账号（演示用；总部现场开单也能生成加微二维码）
+  await prisma.$executeRaw`UPDATE users SET wecom_userid = username WHERE role IN ('STAFF', 'STORE_MANAGER', 'HQ') AND is_active`;
+  await insert("企微跟进关系", out.wecomFollows, (c) => prisma.wecomFollow.createMany({ data: c as never }));
+  await insert("企微标签", out.wecomTags, (c) => prisma.wecomTag.createMany({ data: c as never }));
+  await insert("客户标签", out.wecomCustomerTags, (c) => prisma.wecomCustomerTag.createMany({ data: c as never }));
   await insert("配件库存", accessoryRows, (c) => prisma.accessoryStock.createMany({ data: c as never }));
   await insert("库存流水", out.ledgers, (c) => prisma.stockLedger.createMany({ data: c as never }));
   await insert("KPI 目标", out.kpis, (c) => prisma.kpiTarget.createMany({ data: c as never }));
@@ -678,7 +779,7 @@ async function write() {
     await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   // 自己指定了 id，自增序列要跟上，后面正常开单才不会撞号
-  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders"];
+  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags"];
   for (const t of tables) {
     await prisma.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM "${t}"), 0), 1), (SELECT COUNT(*) > 0 FROM "${t}"))`);
   }
@@ -689,7 +790,7 @@ async function verify() {
   const result = await runIntegrityChecks(prisma);
   const sales = out.sales.filter((s) => s.status === "COMPLETED");
   console.log(
-    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保。`,
+    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.wecomFollows.length} 条企业微信好友关系。`,
   );
   console.log(`自检：${describeIntegrity(result)}`);
   if (!integrityOk(result)) process.exitCode = 1;

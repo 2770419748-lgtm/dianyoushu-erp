@@ -9,17 +9,33 @@ import { formatDate, formatDateTime, formatFen } from "@/lib/format";
 import { SALES_STATUS_COLORS, SALES_STATUS_LABELS } from "@/lib/sales-labels";
 import type { CustomerDetail } from "@/server/customers/customer-service";
 import type { CustomerEntitlement } from "@/server/entitlement/entitlement-service";
+import type { CustomerWecom } from "@/server/wecom/contact-service";
 
 type OrderRow = CustomerDetail["orders"][number];
 
 const STATE_COLORS: Record<string, string> = { 保障中: "green", 即将到期: "orange", 已过期: "default", 已失效: "default" };
 
-export function CustomerDetailView({ detail }: { detail: CustomerDetail }) {
+type FollowRow = CustomerWecom["follows"][number];
+
+const TAG_SOURCE_LABELS: Record<string, string> = { AUTO: "系统", MANUAL: "员工", WECOM: "企业微信" };
+
+export function CustomerDetailView({ detail, wecom }: { detail: CustomerDetail; wecom: CustomerWecom | null }) {
   const { customer, orders, orderCount, entitlements } = detail;
 
   const entitlementColumns: TableColumnsType<CustomerEntitlement> = [
     { title: "服务", render: (_, e) => e.sku.name },
-    { title: "保的机器", render: (_, e) => (e.device ? <Link href={`/stock/devices/${e.device.code}`}>{e.device.code}</Link> : "-") },
+    {
+      title: "保的机器",
+      render: (_, e) =>
+        e.device ? (
+          <Space size={4}>
+            <Link href={`/stock/devices/${e.device.code}`}>{e.device.code}</Link>
+            {e.deviceReturnedAt ? <Tag>机器已退回</Tag> : null}
+          </Space>
+        ) : (
+          "-"
+        ),
+    },
     { title: "门店", render: (_, e) => `${e.store.code} ${e.store.name}` },
     { title: "生效日", dataIndex: "startedOn", render: (v: Date) => formatDate(v) },
     { title: "到期日", dataIndex: "expiresOn", render: (v: Date) => formatDate(v) },
@@ -68,10 +84,53 @@ export function CustomerDetailView({ detail }: { detail: CustomerDetail }) {
         <Table rowKey="id" size="small" columns={entitlementColumns} dataSource={entitlements} pagination={false} scroll={{ x: true }} locale={{ emptyText: "没有买过碎屏险、延保" }} />
       </Card>
 
+      {wecom ? <WecomSection wecom={wecom} /> : null}
+
       <Card title={`买过的单（${orderCount}${orderCount > orders.length ? `，显示最近 ${orders.length} 张` : ""}）`}>
         <Typography.Paragraph type="secondary">客户全公司共享：别的门店、别的店员开的单也列出来，但只显示摘要，打不开明细。</Typography.Paragraph>
         <Table rowKey="key" size="small" columns={orderColumns} dataSource={orders} pagination={false} scroll={{ x: true }} />
       </Card>
     </Space>
+  );
+}
+
+/** 企业微信区：绑定状态、跟进人（按口径第 12 节只显示你看得到的）、标签 */
+function WecomSection({ wecom }: { wecom: CustomerWecom }) {
+  const columns: TableColumnsType<FollowRow> = [
+    { title: "跟进员工", dataIndex: "staff" },
+    { title: "门店", dataIndex: "store", render: (v: string | null) => v ?? "-" },
+    { title: "加好友时间", dataIndex: "firstAddAt", render: (v: Date) => formatDateTime(v) },
+    {
+      title: "状态",
+      render: (_, f) =>
+        f.status === "ACTIVE" ? (
+          <Tag color="green">跟进中</Tag>
+        ) : (
+          <Tag>{f.deletedBy === "EMPLOYEE" ? "员工删了客户" : "客户删了员工"}{f.deletedAt ? ` · ${formatDate(f.deletedAt)}` : ""}</Tag>
+        ),
+    },
+  ];
+  return (
+    <Card title="企业微信">
+      <Space orientation="vertical" style={{ width: "100%" }}>
+        <Typography.Text>
+          {wecom.bound
+            ? `已加企业微信${wecom.bound.nickname ? `（微信昵称：${wecom.bound.nickname}）` : ""}${wecom.bound.boundAt ? `，${formatDateTime(wecom.bound.boundAt)} 绑定` : ""}`
+            : "还没加企业微信：开单后在销售单详情里生成二维码，客户扫码加店员就会绑上。"}
+        </Typography.Text>
+        {wecom.tags.length > 0 ? (
+          <Space wrap size={4}>
+            {wecom.tags.map((t) => (
+              <Tag key={`${t.group}-${t.name}`} color="blue">
+                {t.group}：{t.name}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}> {TAG_SOURCE_LABELS[t.source]}</Typography.Text>
+              </Tag>
+            ))}
+          </Space>
+        ) : null}
+        <Table rowKey="id" size="small" columns={columns} dataSource={wecom.follows} pagination={false} scroll={{ x: true }} locale={{ emptyText: "没有你能看到的跟进关系" }} />
+        {wecom.hiddenFollows > 0 ? <Typography.Text type="secondary">还有 {wecom.hiddenFollows} 条别的门店员工的跟进关系，按权限不显示。</Typography.Text> : null}
+      </Space>
+    </Card>
   );
 }

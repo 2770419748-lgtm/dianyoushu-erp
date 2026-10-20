@@ -106,6 +106,26 @@ export function canManageKpi(role: Role): boolean {
   return role === "HQ";
 }
 
+/**
+ * 企业微信跟进关系谁能看（口径第 12 节）：跟进员工本人；他所在门店的店长；区域经理看辖区；总部全部。
+ * 还没对上 ERP 员工的跟进关系（storeId、regionId 为空）只有总部看得到。
+ */
+export function canSeeWecomFollow(
+  viewer: { id: number; role: Role; storeId: number | null; regionId: number | null },
+  follow: { userId: number | null; storeId: number | null; regionId: number | null },
+): boolean {
+  switch (viewer.role) {
+    case "HQ":
+      return true;
+    case "REGIONAL_MANAGER":
+      return follow.regionId !== null && follow.regionId === viewer.regionId;
+    case "STORE_MANAGER":
+      return follow.storeId !== null && follow.storeId === viewer.storeId;
+    case "STAFF":
+      return follow.userId !== null && follow.userId === viewer.id;
+  }
+}
+
 /** 谁能跟进到期提醒（记“已联系”）：店员、店长、总部；区域经理只看 */
 export function canFollowUpReminders(role: Role): boolean {
   return role === "STAFF" || role === "STORE_MANAGER" || role === "HQ";
@@ -193,8 +213,12 @@ const MENU_HQ: MenuEntry[] = [
   ROADMAP,
 ];
 
-/** 登录后左侧菜单（第 1 周先是假菜单，后面逐步换成真页面） */
-export function getMenuForRole(role: Role): MenuEntry[] {
+/** 登录后左侧菜单。options.wecom：企业微信对接开着（真对接或演示里的模拟）时，总部多一个“企微对接” */
+export function getMenuForRole(role: Role, options: { wecom?: boolean } = {}): MenuEntry[] {
+  if (role === "HQ" && options.wecom) {
+    const logsAt = MENU_HQ.findIndex((m) => m.key === "logs");
+    return [...MENU_HQ.slice(0, logsAt), { key: "wecom", label: "企微对接", href: "/wecom" }, ...MENU_HQ.slice(logsAt)];
+  }
   switch (role) {
     case "STAFF":
       return MENU_STAFF;

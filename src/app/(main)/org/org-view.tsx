@@ -58,7 +58,7 @@ function ToggleButton({ active, onConfirm, disabled }: { active: boolean; onConf
   );
 }
 
-export function OrgView({ data, currentUserId }: { data: OrgTree; currentUserId: number }) {
+export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; currentUserId: number; showWecom: boolean }) {
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [selection, setSelection] = useState<Selection>({ kind: "all" });
@@ -72,7 +72,7 @@ export function OrgView({ data, currentUserId }: { data: OrgTree; currentUserId:
 
   const [regionForm] = Form.useForm<{ name: string }>();
   const [storeForm] = Form.useForm<{ code: string; name: string; regionId: number; address?: string }>();
-  const [userForm] = Form.useForm<{ username: string; name: string; role: Role; storeId?: number; regionId?: number; password?: string }>();
+  const [userForm] = Form.useForm<{ username: string; name: string; role: Role; storeId?: number; regionId?: number; password?: string; wecomUserid?: string }>();
   const [passwordForm] = Form.useForm<{ password: string }>();
   const watchedRole = Form.useWatch("role", userForm);
 
@@ -159,7 +159,8 @@ export function OrgView({ data, currentUserId }: { data: OrgTree; currentUserId:
     startTransition(async () => {
       const result = await run();
       if (result.ok) {
-        message.success("已保存");
+        if (result.notice) message.warning(`已保存。${result.notice}`);
+        else message.success("已保存");
         onDone?.();
       } else {
         message.error(result.error);
@@ -189,6 +190,7 @@ export function OrgView({ data, currentUserId }: { data: OrgTree; currentUserId:
         role: record.role,
         storeId: record.storeId ?? undefined,
         regionId: record.regionId ?? undefined,
+        wecomUserid: record.wecomUserid ?? undefined,
       });
     } else if (selection.kind === "store") {
       userForm.setFieldsValue({ role: "STAFF", storeId: selection.id });
@@ -252,6 +254,7 @@ export function OrgView({ data, currentUserId }: { data: OrgTree; currentUserId:
         u.storeId ? (storeById.get(u.storeId)?.name ?? "-") : u.regionId ? (regionById.get(u.regionId)?.name ?? "-") : "总部",
     },
     { title: "状态", dataIndex: "isActive", render: (v: boolean) => <StatusTag active={v} /> },
+    ...(showWecom ? [{ title: "企业微信", dataIndex: "wecomUserid", render: (v: string | null) => v ?? <Typography.Text type="secondary">未填</Typography.Text> }] : []),
     {
       title: "操作",
       render: (_, u) => (
@@ -436,7 +439,7 @@ export function OrgView({ data, currentUserId }: { data: OrgTree; currentUserId:
             submit(
               () =>
                 userModal.record
-                  ? updateUserAction(userModal.record.id, values)
+                  ? updateUserAction(userModal.record.id, showWecom ? { ...values, wecomUserid: values.wecomUserid ?? "" } : values)
                   : createUserAction({ ...values, username: values.username, password: values.password ?? "" }),
               () => setUserModal({ open: false }),
             )
@@ -459,6 +462,11 @@ export function OrgView({ data, currentUserId }: { data: OrgTree; currentUserId:
           {watchedRole === "REGIONAL_MANAGER" ? (
             <Form.Item name="regionId" label="所辖区域" rules={[{ required: true, message: "请选择区域" }]}>
               <Select options={activeRegionOptions} placeholder="选择区域" showSearch optionFilterProp="label" />
+            </Form.Item>
+          ) : null}
+          {userModal.record && showWecom ? (
+            <Form.Item name="wecomUserid" label="企业微信账号" extra="企业微信管理后台“通讯录”里这个成员的账号（userid）。加好友时按它找跟进员工；留空表示不绑。">
+              <Input maxLength={64} placeholder="如 zhangsan" />
             </Form.Item>
           ) : null}
           {userModal.record ? null : (

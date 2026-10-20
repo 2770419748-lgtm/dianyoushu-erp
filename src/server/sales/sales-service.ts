@@ -322,7 +322,7 @@ export async function getSalesOrder(user: CurrentUser, id: number) {
       customer: { select: { id: true, name: true, phone: true } },
       salesperson: { select: { id: true, name: true } },
       voidedBy: { select: { name: true } },
-      items: { include: { sku: { select: { name: true, isService: true } }, device: { select: { code: true } }, entitlement: { select: { id: true, status: true, expiresOn: true, device: { select: { code: true } } } } } },
+      items: { include: { sku: { select: { name: true, isService: true } }, device: { select: { code: true } }, entitlement: { select: { id: true, status: true, expiresOn: true, deviceReturnedAt: true, device: { select: { code: true } } } } } },
       payments: { orderBy: { id: "asc" } },
       tradeInOrder: { select: { id: true, orderNo: true, modelName: true, deviceCode: true, appraisedFen: true } },
       returnOrders: {

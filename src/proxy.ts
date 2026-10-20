@@ -21,7 +21,8 @@ function contentSecurityPolicy(nonce: string): string {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    // 企业微信“联系我”二维码和客户头像是企业微信给的图片地址（wework.qpic.cn、wx.qlogo.cn），直接显示，不自己生成
+    "img-src 'self' data: blob: https://wework.qpic.cn https://wx.qlogo.cn",
     "font-src 'self' data:",
     "connect-src 'self'",
     "media-src 'self' blob:",
@@ -64,6 +65,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // 图标、清单、robots.txt 不用登录也要能取到（浏览器装 PWA、搜索引擎读 robots 时不带登录态）；
-  // /api/health 是健康检查，Docker 和外部拨测不带登录态
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|robots.txt|manifest.webmanifest|icons/|api/health).*)"],
+  // /api/health 是健康检查，Docker 和外部拨测不带登录态；/api/wecom 是企业微信回调，靠验签不靠登录
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|robots.txt|manifest.webmanifest|icons/|api/health|api/wecom).*)"],
 };

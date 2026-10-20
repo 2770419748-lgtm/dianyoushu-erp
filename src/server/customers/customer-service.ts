@@ -123,7 +123,7 @@ export async function getCustomerDetail(user: CurrentUser, id: number) {
   const [orders, orderCount, entitlements] = await Promise.all([
     prisma.salesOrder.findMany({
       where: { customerId: id },
-      orderBy: { id: "desc" },
+      orderBy: [{ bizDate: "desc" }, { id: "desc" }],
       take: CUSTOMER_ORDER_LIMIT,
       include: {
         store: { select: { id: true, code: true, name: true, regionId: true } },

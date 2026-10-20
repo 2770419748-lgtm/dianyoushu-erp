@@ -53,6 +53,11 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "return.create": "退货",
   "entitlement.reminder_scan": "生成到期提醒",
   "entitlement.reminder_contacted": "到期提醒已联系",
+  "wecom.bind": "客户绑定企业微信",
+  "wecom.user.bind_userid": "填写员工企业微信账号",
+  "wecom.contact_way.create": "生成加企业微信二维码",
+  "wecom.simulate_scan": "模拟扫码加好友",
+  "daily.run": "每日任务（到期提醒、企业微信清理）",
   "daily_close.confirm": "日结确认",
   "daily_close.reopen": "撤销日结",
 };

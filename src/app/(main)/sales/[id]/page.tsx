@@ -5,6 +5,8 @@ import { canSell, canVoidSales } from "@/server/auth/permissions";
 import { PermissionError } from "@/server/auth/scope";
 import { getSalesOrder, type SalesOrderDetail } from "@/server/sales/sales-service";
 import { SalesDetailView } from "./sales-detail-view";
+import { getOrderWecomCard } from "@/server/wecom/contact-service";
+import { WecomOrderCard } from "./wecom-card";
 
 export const dynamic = "force-dynamic";
 
@@ -28,5 +30,11 @@ export default async function SalesDetailPage({ params }: PageProps<"/sales/[id]
   const loaded = await load(user, orderId);
   if (loaded.kind === "missing") notFound();
   if (loaded.kind === "forbidden") return <NoAccess title="没有权限看这张销售单" />;
-  return <SalesDetailView order={loaded.order} canVoid={canVoidSales(user.role)} canSell={canSell(user.role)} showCost={user.role !== "STAFF"} />;
+  const wecomCard = await getOrderWecomCard(user, orderId).catch(() => null); // 企业微信卡片出错不影响看单
+  return (
+    <div style={{ display: "grid", gap: 24 }}>
+      <SalesDetailView order={loaded.order} canVoid={canVoidSales(user.role)} canSell={canSell(user.role)} showCost={user.role !== "STAFF"} />
+      {wecomCard ? <WecomOrderCard salesOrderId={orderId} card={wecomCard} /> : null}
+    </div>
+  );
 }

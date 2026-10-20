@@ -10,7 +10,7 @@ import type { PrismaClient } from "../src/generated/prisma/client";
 //    "已售"的机器要有一张没退的有效销售单，反过来不是"已售"的机器不该挂着没退的有效销售单
 //    （例外：卖出去之后又被回收单收回来的，看那之后有没有回收入库流水）。
 // 6. 服务权益：每个服务行有且只有一条权益；单作废了或服务退了，权益就该失效，反过来也一样；
-//    服务类商品不该有库存余额和流水。
+//    权益的门店、客户和销售单一致；保的机器退了、服务没退的要记“机器已退回”；服务类商品不该有库存余额和流水。
 
 export interface IntegrityResult {
   accessory: number;
@@ -78,7 +78,11 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
         JOIN sales_order_items si ON si.id = e.sales_order_item_id
         JOIN sales_orders o ON o.id = e.sales_order_id
         WHERE si.order_id <> e.sales_order_id
-          OR (e.status = 'ACTIVE') <> (o.status = 'COMPLETED' AND si.returned_qty < si.qty))
+          OR (e.status = 'ACTIVE') <> (o.status = 'COMPLETED' AND si.returned_qty < si.qty)
+          OR e.store_id <> o.store_id OR e.customer_id IS DISTINCT FROM o.customer_id)
+      + (SELECT COUNT(*) FROM service_entitlements e
+        JOIN sales_order_items di ON di.order_id = e.sales_order_id AND di.device_id = e.device_id
+        WHERE e.status = 'ACTIVE' AND di.returned_qty > 0 AND e.device_returned_at IS NULL)
       + (SELECT COUNT(*) FROM stock_ledgers l JOIN skus k ON k.id = l.sku_id WHERE k.is_service)
       + (SELECT COUNT(*) FROM accessory_stocks a JOIN skus k ON k.id = a.sku_id WHERE k.is_service)
     )::bigint AS n`;

@@ -5,6 +5,8 @@ import { DEMO_PROTECTED_MESSAGE, isProtectedDemoAccount } from "@/server/auth/de
 import { hashPassword } from "@/server/auth/password";
 import { canManageOrg, ROLE_LABELS } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
+import { getWecomClient, WecomError } from "@/server/wecom/client";
+import { WECOM_USERID_PATTERN, wecomMode } from "@/server/wecom/config";
 import { writeAudit } from "@/server/audit";
 
 // 组织管理服务层：区域、门店、员工的新增、编辑、停用。只有总部能调；每次写入记操作日志。
@@ -66,7 +68,7 @@ export async function getOrgTree() {
     }),
     prisma.user.findMany({
       orderBy: { id: "asc" },
-      select: { id: true, username: true, name: true, role: true, storeId: true, regionId: true, isActive: true },
+      select: { id: true, username: true, name: true, role: true, storeId: true, regionId: true, isActive: true, wecomUserid: true },
     }),
   ]);
   return { regions, users };
@@ -180,6 +182,7 @@ export interface UserInput {
   role: unknown;
   storeId?: unknown;
   regionId?: unknown;
+  wecomUserid?: unknown; // 企业微信账号：不传表示不改，传空表示解绑（企业微信对接开着时才显示这个字段）
 }
 
 function parseUserInput(input: UserInput) {
@@ -229,9 +232,41 @@ export async function updateUser(actor: Actor, id: number, input: UserInput) {
   await assertNotDemoAccount(id);
   const data = parseUserInput(input);
   if (id === actor.id && data.role !== "HQ") throw new OrgError("不能把自己改成非总部角色");
-  const user = await prisma.user.update({ where: { id }, data });
+  const wecom = input.wecomUserid === undefined ? null : await checkWecomUserid(id, input.wecomUserid);
+  let user;
+  try {
+    user = await prisma.user.update({ where: { id }, data: wecom ? { ...data, wecomUserid: wecom.value } : data });
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new OrgError("这个企业微信账号已经绑给别的员工了");
+    throw error;
+  }
   await writeAudit({ userId: actor.id, action: "user.update", entity: "user", entityId: id, detail: data });
-  return user;
+  if (wecom?.changed) await writeAudit({ userId: actor.id, action: "wecom.user.bind_userid", entity: "user", entityId: id, detail: { wecomUserid: wecom.value, checked: wecom.checked } });
+  return { ...user, notice: wecom?.notice };
+}
+
+/**
+ * 员工的企业微信账号（口径第 12 节）：格式对、没被别人占用；真对接时调企业微信通讯录核对确实是本企业成员，
+ * 模拟模式没法核对，存上并提示。加好友事件按这个账号找跟进员工，填错了跟进关系就对不上人。
+ */
+async function checkWecomUserid(id: number, raw: unknown): Promise<{ value: string | null; changed: boolean; checked: boolean; notice?: string }> {
+  if (wecomMode() === "off") throw new OrgError("企业微信对接没有打开");
+  const value = typeof raw === "string" ? raw.trim() || null : null;
+  const current = await prisma.user.findUnique({ where: { id }, select: { wecomUserid: true } });
+  if ((current?.wecomUserid ?? null) === value) return { value, changed: false, checked: false };
+  if (value === null) return { value, changed: true, checked: false };
+  if (!WECOM_USERID_PATTERN.test(value)) throw new OrgError("企业微信账号只能是 1～64 位字母、数字和 _ - . @（在企业微信管理后台“通讯录”里看成员的账号）");
+  const taken = await prisma.user.findFirst({ where: { wecomUserid: value, id: { not: id } }, select: { name: true } });
+  if (taken) throw new OrgError(`这个企业微信账号已经绑给了${taken.name}`);
+  const client = getWecomClient();
+  if (client.mode === "simulated") return { value, changed: true, checked: false, notice: "模拟模式没有连企业微信，账号先存上，没有核对是不是本企业成员" };
+  try {
+    await client.getMember(value);
+  } catch (error) {
+    if (error instanceof WecomError) throw new OrgError(error.message);
+    throw error;
+  }
+  return { value, changed: true, checked: true };
 }
 
 export async function resetUserPassword(actor: Actor, id: number, password: unknown) {

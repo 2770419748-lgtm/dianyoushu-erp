@@ -33,6 +33,15 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
   const refundFen = refundYuan === null ? suggestedFen : yuanToFen(refundYuan) || 0;
   const overCap = refundFen > capFen;
   const selectedCount = Object.values(qtys).filter((q) => q > 0).length;
+
+  /** 勾机器时，保这台机器的碎屏险、延保默认一起勾上（客户不要这台机器了，一般服务也退）；不退服务可以再取消 */
+  function toggle(item: Item, checked: boolean) {
+    const next = { ...qtys, [item.id]: checked ? 1 : 0 };
+    if (checked && item.deviceId) {
+      for (const s of ctx.items) if (s.serviceForDeviceId === item.deviceId && s.returnableQty > 0) next[s.id] = 1;
+    }
+    setQtys(next);
+  }
   // 退了机器、却没退保这台机器的服务：提醒一下（不强制，客户可能只退机器）
   const returningDevices = new Set(ctx.items.filter((i) => i.deviceId && (qtys[i.id] ?? 0) > 0).map((i) => i.deviceId));
   const orphanServices = ctx.items.filter((i) => i.serviceForDeviceId && returningDevices.has(i.serviceForDeviceId) && i.returnableQty > 0 && (qtys[i.id] ?? 0) === 0);
@@ -43,7 +52,7 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
       width: 60,
       render: (_, i) =>
         i.deviceCode ? (
-          <Checkbox disabled={i.returnableQty === 0} checked={(qtys[i.id] ?? 0) > 0} onChange={(e) => setQtys({ ...qtys, [i.id]: e.target.checked ? 1 : 0 })} />
+          <Checkbox disabled={i.returnableQty === 0} checked={(qtys[i.id] ?? 0) > 0} onChange={(e) => toggle(i, e.target.checked)} />
         ) : (
           <InputNumber min={0} max={i.returnableQty} precision={0} disabled={i.returnableQty === 0} value={qtys[i.id] ?? 0} style={{ width: 70 }} onChange={(v) => setQtys({ ...qtys, [i.id]: Number(v) || 0 })} />
         ),
@@ -86,7 +95,7 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
           type="info"
           showIcon
           style={{ marginTop: 12 }}
-          title={`要退的机器还买了 ${orphanServices.map((i) => i.name).join("、")}：客户不要这台机器了，一般服务也一起退（勾上它）；不退的话服务照常有效。`}
+          title={`要退的机器还买了 ${orphanServices.map((i) => i.name).join("、")}：一般服务也一起退（勾上它）；不退的话服务照常有效，但会标“机器已退回”，不再算这台机器的保障。`}
         />
       ) : null}
       <Space orientation="vertical" style={{ marginTop: 16 }} size="middle">

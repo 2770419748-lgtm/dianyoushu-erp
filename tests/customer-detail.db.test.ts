@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { CustomerError, getCustomerDetail } from "@/server/customers/customer-service";
 import { listExpiringEntitlements } from "@/server/entitlement/entitlement-service";
+import { wecomMode } from "@/server/wecom/config";
+import { getCustomerWecom } from "@/server/wecom/contact-service";
 
 // 客户详情和到期名单的可见范围（口径第 12 节，连本机演示数据，只读）：
 // 客户全公司共享，别的店、别的店员开的单只给摘要（没有单号和链接）；区域经理不进客户详情；到期名单按门店范围看。
@@ -67,5 +69,21 @@ describe("客户详情与到期名单（连本机库，只读）", () => {
       expect([regionalData.canFollowUp, regionalData.canScan, regionalData.canOpenCustomer]).toEqual([false, false, false]);
       expect(regionalData.rows.every((r) => r.daysLeft >= 0 && r.daysLeft <= 30)).toBe(true);
     }
+  });
+
+  it("客户详情的企业微信区：跟进关系按员工本人、本店店长、总部过滤", async (ctx) => {
+    if (!users || wecomMode() === "off") return ctx.skip();
+    const follow = await prisma.wecomFollow.findFirst({ where: { customerId: { not: null }, user: { storeId: users.manager.storeId } }, select: { customerId: true, userId: true } });
+    if (!follow) return ctx.skip();
+    const customerId = follow.customerId!;
+    const hqView = (await getCustomerWecom(users.hq, customerId))!;
+    expect(hqView.hiddenFollows).toBe(0);
+    expect(hqView.bound).not.toBeNull();
+    const managerView = (await getCustomerWecom(users.manager, customerId))!;
+    expect(managerView.follows.length).toBeGreaterThan(0);
+    const staffView = (await getCustomerWecom(users.staff, customerId))!;
+    const all = await prisma.wecomFollow.findMany({ where: { customerId }, select: { id: true, userId: true } });
+    expect(staffView.follows.map((x) => x.id).sort()).toEqual(all.filter((x) => x.userId === users!.staff.id).map((x) => x.id).sort());
+    if (staffView.follows.length === 0) expect(staffView.tags).toEqual([]); // 一条都看不到就不给标签
   });
 });

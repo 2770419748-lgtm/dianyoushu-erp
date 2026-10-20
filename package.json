@@ -21,7 +21,8 @@
     "db:backup": "node scripts/backup-db.mjs",
     "db:restore-check": "node scripts/restore-check.mjs",
     "db:check": "tsx prisma/db-check.ts",
-    "load-test": "tsx scripts/load-test.ts"
+    "load-test": "tsx scripts/load-test.ts",
+    "daily": "tsx --conditions=react-server scripts/daily.ts"
   },
   "dependencies": {
     "@ant-design/nextjs-registry": "^1.3.0",
