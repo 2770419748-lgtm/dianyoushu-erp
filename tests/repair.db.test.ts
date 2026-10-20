@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
-import { approveRepairTx, createRepairTx, declineRepairTx, finishRepairTx, pickupRepairTx, quoteRepairTx, RepairError, voidRepairTx } from "@/server/repair/repair-service";
+import { approveRepairTx, createRepairTx, declineRepairTx, finishRepairTx, lookupRepairDevice, pickupRepairTx, quoteRepairTx, RepairError, voidRepairTx } from "@/server/repair/repair-service";
 import { createReturnTx } from "@/server/sales/return-service";
 import { createSalesOrderTx, voidSalesOrderTx } from "@/server/sales/sales-service";
 import { receiveDevices } from "@/server/stock/stock-service";
@@ -156,6 +156,65 @@ describe("售后维修（连本机库，事务回滚）", () => {
       await voidRepairTx(tx, f.hq, outside.id, "接错了");
       // 作废后同一台可以重新接
       await createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: customer.id, code: "SNOUTSIDE001", modelName: "iPhone 13 128GB", faultCategory: "BOARD", faultDescription: "重新接" });
+    });
+  });
+  it("报价后付法失效（碎屏险退掉、原单作废）：待取机的单不能结算，重新报价改自费后能结；日期仍按第一次报价那天", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const f = fixture;
+    await inRolledBackTx(async (tx) => {
+      // 碎屏险在报价后被退掉
+      const sold = await soldDevice(tx, 30, true);
+      const { id } = await createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: sold.customerId, code: sold.code, faultCategory: "SCREEN", faultDescription: "外屏碎了" });
+      await quoteRepairTx(tx, f.hq, id, { partsFen: 80000, laborFen: 5000, payer: "SCREEN_INSURANCE" });
+      const quotedAt = (await tx.repairOrder.findUniqueOrThrow({ where: { id } })).quotedAt;
+      await approveRepairTx(tx, f.hq, id);
+      await finishRepairTx(tx, f.hq, id, "REPAIRED", "");
+      const serviceItem = await tx.salesOrderItem.findFirstOrThrow({ where: { orderId: sold.saleId, deviceId: null } });
+      await createReturnTx(tx, f.hq, { salesOrderId: sold.saleId, lines: [{ salesItemId: serviceItem.id, qty: 1 }], refundFen: 0, refundMethod: "CASH" });
+      await expect(pickupRepairTx(tx, f.hq, id, [])).rejects.toThrow(/重新报价/);
+      await expect(quoteRepairTx(tx, f.hq, id, { partsFen: 80000, laborFen: 5000, payer: "SCREEN_INSURANCE" })).rejects.toThrow(/没有生效中的碎屏险/);
+      await quoteRepairTx(tx, f.hq, id, { partsFen: 80000, laborFen: 5000, payer: "CUSTOMER" });
+      const requoted = await tx.repairOrder.findUniqueOrThrow({ where: { id } });
+      expect([requoted.status, requoted.chargeFen, requoted.entitlementId, requoted.quotedAt?.getTime()]).toEqual(["READY", 85000, null, quotedAt?.getTime()]);
+      await pickupRepairTx(tx, f.hq, id, [{ method: "WECHAT", amountFen: 85000 }]);
+      expect((await tx.repairOrder.findUniqueOrThrow({ where: { id } })).status).toBe("CLOSED");
+
+      // 保修：报价后原销售单作废了，也不能 0 元结算
+      const sold2 = await soldDevice(tx, 31, false);
+      const r2 = await createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: sold2.customerId, code: sold2.code, faultCategory: "BATTERY", faultDescription: "掉电快" });
+      await quoteRepairTx(tx, f.hq, r2.id, { partsFen: 20000, laborFen: 3000, payer: "WARRANTY" });
+      await approveRepairTx(tx, f.hq, r2.id);
+      await finishRepairTx(tx, f.hq, r2.id, "REPAIRED", "");
+      await voidSalesOrderTx(tx, f.hq, sold2.saleId, "测试");
+      await expect(pickupRepairTx(tx, f.hq, r2.id, [])).rejects.toThrow(/原销售单已经退货或作废/);
+      await expect(quoteRepairTx(tx, f.hq, r2.id, { partsFen: 20000, laborFen: 3000, payer: "WARRANTY" })).rejects.toThrow(RepairError);
+
+      // 没修的单不用重新报价，也不能重新报价
+      const sold3 = await soldDevice(tx, 32, false);
+      const r3 = await createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: sold3.customerId, code: sold3.code, faultCategory: "BATTERY", faultDescription: "x" });
+      await quoteRepairTx(tx, f.hq, r3.id, { partsFen: 1000, laborFen: 0, payer: "CUSTOMER" });
+      await declineRepairTx(tx, f.hq, r3.id, "");
+      await expect(quoteRepairTx(tx, f.hq, r3.id, { partsFen: 1000, laborFen: 0, payer: "CUSTOMER" })).rejects.toThrow(/能报价/);
+    });
+  });
+
+  it("接件提示带出客户名下不绑机器的碎屏险；外面买的机器码不分大小写，只能有一张没完结的单", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const f = fixture;
+    await inRolledBackTx(async (tx) => {
+      const customer = await tx.customer.create({ data: { name: "季度险", phone: "19700000088" } });
+      const [deviceId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: [{ sn: null, imei1: imei(33), imei2: null }], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-WX-33", operatorId: f.hq.id });
+      await createSalesOrderTx(tx, f.hq, { storeId: f.storeId, customerId: customer.id, items: [{ deviceId }, { skuId: f.screenSkuId, qty: 1 }], paymentMethod: "CASH" });
+      const found = await lookupRepairDevice(f.hq, imei(33), tx);
+      expect(found.kind).toBe("ours");
+      if (found.kind === "ours") expect(found.entitlements.map((e) => e.name).join()).toMatch(/不绑机器/);
+
+      const outsider = await tx.customer.create({ data: { name: "外来机", phone: "19700000087" } });
+      const first = await createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: outsider.id, code: "snoutcase1", modelName: "iPhone 12", faultCategory: "BATTERY", faultDescription: "x" });
+      expect((await tx.repairOrder.findUniqueOrThrow({ where: { id: first.id } })).deviceCode).toBe("SNOUTCASE1");
+      await expect(createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: outsider.id, code: "SNOUTCASE1", modelName: "iPhone 12", faultCategory: "BATTERY", faultDescription: "x" })).rejects.toThrow(/没完结/);
+      const again = await lookupRepairDevice(f.hq, "SnOutCase1", tx);
+      expect(again.kind === "outside" && again.openRepair?.id).toBe(first.id);
     });
   });
 });

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import type { FaultCategory, RepairOutcome, RepairPayer, RepairStatus } from "@/generated/prisma/enums";
 import { daysUntil } from "@/lib/entitlement";
+import { formatDate } from "@/lib/format";
 import { isValidFen, MAX_AMOUNT_FEN } from "@/lib/limits";
 import { FAULT_LABELS, payerOptions, REPAIR_PAYER_LABELS, repairChargeFen, type ServiceKindKey, warrantyEndsOn } from "@/lib/repair";
 import { maskPhone } from "@/lib/sales-labels";
@@ -76,13 +77,22 @@ export async function lookupRepairDevice(user: CurrentUser, rawCode: string, db:
     where: deviceCodeWhere(code),
     include: { sku: { select: { name: true, model: { select: { brand: { select: { name: true } } } } } }, tradeInOrder: { select: { modelName: true } } },
   });
-  const openRepair = await db.repairOrder.findFirst({ where: { deviceCode: device?.code ?? code, status: { in: OPEN_STATUSES } }, select: { id: true, orderNo: true } });
-  if (!device) return { kind: "outside" as const, code, openRepair };
+  const openRepair = await db.repairOrder.findFirst({ where: { deviceCode: device?.code ?? code.toUpperCase(), status: { in: OPEN_STATUSES } }, select: { id: true, orderNo: true } });
+  if (!device) return { kind: "outside" as const, code: code.toUpperCase(), openRepair };
   if (device.status !== "SOLD") return { kind: "in_stock" as const, code: device.code, statusLabel: DEVICE_STATUS_LABELS[device.status], openRepair };
   const sale = await lastSaleOf(db, device.id);
   const today = todayBizDate();
+  // 保这台机器的服务，加上买这台机器的客户名下不绑机器的碎屏险、延保（报价时也按这个范围算，见 coverageEntitlements）
   const entitlements = await db.serviceEntitlement.findMany({
-    where: { deviceId: device.id, deviceReturnedAt: null, status: "ACTIVE", expiresOn: { gte: today } },
+    where: {
+      status: "ACTIVE",
+      expiresOn: { gte: today },
+      OR: [
+        { deviceId: device.id, deviceReturnedAt: null },
+        ...(sale?.customer ? [{ customerId: sale.customer.id, deviceId: null, sku: { serviceKind: { in: ["SCREEN_INSURANCE", "EXTENDED_WARRANTY"] as ServiceKindKey[] } } }] : []),
+      ],
+    },
+    orderBy: { expiresOn: "desc" },
     include: { sku: { select: { name: true, serviceKind: true } } },
   });
   return {
@@ -92,7 +102,7 @@ export async function lookupRepairDevice(user: CurrentUser, rawCode: string, db:
     sale: sale ? { orderNo: sale.orderNo, bizDate: sale.bizDate, storeName: sale.store.name, customer: sale.customer ? { id: sale.customer.id, name: sale.customer.name, phoneMasked: maskPhone(sale.customer.phone) } : null } : null,
     warrantyEndsOn: sale ? warrantyEndsOn(sale.bizDate) : null,
     inWarranty: sale ? daysUntil(warrantyEndsOn(sale.bizDate), today) >= 0 : false,
-    entitlements: entitlements.map((e) => ({ id: e.id, name: e.sku.name, expiresOn: e.expiresOn, daysLeft: daysUntil(e.expiresOn, today) })),
+    entitlements: entitlements.map((e) => ({ id: e.id, name: e.deviceId ? e.sku.name : `${e.sku.name}（客户名下，不绑机器）`, expiresOn: e.expiresOn, daysLeft: daysUntil(e.expiresOn, today) })),
     openRepair,
   };
 }
@@ -133,7 +143,8 @@ export async function createRepairTx(tx: Tx, user: CurrentUser, input: RepairInt
     include: { sku: { select: { name: true, model: { select: { brand: { select: { name: true } } } } } }, tradeInOrder: { select: { modelName: true } } },
   });
   if (device && device.status !== "SOLD") throw new RepairError(`${device.code} 还在店里（${DEVICE_STATUS_LABELS[device.status]}），不是客户的机器，不能接件`);
-  const deviceCode = device?.code ?? typed;
+  // 外面买的机器码统一存大写：snoutcase1 和 SNOUTCASE1 是同一台，不能各开一张没完结的单
+  const deviceCode = device?.code ?? typed.toUpperCase();
   const modelName = device ? deviceModelName(device) : text(input.modelName, 60);
   if (!modelName) throw new RepairError("外面买的机器，写一下机型");
 
@@ -192,6 +203,42 @@ async function coverageEntitlements(db: Db, repair: { customerId: number; device
   return rows.map((r) => ({ id: r.id, kind: r.sku.serviceKind as ServiceKindKey, expiresOn: r.expiresOn, name: r.sku.name }));
 }
 
+/** 报价那天（营业日）：保修、服务有没有过期按报价那天算，取机晚几天不影响 */
+function quoteDayOf(repair: { quotedAt: Date | null }): Date {
+  return repair.quotedAt ? new Date(formatDate(repair.quotedAt)) : todayBizDate();
+}
+
+/** 接件时带出的购买记录还算不算：原销售单后来退了、作废了，就不能再按本店保修 */
+async function currentPurchasedOn(db: Db, repair: { deviceId: number | null; salesOrderId: number | null; purchasedOn: Date | null }): Promise<Date | null> {
+  if (!repair.deviceId || !repair.salesOrderId || !repair.purchasedOn) return null;
+  const sale = await lastSaleOf(db, repair.deviceId);
+  return sale?.id === repair.salesOrderId ? repair.purchasedOn : null;
+}
+
+/**
+ * 取机前再核一遍报价时选的付法：日期按报价那天，碎屏险 / 延保和原销售单按现在。
+ * 报价后服务被退掉、被别的单先理赔了、原单退货了，返回原因（要重新报价）；还成立返回 null。自费、没修的不用核。
+ */
+async function stalePayerReason(
+  db: Db,
+  repair: { outcome: RepairOutcome | null; payer: RepairPayer | null; quotedAt: Date | null; faultCategory: FaultCategory; customerId: number; deviceId: number | null; salesOrderId: number | null; purchasedOn: Date | null; entitlementId: number | null },
+): Promise<string | null> {
+  if (repair.outcome !== "REPAIRED" || !repair.payer || repair.payer === "CUSTOMER") return null;
+  const purchasedOn = await currentPurchasedOn(db, repair);
+  if (repair.payer === "WARRANTY" && !purchasedOn) return "原销售单已经退货或作废，不能再按本店保修";
+  const entitlements = repair.entitlementId ? (await coverageEntitlements(db, repair)).filter((e) => e.id === repair.entitlementId) : [];
+  const option = payerOptions({ fault: repair.faultCategory, today: quoteDayOf(repair), purchasedOn, entitlements }).find((o) => o.payer === repair.payer)!;
+  if (option.allowed) return null;
+  return option.reason.startsWith("没有生效中的") ? `报价时用的那份${REPAIR_PAYER_LABELS[repair.payer]}已经退掉、理赔过或失效了` : option.reason;
+}
+
+/** 这张单现在能选谁来付：购买记录按原销售单还在不在算，原单退了、作废了的保修那一项说清楚原因 */
+async function repairPayerOptions(db: Db, repair: { faultCategory: FaultCategory; customerId: number; deviceId: number | null; salesOrderId: number | null; purchasedOn: Date | null }, day: Date) {
+  const purchasedOn = await currentPurchasedOn(db, repair);
+  const options = payerOptions({ fault: repair.faultCategory, today: day, purchasedOn, entitlements: await coverageEntitlements(db, repair) });
+  return repair.salesOrderId && !purchasedOn ? options.map((o) => (o.payer === "WARRANTY" ? { ...o, allowed: false, reason: "原销售单已经退货或作废，不能再按本店保修" } : o)) : options;
+}
+
 export interface RepairQuoteInput {
   partsFen: unknown;
   laborFen: unknown;
@@ -209,21 +256,23 @@ function fen(value: unknown, label: string): number {
 export async function quoteRepairTx(tx: Tx, user: CurrentUser, id: number, input: RepairQuoteInput, today = todayBizDate()) {
   assertCanHandle(user);
   const repair = await lockRepair(tx, user, id);
-  if (repair.status !== "RECEIVED" && repair.status !== "QUOTED") throw new RepairError("只有已接件、已报价的单能报价");
+  // 修好了待取机的单也能重新报价：报价后碎屏险、延保、原销售单变了，取机前改付法（日期还按第一次报价那天算）
+  const requote = repair.status === "READY" && repair.outcome === "REPAIRED";
+  if (repair.status !== "RECEIVED" && repair.status !== "QUOTED" && !requote) throw new RepairError("只有已接件、已报价的单，或者修好了待取机的单能报价");
   const payer = input.payer as RepairPayer;
   if (!PAYERS.includes(payer)) throw new RepairError("请选谁来付");
   const partsFen = fen(input.partsFen, "配件费");
   const laborFen = fen(input.laborFen, "工时费");
   const costFen = fen(input.costFen, "维修成本");
-  const option = payerOptions({ fault: repair.faultCategory, today, purchasedOn: repair.purchasedOn, entitlements: await coverageEntitlements(tx, repair) }).find((o) => o.payer === payer)!;
+  const option = (await repairPayerOptions(tx, repair, requote ? quoteDayOf(repair) : today)).find((o) => o.payer === payer)!;
   if (!option.allowed) throw new RepairError(`不能选“${REPAIR_PAYER_LABELS[payer]}”：${option.reason}`);
   const chargeFen = repairChargeFen(payer, partsFen, laborFen);
   if (chargeFen > MAX_AMOUNT_FEN) throw new RepairError("金额不对：应付太大了");
   await tx.repairOrder.update({
     where: { id },
-    data: { status: "QUOTED", quotedAt: new Date(), partsFen, laborFen, costFen, payer, entitlementId: option.entitlementId ?? null, chargeFen, repairNote: text(input.note, 200) || repair.repairNote },
+    data: { ...(requote ? {} : { status: "QUOTED" as const, quotedAt: new Date() }), partsFen, laborFen, costFen, payer, entitlementId: option.entitlementId ?? null, chargeFen, repairNote: text(input.note, 200) || repair.repairNote },
   });
-  await writeAudit({ userId: user.id, action: "repair.quote", entity: "repair_order", entityId: id, detail: { payer, partsFen, laborFen, chargeFen } }, tx);
+  await writeAudit({ userId: user.id, action: "repair.quote", entity: "repair_order", entityId: id, detail: { payer, partsFen, laborFen, chargeFen, ...(requote ? { requote: true } : {}) } }, tx);
 }
 
 /** 客户同意报价：开始修 */
@@ -273,6 +322,8 @@ export async function pickupRepairTx(tx: Tx, user: CurrentUser, id: number, paym
   if (await isDayClosed(tx, head.storeId, bizDate)) throw new RepairError(DAY_CLOSED_MESSAGE);
   const repair = await lockRepair(tx, user, id);
   if (repair.status !== "READY") throw new RepairError("待取机的单才能结算");
+  const stale = await stalePayerReason(tx, repair);
+  if (stale) throw new RepairError(`报价时选的“${REPAIR_PAYER_LABELS[repair.payer!]}”现在用不了：${stale}。请重新报价（比如改成自费）再结算`);
   let lines;
   try {
     lines = buildSalePayments(repair.chargeFen, 0, Array.isArray(payments) ? payments : []);
@@ -282,7 +333,7 @@ export async function pickupRepairTx(tx: Tx, user: CurrentUser, id: number, paym
   }
   if (repair.outcome === "REPAIRED" && repair.payer === "SCREEN_INSURANCE" && repair.entitlementId) {
     const claimed = await tx.serviceEntitlement.updateMany({ where: { id: repair.entitlementId, status: "ACTIVE" }, data: { status: "CLAIMED" } });
-    if (claimed.count === 0) throw new RepairError("这份碎屏险已经理赔过或失效了，请重新报价");
+    if (claimed.count === 0) throw new RepairError("这份碎屏险已经理赔过或失效了，请重新报价（比如改成自费）再结算");
   }
   await tx.repairOrder.update({ where: { id }, data: { status: "CLOSED", closedAt: new Date(), closedById: user.id, bizDate } });
   if (lines.length > 0) await tx.payment.createMany({ data: lines.map((l) => ({ repairOrderId: id, method: l.method, amountFen: l.amountFen })) });
@@ -389,8 +440,9 @@ export async function getRepair(user: CurrentUser, id: number) {
   if (!repair) return null;
   wrapAccess(() => assertStoreAccess(user, repair.store));
   const today = todayBizDate();
-  const quoting = repair.status === "RECEIVED" || repair.status === "QUOTED";
-  const options = quoting ? payerOptions({ fault: repair.faultCategory, today, purchasedOn: repair.purchasedOn, entitlements: await coverageEntitlements(prisma, repair) }) : [];
+  const payerStale = repair.status === "READY" ? await stalePayerReason(prisma, repair) : null;
+  const quoting = repair.status === "RECEIVED" || repair.status === "QUOTED" || payerStale !== null;
+  const options = quoting ? await repairPayerOptions(prisma, repair, repair.status === "READY" ? quoteDayOf(repair) : today) : [];
   const showCost = canSeeCost(user.role);
   return {
     ...repair,
@@ -399,6 +451,7 @@ export async function getRepair(user: CurrentUser, id: number) {
     salesOrder: repair.salesOrder ? { id: repair.salesOrder.id, orderNo: repair.salesOrder.orderNo, canOpen: canAccessStoreSafe(user, repair.salesOrder.store) } : null,
     warrantyEndsOn: repair.purchasedOn ? warrantyEndsOn(repair.purchasedOn) : null,
     payerOptions: options,
+    payerStale,
     todayClosed: await isDayClosed(prisma, repair.storeId, today),
     can: {
       handle: canHandleRepair(user.role),

@@ -189,7 +189,7 @@ interface RepairRec {
   faultCategory: FaultCategoryKey;
   faultDescription: string;
   appearance: string | null;
-  status: "RECEIVED" | "QUOTED" | "REPAIRING" | "READY" | "CLOSED";
+  status: "RECEIVED" | "QUOTED" | "REPAIRING" | "READY" | "CLOSED" | "VOIDED";
   partsFen: number | null;
   laborFen: number | null;
   costFen: number | null;
@@ -205,6 +205,9 @@ interface RepairRec {
   closedById: number | null;
   bizDate: Date | null;
   dailyCloseId: number | null;
+  voidedAt?: Date | null;
+  voidedById?: number | null;
+  voidReason?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -591,7 +594,9 @@ async function main() {
 
       // 4b. 售后：先给今天来取机的结算（收款进今天日结），再接今天的新件
       for (const r of repairPickups.get(day) ?? []) {
-        const t = at(bizDate, between(14, 20), between(0, 59));
+        const picked = at(bizDate, between(14, 20), between(0, 59));
+        // 修好当天就来取的，取机时间不能早于修好时间（固定往后挪半小时，不多用随机数）
+        const t = r.readyAt && picked.getTime() <= r.readyAt.getTime() ? new Date(r.readyAt.getTime() + 30 * 60000) : picked;
         r.status = "CLOSED";
         r.closedAt = t;
         r.closedById = pick(staff).id;
@@ -615,7 +620,7 @@ async function main() {
         const repair = newRepair(day, bizDate, store.id, staff);
         if (!repair) continue;
         out.repairs.push(repair.rec);
-        openRepairCodes.add(repair.rec.deviceCode);
+        if (!repair.voided) openRepairCodes.add(repair.rec.deviceCode);
         if (repair.pickupDay !== null) repairPickups.set(repair.pickupDay, [...(repairPickups.get(repair.pickupDay) ?? []), repair.rec]);
       }
 
@@ -738,7 +743,13 @@ async function main() {
         }
       }
       rec.updatedAt = rec.readyAt ?? rec.approvedAt ?? rec.quotedAt ?? receivedAt;
-      return { rec, pickupDay: rec.status === "READY" && pickupDay <= -1 ? pickupDay : null };
+      // 少数接错、重复接件的单被店长作废（按单号固定挑，不多用随机数，前面的数据不变）
+      if (rec.id % 37 === 0 && day < -3) {
+        Object.assign(rec, { status: "VOIDED", outcome: null, readyAt: null, approvedAt: null, chargeFen: 0, voidedAt: new Date(receivedAt.getTime() + 2 * 3600000), voidedById: (staffList.find((u) => u.role === "STORE_MANAGER") ?? staffList[0]!).id, voidReason: rec.id % 2 === 0 ? "重复接件" : "客户拿错机器，接错了" });
+        rec.updatedAt = rec.voidedAt!;
+        return { rec, pickupDay: null, voided: true };
+      }
+      return { rec, pickupDay: rec.status === "READY" && pickupDay <= -1 ? pickupDay : null, voided: false };
     }
 
     // 收尾：昨晚补一次货，保证演示时每家店常卖的机型都有库存、配件不缺

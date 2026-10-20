@@ -36,7 +36,7 @@ export function RepairDetailView({ repair }: { repair: RepairDetail }) {
   }
 
   const stepIndex = repair.status === "VOIDED" ? 0 : STEP_ORDER.indexOf(repair.status as (typeof STEP_ORDER)[number]);
-  const quoting = repair.can.handle && (repair.status === "RECEIVED" || repair.status === "QUOTED");
+  const quoting = repair.can.handle && (repair.status === "RECEIVED" || repair.status === "QUOTED" || (repair.status === "READY" && repair.payerStale !== null));
   const payFen = (row: PayRow) => (row.amountYuan === null ? (pays.length === 1 ? repair.chargeFen : 0) : yuanToFen(row.amountYuan) || 0);
   const paidFen = pays.reduce((s, p) => s + payFen(p), 0);
 
@@ -120,7 +120,7 @@ export function RepairDetailView({ repair }: { repair: RepairDetail }) {
       ) : null}
 
       {quoting ? (
-        <Card title={repair.status === "RECEIVED" ? "检测报价" : "重新报价"}>
+        <Card title={repair.status === "RECEIVED" ? "检测报价" : repair.status === "READY" ? "重新报价（取机前付法变了）" : "重新报价"}>
           <Form
             form={quoteForm}
             layout="vertical"
@@ -128,7 +128,7 @@ export function RepairDetailView({ repair }: { repair: RepairDetail }) {
             onFinish={(v) =>
               act(
                 () => quoteRepairAction(repair.id, { partsFen: yuanToFen(v.partsYuan ?? 0), laborFen: yuanToFen(v.laborYuan ?? 0), costFen: yuanToFen(v.costYuan ?? 0), payer: v.payer, note: v.note }),
-                "已报价，等客户确认",
+                repair.status === "READY" ? "已重新报价，可以结算了" : "已报价，等客户确认",
               )
             }
           >
@@ -190,6 +190,7 @@ export function RepairDetailView({ repair }: { repair: RepairDetail }) {
       {repair.can.handle && repair.status === "READY" ? (
         <Card title="取机结算">
           {repair.todayClosed ? <Alert type="warning" showIcon title="这家店今天已经日结确认了，不能再结算；确实要结请总部先撤销今天的日结。" style={{ marginBottom: 12 }} /> : null}
+          {repair.payerStale ? <Alert type="error" showIcon title={`报价时选的付法现在用不了：${repair.payerStale}。先在上面重新报价（比如改成自费），再结算。`} style={{ marginBottom: 12 }} /> : null}
           {repair.chargeFen > 0 ? (
             <Space orientation="vertical" style={{ width: "100%" }}>
               <Typography.Text>
@@ -216,7 +217,7 @@ export function RepairDetailView({ repair }: { repair: RepairDetail }) {
             type="primary"
             style={{ marginTop: 12 }}
             loading={pending}
-            disabled={repair.todayClosed || (repair.chargeFen > 0 && paidFen !== repair.chargeFen)}
+            disabled={repair.todayClosed || repair.payerStale !== null || (repair.chargeFen > 0 && paidFen !== repair.chargeFen)}
             onClick={() => act(() => pickupRepairAction(repair.id, repair.chargeFen > 0 ? pays.map((p) => ({ method: p.method, amountFen: payFen(p) })) : []), "已结算，客户取走了")}
           >
             客户取机，结算
