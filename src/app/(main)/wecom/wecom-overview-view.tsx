@@ -1,6 +1,7 @@
 "use client";
 
-import { Alert, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from "antd";
+import Link from "next/link";
+import { Alert, Button, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import { formatDateTime } from "@/lib/format";
 import type { WecomOverview } from "@/server/wecom/overview-service";
@@ -27,7 +28,7 @@ export function WecomOverviewView({ data }: { data: WecomOverview }) {
       title: "事件",
       render: (_, e) => (
         <Space size={4}>
-          {e.changeType ? (CHANGE_LABELS[e.changeType] ?? e.changeType) : e.eventType}
+          {e.changeType ? (CHANGE_LABELS[e.changeType] ?? e.changeType) : e.eventType === "kf_msg_or_event" ? "微信客服新消息" : e.eventType}
           {e.simulated ? <Tag color="purple">模拟</Tag> : null}
         </Space>
       ),
@@ -38,7 +39,19 @@ export function WecomOverviewView({ data }: { data: WecomOverview }) {
   const c = data.counts;
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-      <Card title="企微对接">
+      <Card
+        title="企微对接"
+        extra={
+          <Space wrap>
+            <Link href="/wecom/sidebar">
+              <Button size="small">企微侧边栏</Button>
+            </Link>
+            <Link href="/wecom/kf">
+              <Button size="small">微信客服</Button>
+            </Link>
+          </Space>
+        }
+      >
         {data.mode === "simulated" ? (
           <Alert
             type="info"

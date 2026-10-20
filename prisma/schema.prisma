@@ -223,6 +223,22 @@ enum WecomEventStatus {
 }
 
 /// 客户标签从哪来
+/// 微信客服会话现在谁在接（口径第 12 节第三步）
+enum WecomKfSessionState {
+  AUTO  // 自动答复
+  HUMAN // 转人工了，不再自动答复，等人工会话结束
+
+  @@map("wecom_kf_session_state")
+}
+
+/// 微信客服消息的方向
+enum WecomKfDirection {
+  IN  // 客户发来的
+  OUT // 发给客户的（自动答复，或者人工在企业微信里回的）
+
+  @@map("wecom_kf_direction")
+}
+
 enum WecomTagSource {
   AUTO   // 系统规则打的（这一版没做自动规则）
   MANUAL // 员工在 ERP 里打的
@@ -850,6 +866,7 @@ model Customer {
   wecomFollows  WecomFollow[]
   wecomTags     WecomCustomerTag[]
   wecomBindCodes WecomBindCode[]
+  wecomKfSessions WecomKfSession[]
 
   @@map("customers")
 }
@@ -1573,7 +1590,7 @@ model WecomBindCode {
 model WecomEvent {
   id          Int              @id @default(autoincrement())
   eventKey    String           @unique @map("event_key")
-  source      String // CONTACT 客户联系（微信客服这一版不做）
+  source      String // CONTACT 客户联系 / KF 微信客服
   simulated   Boolean          @default(false) // 演示里“模拟扫码加好友”造的事件
   eventType   String           @map("event_type")
   changeType  String?          @map("change_type")
@@ -1585,6 +1602,58 @@ model WecomEvent {
 
   @@index([status, receivedAt])
   @@map("wecom_events")
+}
+
+/// 微信客服拉消息的游标：每个客服账号一个，拉完一页就存（官方建议游标入库，不然重启后会重复拉或漏拉）
+model WecomKfCursor {
+  openKfid  String   @id @map("open_kfid")
+  cursor    String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("wecom_kf_cursors")
+}
+
+/// 微信客服会话：一个客服账号 × 一个客户一条，记现在谁在接、能不能再发
+model WecomKfSession {
+  id             Int                 @id @default(autoincrement())
+  openKfid       String              @map("open_kfid")
+  externalUserid String              @map("external_userid") // 客服渠道的客户 id
+  customerId     Int?                @map("customer_id") // 认出来的客户档案（这个微信绑定过才有；每条消息重新认）
+  state          WecomKfSessionState @default(AUTO)
+  lastInAt       DateTime?           @map("last_in_at") // 客户最后一次发消息（48 小时窗口从这里算）
+  outSinceIn     Int                 @default(0) @map("out_since_in") // 客户上次发消息后回了几条（最多 5，数据库 CHECK 0～5）
+  missCount      Int                 @default(0) @map("miss_count") // 连着几句没听懂（到 2 句转人工）
+  humanAt        DateTime?           @map("human_at") // 转人工的时间
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
+
+  customer Customer?        @relation(fields: [customerId], references: [id])
+  messages WecomKfMessage[]
+
+  @@unique([openKfid, externalUserid])
+  @@index([updatedAt])
+  @@map("wecom_kf_sessions")
+}
+
+/// 微信客服消息：按企业微信的消息 id 去重；只有总部能看，留 180 天
+model WecomKfMessage {
+  id        Int              @id @default(autoincrement())
+  msgid     String           @unique // 企业微信的消息 id；没发出去的自动答复用本地生成的 id
+  sessionId Int              @map("session_id")
+  direction WecomKfDirection
+  msgType   String           @map("msg_type") // text、image、event……
+  content   String // 文字内容；不是文字的写“[图片]”这类说明
+  intent    String? // 认出来的意图（客户发来的文字）
+  delivered Boolean          @default(true) // 发出去了没有（超过 48 小时或 5 条就不发，记下来）
+  note      String? // 系统备注：转人工、没发出去的原因、人工回复
+  sentAt    DateTime         @map("sent_at")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  session WecomKfSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, sentAt])
+  @@index([sentAt])
+  @@map("wecom_kf_messages")
 }
 
 /// 企业微信 access_token 缓存：不加 Redis，落库；服务层统一读写，过期前 5 分钟刷新

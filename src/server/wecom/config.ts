@@ -40,6 +40,9 @@ export function realCallbackConfig(env: Env = process.env): CallbackConfig {
 /** 真对接必须有的配置（只用一个自建应用 Secret：2023-12-01 起新企业不能再用系统应用的 Secret 调接口） */
 export const WECOM_REQUIRED_ENV = ["WECOM_CORP_ID", "WECOM_APP_SECRET", "WECOM_AGENT_ID", "WECOM_CALLBACK_TOKEN", "WECOM_CALLBACK_AES_KEY"] as const;
 
+/** 模拟模式的微信客服账号（演示数据和“模拟客户发消息”共用） */
+export const SIMULATED_KF_ID = "wkSimulatedKf01";
+
 /** 开单绑定码多久过期 */
 export const BIND_CODE_DAYS = 30;
 

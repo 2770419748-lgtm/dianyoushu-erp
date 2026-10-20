@@ -5,6 +5,10 @@ import { asTx, type Db, withTx } from "@/server/db-tx";
 export { asTx, withTx };
 export type { Db };
 import { wecomMode } from "./config";
+import { type KfInboundMessage, parseKfMessage } from "@/lib/wecom-kf";
+
+export type { KfInboundMessage };
+export { parseKfMessage };
 
 // 企业微信接口封装（口径第 12 节）。业务代码只认 WecomClient 这个接口，有两种实现：
 // - 真实现：只用一个自建应用 Secret 换 access_token（2023-12-01 起新企业不能再用系统应用的 Secret），令牌落库缓存，
@@ -36,6 +40,12 @@ export interface WecomClient {
   getUserIdByOAuthCode(code: string): Promise<string | null>;
   /** 应用的 jsapi_ticket：侧边栏 JS-SDK 的 agentConfig 签名要用，和令牌一样落库缓存 */
   getAgentJsapiTicket(): Promise<string>;
+  /** 微信客服：回调只说“有新消息”，带回调里的 token 和上次的游标去拉 */
+  syncKfMessages(input: { token: string; openKfid: string; cursor: string | null }): Promise<{ nextCursor: string; hasMore: boolean; messages: KfInboundMessage[] }>;
+  /** 微信客服：给客户发一条文字（48 小时、5 条的限制由服务层先查） */
+  sendKfText(input: { openKfid: string; externalUserid: string; text: string }): Promise<{ msgid: string }>;
+  /** 微信客服：转人工（放进待接入池，按企业微信后台的分配规则派给接待人员） */
+  transferKfToHuman(input: { openKfid: string; externalUserid: string }): Promise<void>;
 }
 
 // ---------- 错误码 ----------
@@ -165,6 +175,18 @@ export function createRealWecomClient(options: { corpId: string; secret: string;
       const userid = data.userid ?? data.UserId; // 企业成员才有；外部的人只有 openid
       return typeof userid === "string" && userid ? userid : null;
     },
+    async syncKfMessages(input) {
+      const data = await call("/kf/sync_msg", { method: "POST", body: { cursor: input.cursor ?? "", token: input.token, limit: 1000, open_kfid: input.openKfid } });
+      const list = Array.isArray(data.msg_list) ? (data.msg_list as Record<string, unknown>[]) : [];
+      return { nextCursor: String(data.next_cursor ?? input.cursor ?? ""), hasMore: Number(data.has_more) === 1, messages: list.map(parseKfMessage) };
+    },
+    async sendKfText(input) {
+      const data = await call("/kf/send_msg", { method: "POST", body: { touser: input.externalUserid, open_kfid: input.openKfid, msgtype: "text", text: { content: input.text } } });
+      return { msgid: String(data.msgid ?? "") };
+    },
+    async transferKfToHuman(input) {
+      await call("/kf/service_state/trans", { method: "POST", body: { open_kfid: input.openKfid, external_userid: input.externalUserid, service_state: 2 } });
+    },
     async getAgentJsapiTicket() {
       return cached(TICKET_CACHE_KEY, TICKET_LOCK_KEY, async () => {
         const data = await call("/ticket/get", { query: { type: "agent_config" } });
@@ -182,7 +204,11 @@ export function simulatedNickname(externalUserid: string): string {
   return `微信用户${externalUserid.slice(-4).toUpperCase()}`;
 }
 
-export function createSimulatedWecomClient(): WecomClient {
+/**
+ * 模拟实现。options.kfInbox：演示里“模拟客户发消息”时，把客户这条消息放进来，拉消息时一次拿走（相当于企业微信那边的消息队列）。
+ */
+export function createSimulatedWecomClient(options: { kfInbox?: KfInboundMessage[] } = {}): WecomClient {
+  const inbox = options.kfInbox ?? [];
   return {
     mode: "simulated",
     async getMember(userid) {
@@ -202,6 +228,13 @@ export function createSimulatedWecomClient(): WecomClient {
     async getAgentJsapiTicket() {
       return "simulated-agent-ticket";
     },
+    async syncKfMessages() {
+      return { nextCursor: `sim-${Date.now()}`, hasMore: false, messages: inbox.splice(0) };
+    },
+    async sendKfText() {
+      return { msgid: `simout-${crypto.randomUUID()}` };
+    },
+    async transferKfToHuman() {},
   };
 }
 

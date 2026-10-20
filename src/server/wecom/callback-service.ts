@@ -5,6 +5,7 @@ import { type Db, type WecomClient } from "./client";
 import { CALLBACK_MAX_SKEW_SECONDS, type CallbackConfig } from "./config";
 import { decryptWecomMessage, sha256Hex, verifyWecomSignature, WecomCryptoError } from "./crypto";
 import { onAddExternalContact, onDeleteFollow, type HandlerContext } from "./contact-service";
+import { onKfMsgOrEvent } from "./kf-service";
 import { parseWecomXml } from "./xml";
 
 // 企业微信回调（口径第 12 节）：验签 → 解密 → 事件落库（去重）→ 分发处理 → 回 success。
@@ -32,6 +33,8 @@ const HANDLERS: Record<string, Handler> = {
   "change_external_contact:add_external_contact": onAddExternalContact,
   "change_external_contact:del_external_contact": (f, ctx) => onDeleteFollow(f, "EMPLOYEE", ctx),
   "change_external_contact:del_follow_user": (f, ctx) => onDeleteFollow(f, "CUSTOMER", ctx),
+  // 微信客服（口径第 12 节第三步）：只通知“有新消息”，去拉
+  "kf_msg_or_event:": onKfMsgOrEvent,
 };
 
 export async function handleWecomCallback(
@@ -75,7 +78,7 @@ export async function handleWecomCallback(
   // 落库去重：ON CONFLICT DO NOTHING，重复的直接回 success（不在事务里抛唯一约束错，测试的回滚事务也不会被打断）
   const eventKey = sha256Hex(plain);
   const inserted = await db.wecomEvent.createMany({
-    data: [{ eventKey, source: "CONTACT", simulated: options.simulated ?? false, eventType, changeType, payload: fields as Prisma.InputJsonValue }],
+    data: [{ eventKey, source: eventType === "kf_msg_or_event" ? "KF" : "CONTACT", simulated: options.simulated ?? false, eventType, changeType, payload: fields as Prisma.InputJsonValue }],
     skipDuplicates: true,
   });
   const event = await db.wecomEvent.findUniqueOrThrow({ where: { eventKey }, select: { id: true } });

@@ -4,10 +4,12 @@ import { PrismaClient } from "../src/generated/prisma/client";
 import type { DeviceStatus, LedgerDocType, PaymentMethod } from "../src/generated/prisma/enums";
 import { formatDate } from "../src/lib/format";
 import { describeIntegrity, integrityOk, runIntegrityChecks } from "./integrity-checks";
-import { daysUntil, entitlementPeriod } from "../src/lib/entitlement";
+import { daysUntil, entitlementPeriod, entitlementStateLabel } from "../src/lib/entitlement";
 import { payerOptions, repairChargeFen, type FaultCategoryKey, type RepairPayerKey } from "../src/lib/repair";
 import { monthRange, reconcileStatement, type CarrierBizTypeKey, type CarrierKey, type StatementLine } from "../src/lib/carrier";
 import { lineBaseFen, subsidyFenOf, type SubsidyStatusKey } from "../src/lib/subsidy";
+import { KF_CLAIM_TEXT, KF_HUMAN_TEXT, KF_STORE_HOURS, KF_WARRANTY_TEXT } from "../src/lib/wecom-kf";
+import { SIMULATED_KF_ID } from "../src/server/wecom/config";
 import { buildInvoiceLines, simulateInvoiceNumber, usccCheckChar, type InvoiceKindKey, type InvoiceStatusKey, type InvoiceTitleTypeKey } from "../src/lib/invoice";
 
 // 模拟经营数据 v1（第 9 周）：10 家店、3 个月（截至昨天）的采购到货、销售、以旧换新、回收机转良品再卖、作废、退货、日结。
@@ -176,6 +178,8 @@ const out = {
   wecomFollows: [] as Row[],
   wecomTags: [] as Row[],
   wecomCustomerTags: [] as Row[],
+  kfSessions: [] as Row[],
+  kfMessages: [] as Row[],
   subsidyPolicies: [] as Row[],
   subsidyClaims: [] as SubsidyRec[],
   invoices: [] as InvoiceRec[],
@@ -1109,6 +1113,12 @@ async function main() {
 
   buildReminders();
   buildWecomDemo(deviceSkus.map((s) => ({ id: s.id, modelName: s.model.name })), users);
+  const regionNames = (await prisma.region.findMany({ where: { isActive: true }, orderBy: { id: "asc" } })).map((r) => r.name);
+  buildKfDemo(
+    stores.map((s) => ({ name: s.name, address: s.address })),
+    regionNames,
+    deviceSkus.map((s) => ({ model: s.model.name, brand: s.model.brand.name, priceFen: s.guidePriceFen })),
+  );
 
   // KPI 目标：已过完的月份 = 实际 × 0.9～1.15（完成率有高有低），当月 = 上月日均 × 当月天数 × 1.05
   buildKpis(stores.map((s) => s.id));
@@ -1195,12 +1205,112 @@ function buildWecomDemo(deviceSkuList: { id: number; modelName: string }[], user
     if (sales.reduce((sum, x) => sum + x.totalFen, 0) >= 1_000_000) tags.add("客户状态|高价值客户");
     for (const key of tags) out.wecomCustomerTags.push({ customerId: customer.id, tagId: tagIds.get(key)!, source: "WECOM", createdAt: addedAt });
   }
-  // 加了好友、还没绑档案的：别的渠道来的（门店海报、朋友介绍），等员工认领
+  // 加了好友、还没绑档案的：别的渠道来的（门店海报、朋友介绍），等员工认领。演示账号 staff、manager 各保证有两个（演示侧边栏认领）
   const staffList = users.filter((u) => staffIds.has(u.id));
-  for (let i = 0; i < 40; i++) {
-    const staff = pick(staffList);
+  const demoStaff = staffList.filter((u) => u.username === "staff" || u.username === "manager");
+  for (let i = 0; i < 40 + demoStaff.length * 2; i++) {
+    const staff = i < demoStaff.length * 2 ? demoStaff[i % demoStaff.length]! : pick(staffList);
     const addedAt = at(bizDateOf(-between(1, 60)), between(10, 21), between(0, 59));
     out.wecomFollows.push({ id: out.wecomFollows.length + 1, externalUserid: `wm${hex()}${hex()}`, wecomUserid: staff.username, userId: staff.id, customerId: null, status: "ACTIVE", deletedBy: null, state: null, firstAddAt: addedAt, deletedAt: null, createdAt: addedAt, updatedAt: addedAt });
+  }
+}
+
+/**
+ * 微信客服演示数据（口径第 12 节第三步）：最近两个月约 40 个会话。老客户（绑定过档案）问保障、问价，
+ * 新客户问营业时间、保修、理赔、问价；一成多要人工（投诉、退货），接待人员回过后结束会话；最近一天有两个还在人工接待中。
+ * 答复的话和服务层的规则答复同一套口径（营业时间、保修、理赔的固定话术直接用同一份常量）。
+ */
+function buildKfDemo(stores: { name: string; address: string | null }[], regionNames: string[], models: { model: string; brand: string; priceFen: number }[]) {
+  const today = bizDateOf(0);
+  const byModel = new Map<string, { brand: string; prices: number[] }>();
+  for (const m of models) {
+    const row = byModel.get(m.model) ?? { brand: m.brand, prices: [] };
+    row.prices.push(m.priceFen);
+    byModel.set(m.model, row);
+  }
+  const modelNames = [...byModel.keys()].slice(0, 20);
+  const yuan = (fen: number) => (fen / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const bound = out.customers.filter((c) => c.wecomExternalUserid && out.entitlements.some((e) => e.customerId === c.id && e.status === "ACTIVE"));
+  const hexId = () => Math.floor(rnd() * 0xffffffff).toString(16).padStart(8, "0");
+  let msgSeq = 0;
+
+  function priceAnswer(model: string): string {
+    const row = byModel.get(model)!;
+    const lo = Math.min(...row.prices);
+    const hi = Math.max(...row.prices);
+    const regions = regionNames.filter(() => chance(0.7));
+    return `${row.brand} ${model}：指导价 ${lo === hi ? `${yuan(lo)} 元` : `${yuan(lo)}～${yuan(hi)} 元`}，${regions.length > 0 ? `有货的区域：${regions.join("、")}` : "现在没货"}\n（不同容量颜色价格不同，门店可能有优惠，以门店为准）`;
+  }
+
+  function entitlementAnswer(customerId: number): string {
+    const lines = out.entitlements
+      .filter((e) => e.customerId === customerId && e.status === "ACTIVE" && daysUntil(e.expiresOn, today) >= 0)
+      .map((e) => {
+        const startIn = daysUntil(e.startedOn, today);
+        const code = e.deviceId ? out.devices[e.deviceId - 1]!.code : null;
+        const label = entitlementStateLabel("ACTIVE", daysUntil(e.expiresOn, today), startIn);
+        return `${skuNames.get(e.skuId) ?? "服务"}${code ? `（机器尾号 ${code.slice(-4)}）` : ""}：${label}${startIn > 0 ? `，${e.startedOn.toISOString().slice(0, 10)} 起` : ""}，到 ${e.expiresOn.toISOString().slice(0, 10)}`;
+      });
+    return lines.length > 0 ? `您在本店的保障：\n${lines.join("\n")}` : "您在本店还没有在保障期内的机器保修、碎屏险或延保。";
+  }
+
+  for (let i = 0; i < 40; i++) {
+    const isBound = i < 22 && bound.length > 0;
+    const customer = isBound ? pick(bound) : null;
+    const externalUserid = customer ? (customer.wecomExternalUserid as string) : `wmKf${hexId()}${hexId()}`;
+    if (out.kfSessions.some((s) => s.externalUserid === externalUserid)) continue;
+    const recent = i >= 38; // 最后两个：最近一天，还在人工接待中
+    let t = recent ? new Date(Date.now() - between(1, 10) * 3600000) : at(bizDateOf(-between(1, 60)), between(9, 21), between(0, 59));
+    const sessionId = out.kfSessions.length + 1;
+    const msgs: Row[] = [];
+    const add = (direction: "IN" | "OUT", content: string, extra: { intent?: string; note?: string; msgType?: string } = {}) => {
+      t = new Date(t.getTime() + between(5, 90) * 1000);
+      msgs.push({ id: out.kfMessages.length + msgs.length + 1, msgid: `demo-kf-${++msgSeq}`, sessionId, direction, msgType: extra.msgType ?? "text", content, intent: extra.intent ?? null, delivered: true, note: extra.note ?? null, sentAt: t, createdAt: t });
+    };
+    let state: "AUTO" | "HUMAN" = "AUTO";
+    let humanAt: Date | null = null;
+    const human = recent || chance(0.12);
+    const model = pick(modelNames);
+    if (customer) {
+      add("IN", pick(["我的碎屏险到什么时候", "我买的手机保修到什么时候", "我的延保还有多久"]), { intent: "MY_ENTITLEMENT" });
+      add("OUT", entitlementAnswer(customer.id as number));
+      if (chance(0.4)) {
+        add("IN", `${model} 多少钱`, { intent: "PRICE" });
+        add("OUT", priceAnswer(model));
+      }
+    } else {
+      const kind = pick(["HOURS", "PRICE", "WARRANTY", "CLAIM"] as const);
+      if (kind === "HOURS") {
+        add("IN", pick(["你们几点关门？", "门店地址在哪", "周末开门吗"]), { intent: "HOURS" });
+        add("OUT", `营业时间：${KF_STORE_HOURS}。\n${stores.slice(0, 5).map((s) => `${s.name}${s.address ? `：${s.address}` : ""}`).join("\n")}`);
+      } else if (kind === "PRICE") {
+        add("IN", `${model} 多少钱？有货吗`, { intent: "PRICE" });
+        add("OUT", priceAnswer(model));
+      } else if (kind === "WARRANTY") {
+        add("IN", "保修多久", { intent: "WARRANTY" });
+        add("OUT", KF_WARRANTY_TEXT);
+      } else {
+        add("IN", "手机屏幕摔碎了怎么赔", { intent: "CLAIM" });
+        add("OUT", KF_CLAIM_TEXT);
+      }
+    }
+    if (human) {
+      add("IN", pick(["我要投诉", "我想退货", "转人工"]), { intent: "HUMAN" });
+      add("OUT", KF_HUMAN_TEXT);
+      add("OUT", "[转人工]", { msgType: "event", note: "客户要人工" });
+      humanAt = t;
+      state = "HUMAN";
+      if (!recent) {
+        add("OUT", pick(["您好，我是店长，麻烦说下具体情况，我来处理。", "您好，退货带上机器和发票到购买的门店就行，我已经跟店里打过招呼了。"]), { note: "接待人员在企业微信里回复" });
+        add("IN", pick(["好的谢谢", "行，我明天过去"]));
+        add("IN", "[人工接待结束，恢复自动答复]", { msgType: "event", note: "系统事件" });
+        state = "AUTO";
+        humanAt = null;
+      }
+    }
+    const lastIn = [...msgs].reverse().find((m) => m.direction === "IN" && m.msgType === "text");
+    out.kfSessions.push({ id: sessionId, openKfid: SIMULATED_KF_ID, externalUserid, customerId: customer ? customer.id : null, state, lastInAt: lastIn ? lastIn.sentAt : null, outSinceIn: 0, missCount: 0, humanAt, createdAt: msgs[0]!.sentAt, updatedAt: t });
+    out.kfMessages.push(...msgs);
   }
 }
 
@@ -1697,6 +1807,9 @@ async function write() {
   await insert("企微跟进关系", out.wecomFollows, (c) => prisma.wecomFollow.createMany({ data: c as never }));
   await insert("企微标签", out.wecomTags, (c) => prisma.wecomTag.createMany({ data: c as never }));
   await insert("客户标签", out.wecomCustomerTags, (c) => prisma.wecomCustomerTag.createMany({ data: c as never }));
+  await insert("微信客服会话", out.kfSessions, (c) => prisma.wecomKfSession.createMany({ data: c as never }));
+  await insert("微信客服消息", out.kfMessages, (c) => prisma.wecomKfMessage.createMany({ data: c as never }));
+  await prisma.wecomKfCursor.create({ data: { openKfid: SIMULATED_KF_ID, cursor: "sim-demo" } });
   await insert("配件库存", accessoryRows, (c) => prisma.accessoryStock.createMany({ data: c as never }));
   await insert("库存流水", out.ledgers, (c) => prisma.stockLedger.createMany({ data: c as never }));
   await insert("KPI 目标", out.kpis, (c) => prisma.kpiTarget.createMany({ data: c as never }));
@@ -1704,7 +1817,7 @@ async function write() {
     await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   // 自己指定了 id，自增序列要跟上，后面正常开单才不会撞号
-  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines", "subsidy_policies", "subsidy_claims", "invoices", "invoice_lines", "approval_rules", "approval_requests"];
+  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines", "subsidy_policies", "subsidy_claims", "invoices", "invoice_lines", "approval_rules", "approval_requests", "wecom_kf_sessions", "wecom_kf_messages"];
   for (const t of tables) {
     await prisma.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM "${t}"), 0), 1), (SELECT COUNT(*) > 0 FROM "${t}"))`);
   }
@@ -1715,7 +1828,7 @@ async function verify() {
   const result = await runIntegrityChecks(prisma);
   const sales = out.sales.filter((s) => s.status === "COMPLETED");
   console.log(
-    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${out.subsidyClaims.length} 张国补单、${out.invoices.length} 张发票、${out.approvals.length} 张审批单、${carrierOut.business.length} 笔运营商业务（${carrierOut.settlements.length} 张往月结算单）、${out.wecomFollows.length} 条企业微信好友关系。`,
+    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${out.subsidyClaims.length} 张国补单、${out.invoices.length} 张发票、${out.approvals.length} 张审批单、${carrierOut.business.length} 笔运营商业务（${carrierOut.settlements.length} 张往月结算单）、${out.wecomFollows.length} 条企业微信好友关系、${out.kfSessions.length} 个微信客服会话。`,
   );
   console.log(`自检：${describeIntegrity(result)}`);
   if (!integrityOk(result)) process.exitCode = 1;

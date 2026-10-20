@@ -6,8 +6,8 @@ import { assertStoreAccess } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { handleWecomCallback } from "./callback-service";
-import { asTx, createSimulatedWecomClient, type Db, type WecomClient } from "./client";
-import { SIMULATED_CALLBACK, type CallbackConfig, wecomMode } from "./config";
+import { asTx, createSimulatedWecomClient, type Db, type KfInboundMessage, type WecomClient } from "./client";
+import { SIMULATED_CALLBACK, SIMULATED_KF_ID, type CallbackConfig, wecomMode } from "./config";
 import { encryptWecomMessage, wecomSignature } from "./crypto";
 import { WecomContactError } from "./contact-service";
 import { buildWecomXml } from "./xml";
@@ -38,6 +38,69 @@ export function contactEventFields(input: { changeType: string; userid: string; 
     ...(input.state ? { State: input.state } : {}),
     ...(input.welcomeCode ? { WelcomeCode: input.welcomeCode } : {}),
   };
+}
+
+export { SIMULATED_KF_ID };
+
+/**
+ * 微信客服的演示（口径第 12 节第三步，总部）：把一条消息放进模拟的“企业微信消息队列”，再造一个 kf_msg_or_event 回调，
+ * 交给真回调同一个处理函数：验签、解密、去重、按游标拉消息、认意图、答复或转人工。
+ * - 客户发消息：已有会话就接着发；没有就新开一个模拟客户（已绑定档案的老客户，或者没绑定的新客户）；
+ * - 接待人员回复（asServicer）：转人工之后，假装接待人员在企业微信里回了一句；
+ * - 结束人工接待（endSession）：假装接待人员结束了会话，之后又恢复自动答复。
+ */
+export async function simulateKfMessage(
+  user: CurrentUser,
+  input: { externalUserid?: unknown; persona?: unknown; text?: unknown; asServicer?: unknown; endSession?: unknown },
+  options: { db?: Db; now?: Date } = {},
+) {
+  if (wecomMode() !== "simulated") throw new WecomContactError("只有演示里的模拟模式能模拟客户发消息");
+  if (user.role !== "HQ") throw new WecomContactError("微信客服只有总部能看");
+  const db = options.db ?? prisma;
+  const now = options.now ?? new Date();
+  const endSession = input.endSession === true;
+  const asServicer = input.asServicer === true;
+  const text = typeof input.text === "string" ? input.text.trim() : "";
+  if (!endSession && (text.length === 0 || text.length > 500)) throw new WecomContactError("消息写 1～500 个字");
+
+  let externalUserid = typeof input.externalUserid === "string" ? input.externalUserid : "";
+  if (externalUserid) {
+    const exists = await db.wecomKfSession.findUnique({ where: { openKfid_externalUserid: { openKfid: SIMULATED_KF_ID, externalUserid } } });
+    if (!exists) throw new WecomContactError("这个会话不存在");
+  } else if (asServicer || endSession) {
+    throw new WecomContactError("先选一个会话");
+  } else if (input.persona === "bound") {
+    // 已绑定档案、买过碎屏险或延保的老客户，演示“我的保障”能答出来
+    const candidates = await db.customer.findMany({ where: { wecomExternalUserid: { not: null }, entitlements: { some: { status: "ACTIVE" } } }, take: 50, select: { wecomExternalUserid: true } });
+    if (candidates.length === 0) throw new WecomContactError("演示数据里没有绑定了微信的老客户");
+    externalUserid = candidates[Math.floor(Math.random() * candidates.length)]!.wecomExternalUserid!;
+  } else {
+    externalUserid = `wmKfNew${randomBytes(5).toString("hex")}`;
+  }
+
+  const message: KfInboundMessage = endSession
+    ? { msgid: `simev-${randomBytes(8).toString("hex")}`, openKfid: SIMULATED_KF_ID, externalUserid, sendTime: now, origin: 4, msgType: "event", text: null, event: { type: "session_status_change", changeType: 3 } }
+    : { msgid: `simin-${randomBytes(8).toString("hex")}`, openKfid: SIMULATED_KF_ID, externalUserid, sendTime: now, origin: asServicer ? 5 : 3, msgType: "text", text, event: null };
+  const fields = {
+    ToUserName: SIMULATED_CALLBACK.receiveId,
+    CreateTime: Math.floor(now.getTime() / 1000),
+    MsgType: "event",
+    Event: "kf_msg_or_event",
+    Token: `simToken${randomBytes(6).toString("hex")}`,
+    OpenKfId: SIMULATED_KF_ID,
+  };
+  const response = await handleWecomCallback(buildEncryptedCallback(fields, SIMULATED_CALLBACK, now), {
+    config: SIMULATED_CALLBACK,
+    client: createSimulatedWecomClient({ kfInbox: [message] }),
+    db,
+    now,
+    simulated: true,
+  });
+  if (response.status !== 200 || !response.eventId) throw new WecomContactError(`模拟事件没处理成：${response.body}`);
+  const event = await db.wecomEvent.findUniqueOrThrow({ where: { id: response.eventId } });
+  if (event.status === "FAILED") throw new WecomContactError(`处理出错：${event.error ?? ""}`);
+  const session = await db.wecomKfSession.findUniqueOrThrow({ where: { openKfid_externalUserid: { openKfid: SIMULATED_KF_ID, externalUserid } }, select: { id: true } });
+  return { sessionId: session.id, externalUserid };
 }
 
 /** 销售单详情页的“模拟扫码加好友”：拿这张单的绑定码，假装客户扫了码 */
