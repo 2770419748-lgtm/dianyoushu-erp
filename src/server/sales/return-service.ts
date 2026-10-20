@@ -11,6 +11,7 @@ import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { voidEntitlementsTx } from "@/server/entitlement/entitlement-service";
 import { cancelClaimsTx } from "@/server/subsidy/subsidy-service";
+import { onOrderChangedTx } from "@/server/invoice/invoice-service";
 import { maxRefundableFen, MANUAL_PAYMENT_METHODS, returnRefundCapFen } from "./payments";
 import { lockRow } from "@/server/db-lock";
 import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
@@ -190,6 +191,7 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
     throw error;
   }
 
+  await onOrderChangedTx(tx, order.id, "退货"); // 待开票的撤回、已开票的标需红冲（口径第 16 节）
   await writeAudit({ userId: user.id, action: "return.create", entity: "return_order", entityId: created.id, detail: { orderNo, salesOrderNo: order.orderNo, refundFen, lines: plans.length } }, tx);
   return { id: created.id, orderNo };
 }

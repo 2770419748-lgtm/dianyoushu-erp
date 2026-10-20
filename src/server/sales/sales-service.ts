@@ -18,6 +18,7 @@ import { lockRow } from "@/server/db-lock";
 import { createEntitlementsTx, voidEntitlementsTx } from "@/server/entitlement/entitlement-service";
 import { lineBaseFen, type SubsidyPick } from "@/lib/subsidy";
 import { cancelClaimsTx, createClaimsTx, prepareSubsidyTx, SubsidyError } from "@/server/subsidy/subsidy-service";
+import { onOrderChangedTx } from "@/server/invoice/invoice-service";
 
 // 开单服务层：选机器和配件、改价优惠、以旧换新抵扣（关联回收单）、多种收款拆分（合计必须等于应收）。
 // 口径第 11 节第 3 条：销售单、明细、收款、扣库存、写流水在一个事务里，失败全部回滚。
@@ -310,6 +311,7 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
   }
   await voidEntitlementsTx(tx, { salesOrderId: orderId }); // 单作废了，单上的碎屏险、延保跟着失效
   await cancelClaimsTx(tx, { salesOrderId: orderId }); // 国补单撤销（口径第 15 节）
+  await onOrderChangedTx(tx, orderId, "作废"); // 待开票的撤回、已开票的标需红冲（口径第 16 节）
   await tx.salesOrder.update({ where: { id: orderId }, data: { status: "VOIDED", voidedById: user.id, voidedAt: new Date(), voidReason, tradeInOrderId: null } });
   await writeAudit({ userId: user.id, action: "sale.void", entity: "sales_order", entityId: orderId, detail: { reason: voidReason } }, tx);
 }
@@ -365,6 +367,7 @@ export async function getSalesOrder(user: CurrentUser, id: number) {
       payments: { orderBy: { id: "asc" } },
       tradeInOrder: { select: { id: true, orderNo: true, modelName: true, deviceCode: true, appraisedFen: true } },
       subsidyClaims: { orderBy: { id: "asc" }, select: { id: true, claimNo: true, status: true, subsidyFen: true, basePriceFen: true, rejectReason: true, device: { select: { code: true } } } },
+      invoices: { orderBy: { id: "asc" }, select: { id: true, requestNo: true, kind: true, status: true, titleName: true, amountFen: true, invoiceNumber: true } },
       returnOrders: {
         orderBy: { id: "asc" },
         include: { handledBy: { select: { name: true } }, payments: true, items: { include: { sku: { select: { name: true } }, device: { select: { code: true } } } } },

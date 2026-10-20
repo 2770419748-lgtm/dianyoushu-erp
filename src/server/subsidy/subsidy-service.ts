@@ -28,6 +28,7 @@ import { writeAudit } from "@/server/audit";
 import { lockRow } from "@/server/db-lock";
 import { type Db, withTx } from "@/server/db-tx";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
+import { issuedInvoiceNumber } from "@/server/invoice/invoice-service";
 
 // 国补（口径第 15 节）：总部配政策；开单时按政策算立减、校验资格，每台补贴的机器生成一张国补单；
 // 门店补资料提交审核，总部导入平台的审核 / 到账结果；作废、退货时撤销或标“需退回”。
@@ -214,8 +215,10 @@ export async function submitClaimTx(tx: Tx, user: CurrentUser, id: number, invoi
   if (!canSell(user.role)) throw new SubsidyError("你的角色不能提交国补");
   const claim = await lockClaim(tx, user, id);
   if (claim.status !== "PENDING" && claim.status !== "REJECTED") throw new SubsidyError("待提交、被驳回的国补单才能提交审核");
-  const invoice = text(invoiceNo, 30) || claim.invoiceNo || "";
-  if (!/^[A-Za-z0-9-]{6,30}$/.test(invoice)) throw new SubsidyError("填一下发票号（6～30 位字母数字），平台审核要发票");
+  // 不填就用这张销售单已经开好的发票号码（口径第 16 节）
+  const invoice = text(invoiceNo, 30) || claim.invoiceNo || (await issuedInvoiceNumber(tx, claim.salesOrderId)) || "";
+  if (!invoice) throw new SubsidyError("这张销售单还没开票：先申请开票、等总部开好，或者直接填发票号");
+  if (!/^[A-Za-z0-9-]{6,30}$/.test(invoice)) throw new SubsidyError("发票号是 6～30 位字母数字");
   await tx.subsidyClaim.update({ where: { id }, data: { status: "SUBMITTED", invoiceNo: invoice, submittedAt: new Date(), rejectReason: null } });
   await writeAudit({ userId: user.id, action: claim.status === "REJECTED" ? "subsidy.claim.resubmit" : "subsidy.claim.submit", entity: "subsidy_claim", entityId: id, detail: { claimNo: claim.claimNo, invoiceNo: invoice } }, tx);
 }

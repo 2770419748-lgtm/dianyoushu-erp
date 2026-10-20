@@ -192,7 +192,7 @@ export function SubsidyView({ data, summary, query, stores }: { data: Data; summ
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary">平台审核要发票和串号照片；这里记发票号（真用时照片在平台上传）。{submitting?.rejectReason ? `上次驳回原因：${submitting.rejectReason}` : ""}</Typography.Paragraph>
-        <Input placeholder="发票号" value={invoiceNo} maxLength={30} onChange={(e) => setInvoiceNo(e.target.value)} />
+        <Input placeholder="发票号（不填就用这张销售单已经开好的发票号码）" value={invoiceNo} maxLength={30} onChange={(e) => setInvoiceNo(e.target.value)} />
       </Modal>
       <Modal title="导入平台审核 / 到账结果" open={importOpen} width={680} confirmLoading={pending} okText="导入" onCancel={() => setImportOpen(false)} onOk={() => act(() => importResultsAction(csv), () => setImportOpen(false))}>
         <Typography.Paragraph type="secondary">按核销码（资格码）对国补单。结果写“通过”“驳回”“已到账”；已到账没写金额的按补贴金额记。状态对不上的行（比如还没提交就说到账）不处理，会告诉你有几行。</Typography.Paragraph>

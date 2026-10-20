@@ -7,6 +7,7 @@ import type { TableColumnsType } from "antd";
 import { formatDate, formatDateTime, formatFen } from "@/lib/format";
 import { PAYMENT_METHOD_LABELS, SALES_STATUS_COLORS, SALES_STATUS_LABELS } from "@/lib/sales-labels";
 import { SUBSIDY_STATUS_COLORS, SUBSIDY_STATUS_LABELS } from "@/lib/subsidy";
+import { INVOICE_ACTIVE_STATUSES, INVOICE_KIND_LABELS, INVOICE_STATUS_COLORS, INVOICE_STATUS_LABELS } from "@/lib/invoice";
 import type { SalesOrderDetail } from "@/server/sales/sales-service";
 import { voidSalesOrderAction } from "../actions";
 
@@ -87,6 +88,11 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
                 </Button>
               </Link>
             ) : null}
+            {canSell && order.status === "COMPLETED" && !order.invoices.some((i) => INVOICE_ACTIVE_STATUSES.includes(i.status)) ? (
+              <Link href={`/invoices/new?orderId=${order.id}`}>
+                <Button size="small">申请开票</Button>
+              </Link>
+            ) : null}
             {canReturn ? (
               order.todayClosed ? (
                 <Button size="small" disabled title="这家店今天已经日结确认，要退货请总部先撤销日结">
@@ -163,6 +169,16 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
           </Typography.Paragraph>
         ) : null}
       </Card>
+      {order.invoices.length > 0 ? (
+        <Card title={`发票（${order.invoices.length}）`}>
+          {order.invoices.map((i) => (
+            <Typography.Paragraph key={i.id} style={{ marginBottom: 4 }}>
+              <Link href={`/invoices/${i.id}`}>{i.requestNo}</Link> {INVOICE_KIND_LABELS[i.kind]}，抬头 {i.titleName}，{formatFen(i.amountFen)} 元{i.invoiceNumber ? `，号码 ${i.invoiceNumber}` : ""}{" "}
+              <Tag color={INVOICE_STATUS_COLORS[i.status]}>{INVOICE_STATUS_LABELS[i.status]}</Tag>
+            </Typography.Paragraph>
+          ))}
+        </Card>
+      ) : null}
       {order.returnOrders.length > 0 ? (
         <Card title={`退货记录（${order.returnOrders.length}）`}>
           {order.returnOrders.map((r) => (

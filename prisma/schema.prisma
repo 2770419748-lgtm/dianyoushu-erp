@@ -252,6 +252,41 @@ enum PaymentMethod {
   @@map("payment_method")
 }
 
+/// 发票种类（口径第 16 节）
+enum InvoiceKind {
+  E_NORMAL     // 电子普票
+  E_SPECIAL    // 电子专票
+  PAPER_NORMAL // 纸质普票
+
+  @@map("invoice_kind")
+}
+
+enum InvoiceTitleType {
+  PERSONAL // 个人
+  COMPANY  // 企业
+
+  @@map("invoice_title_type")
+}
+
+/// 发票状态（口径第 16 节）
+enum InvoiceStatus {
+  REQUESTED   // 待开票
+  ISSUED      // 已开票
+  RED_PENDING // 需红冲：开了之后退货、作废
+  REDDED      // 已红冲
+  CANCELLED   // 已撤回
+
+  @@map("invoice_status")
+}
+
+/// 发票号码怎么来的：演示里模拟开具，真用时在电子税务局开好回来登记
+enum InvoiceIssueSource {
+  SIMULATED
+  MANUAL
+
+  @@map("invoice_issue_source")
+}
+
 /// 国补单状态（口径第 15 节）
 enum SubsidyClaimStatus {
   PENDING    // 待提交：开单时生成，要补资料
@@ -333,6 +368,7 @@ model Store {
   repairOrders    RepairOrder[]
   carrierBusiness CarrierBusiness[]
   subsidyClaims   SubsidyClaim[]
+  invoices        Invoice[]
   wecomBindCodes  WecomBindCode[]
   kpiTargets      KpiTarget[]
 
@@ -379,6 +415,9 @@ model User {
   repairsVoided         RepairOrder[] @relation("RepairVoidedBy")
   carrierHandled        CarrierBusiness[] @relation("CarrierHandledBy")
   carrierVoided         CarrierBusiness[] @relation("CarrierVoidedBy")
+  invoicesRequested     Invoice[]         @relation("InvoiceRequestedBy")
+  invoicesIssued        Invoice[]         @relation("InvoiceIssuedBy")
+  invoicesRedded        Invoice[]         @relation("InvoiceRedBy")
   carrierSettlements    CarrierSettlement[]
   wecomFollows          WecomFollow[]
   wecomBindCodes        WecomBindCode[]
@@ -771,6 +810,7 @@ model Customer {
   repairOrders  RepairOrder[]
   carrierBusiness CarrierBusiness[]
   subsidyClaims SubsidyClaim[]
+  invoices      Invoice[]
   wecomFollows  WecomFollow[]
   wecomTags     WecomCustomerTag[]
   wecomBindCodes WecomBindCode[]
@@ -814,6 +854,7 @@ model SalesOrder {
   repairOrders RepairOrder[]
   carrierBusiness CarrierBusiness[]
   subsidyClaims SubsidyClaim[]
+  invoices     Invoice[]
 
   @@index([storeId, bizDate])
   @@index([salespersonId, bizDate])
@@ -841,6 +882,7 @@ model SalesOrderItem {
   returnItems  ReturnOrderItem[]
   entitlement  ServiceEntitlement?
   subsidyClaim SubsidyClaim?
+  invoiceLines InvoiceLine[]
 
   @@index([orderId])
   @@index([deviceId])
@@ -1223,6 +1265,85 @@ model CarrierSettlementLine {
 
   @@index([settlementId])
   @@map("carrier_settlement_lines")
+}
+
+/// 公司开票信息（销售方，口径第 16 节）：只有一行，总部维护
+model InvoiceSeller {
+  id           Int      @id @default(1)
+  name         String // 公司名称
+  taxNo        String   @map("tax_no") // 纳税人识别号
+  addressPhone String   @map("address_phone")
+  bankAccount  String   @map("bank_account") // 开户行及账号
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("invoice_seller")
+}
+
+/// 开票申请 / 发票（口径第 16 节）：一张销售单同时只能有一张在办的（待开票、已开票、需红冲，部分唯一索引）
+model Invoice {
+  id                Int                 @id @default(autoincrement())
+  requestNo         String              @unique @map("request_no") // KP + yyyyMMdd + 4 位
+  storeId           Int                 @map("store_id")
+  salesOrderId      Int                 @map("sales_order_id")
+  customerId        Int?                @map("customer_id")
+  kind              InvoiceKind
+  titleType         InvoiceTitleType    @map("title_type")
+  titleName         String              @map("title_name") // 抬头
+  buyerTaxNo        String?             @map("buyer_tax_no")
+  buyerAddressPhone String?             @map("buyer_address_phone") // 专票要
+  buyerBankAccount  String?             @map("buyer_bank_account") // 专票要
+  receiver          String? // 电子票的接收邮箱或手机
+  amountFen         Int                 @map("amount_fen") // 价税合计 = 明细合计（数据库 CHECK > 0）
+  taxFen            Int                 @map("tax_fen") // 税额合计 = 明细合计
+  status            InvoiceStatus       @default(REQUESTED)
+  requestedById     Int                 @map("requested_by_id")
+  invoiceNumber     String?             @map("invoice_number") // 税务发票号码（开了才有，部分唯一索引）
+  issueSource       InvoiceIssueSource? @map("issue_source")
+  issuedAt          DateTime?           @map("issued_at")
+  issuedById        Int?                @map("issued_by_id")
+  sellerSnapshot    Json?               @map("seller_snapshot") // 开具时的销售方信息
+  deliveredAt       DateTime?           @map("delivered_at") // 纸质票到店
+  redNumber         String?             @map("red_number") // 红字发票号码
+  redAt             DateTime?           @map("red_at")
+  redById           Int?                @map("red_by_id")
+  redReason         String?             @map("red_reason")
+  cancelledAt       DateTime?           @map("cancelled_at")
+  cancelReason      String?             @map("cancel_reason")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  store       Store       @relation(fields: [storeId], references: [id])
+  salesOrder  SalesOrder  @relation(fields: [salesOrderId], references: [id])
+  customer    Customer?   @relation(fields: [customerId], references: [id])
+  requestedBy User        @relation("InvoiceRequestedBy", fields: [requestedById], references: [id])
+  issuedBy    User?       @relation("InvoiceIssuedBy", fields: [issuedById], references: [id])
+  redBy       User?       @relation("InvoiceRedBy", fields: [redById], references: [id])
+
+  lines InvoiceLine[]
+
+  @@index([storeId, createdAt])
+  @@index([salesOrderId])
+  @@index([status])
+  @@map("invoices")
+}
+
+/// 发票明细：一个商品一行，金额含税
+model InvoiceLine {
+  id               Int     @id @default(autoincrement())
+  invoiceId        Int     @map("invoice_id")
+  salesOrderItemId Int     @map("sales_order_item_id")
+  name             String // 商品名称
+  spec             String? // 规格（机器写串号）
+  qty              Int
+  amountFen        Int     @map("amount_fen") // 含税金额
+  taxRateBp        Int     @map("tax_rate_bp") // 税率，万分之几：1300 = 13%
+  taxFen           Int     @map("tax_fen")
+
+  invoice        Invoice        @relation(fields: [invoiceId], references: [id])
+  salesOrderItem SalesOrderItem @relation(fields: [salesOrderItemId], references: [id])
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
 }
 
 /// 国补政策（口径第 15 节）：按品类一条，总部维护

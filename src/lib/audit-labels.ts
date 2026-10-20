@@ -70,6 +70,12 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "subsidy.claim.resubmit": "国补单改了重新提交",
   "subsidy.import": "导入国补平台结果",
   "subsidy.claim.returned": "国补已退回平台",
+  "invoice.seller.save": "改公司开票信息",
+  "invoice.request": "申请开票",
+  "invoice.cancel": "撤回开票申请",
+  "invoice.issue": "开具发票",
+  "invoice.red": "红冲发票",
+  "invoice.delivered": "纸质发票到店",
   "entitlement.reminder_scan": "生成到期提醒",
   "entitlement.reminder_contacted": "到期提醒已联系",
   "wecom.bind": "客户绑定企业微信",
@@ -105,6 +111,8 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   carrier_settlement: "运营商结算单",
   subsidy_policy: "国补政策",
   subsidy_claim: "国补单",
+  invoice: "发票",
+  invoice_seller: "公司开票信息",
 };
 
 export function auditActionLabel(action: string): string {

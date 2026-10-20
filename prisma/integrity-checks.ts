@@ -18,6 +18,8 @@ import type { PrismaClient } from "../src/generated/prisma/client";
 //    一笔业务最多在一行里拿佣金、最多被返销一次（并发对账把同一笔算两次就会被抓出来）。
 // 9. 国补（口径第 15 节）：每张销售单的“国补立减”收款 = 它的国补单补贴合计；国补单的门店、客户、机器和销售单一致；
 //    单作废了、机器退了，国补单要撤销（到账了的是需退回、已退回），反过来没作废没退的不该撤销；到账的要有到账金额，没到账的不该有。
+// 10. 发票（口径第 16 节）：价税合计、税额 = 明细合计，明细都是这张销售单的商品，门店和销售单一致；
+//     作废的单不该有待开票、已开票的；申请之后又退了货的，不该还是待开票、已开票（要撤回、红冲）；开了的要有号码和开具时间，红冲了的要有红字号码。
 
 export interface IntegrityResult {
   accessory: number;
@@ -29,6 +31,7 @@ export interface IntegrityResult {
   repair: number;
   carrier: number;
   subsidy: number;
+  invoice: number;
 }
 
 export async function runIntegrityChecks(prisma: PrismaClient): Promise<IntegrityResult> {
@@ -139,6 +142,20 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
           OR ((c.status IN ('SETTLED', 'RETURN_DUE', 'RETURNED')) <> (c.settled_fen IS NOT NULL))
           OR (c.status IN ('PENDING', 'SUBMITTED', 'APPROVED', 'REJECTED', 'CANCELLED') AND c.settled_at IS NOT NULL))
     )::bigint AS n`;
+  const [invoice] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT (
+      (SELECT COUNT(*) FROM invoices i
+        LEFT JOIN (SELECT invoice_id, SUM(amount_fen) AS a, SUM(tax_fen) AS t FROM invoice_lines GROUP BY invoice_id) l ON l.invoice_id = i.id
+        WHERE i.amount_fen <> COALESCE(l.a, 0) OR i.tax_fen <> COALESCE(l.t, 0))
+      + (SELECT COUNT(*) FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id JOIN sales_order_items si ON si.id = l.sales_order_item_id WHERE si.order_id <> i.sales_order_id)
+      + (SELECT COUNT(*) FROM invoices i JOIN sales_orders o ON o.id = i.sales_order_id
+        WHERE i.store_id <> o.store_id OR (o.status = 'VOIDED' AND i.status IN ('REQUESTED', 'ISSUED')))
+      + (SELECT COUNT(*) FROM invoices i WHERE i.status IN ('REQUESTED', 'ISSUED')
+        AND EXISTS (SELECT 1 FROM return_orders r WHERE r.sales_order_id = i.sales_order_id AND r.created_at > i.created_at))
+      + (SELECT COUNT(*) FROM invoices i
+        WHERE (i.status IN ('ISSUED', 'RED_PENDING', 'REDDED')) <> (i.invoice_number IS NOT NULL AND i.issued_at IS NOT NULL)
+          OR (i.status = 'REDDED') <> (i.red_number IS NOT NULL AND i.red_at IS NOT NULL))
+    )::bigint AS n`;
   return {
     accessory: Number(accessory!.n) + Number(accessoryLast!.n) + Number(accessoryOrphan!.n),
     device: Number(device!.n),
@@ -149,13 +166,14 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
     repair: Number(repair!.n),
     carrier: Number(carrier!.n),
     subsidy: Number(subsidy!.n),
+    invoice: Number(invoice!.n),
   };
 }
 
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {
-  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy === 0;
+  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice === 0;
 }

@@ -146,6 +146,16 @@ export function canManageSubsidy(role: Role): boolean {
   return role === "HQ";
 }
 
+/** 谁能开具、红冲发票，维护公司开票信息（口径第 16 节）：总部；申请开票同开单权限 */
+export function canManageInvoice(role: Role): boolean {
+  return role === "HQ";
+}
+
+/** 谁能确认纸质票到店：店长（本店）、总部 */
+export function canMarkInvoiceDelivered(role: Role): boolean {
+  return role === "STORE_MANAGER" || role === "HQ";
+}
+
 /** 谁能作废运营商业务单：店长（本店）、总部 */
 export function canVoidCarrier(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
@@ -195,6 +205,7 @@ const MENU_STAFF: MenuEntry[] = [
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
   { key: "subsidy", label: "国补", href: "/subsidy" },
+  { key: "invoices", label: "发票", href: "/invoices" },
   { key: "sales-list", label: "我的订单", href: "/sales" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
@@ -225,6 +236,7 @@ const MENU_REGIONAL: MenuEntry[] = [
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
   { key: "subsidy", label: "国补", href: "/subsidy" },
+  { key: "invoices", label: "发票", href: "/invoices" },
   ROADMAP,
 ];
 
@@ -244,6 +256,7 @@ const MENU_HQ: MenuEntry[] = [
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
   { key: "subsidy", label: "国补", href: "/subsidy" },
+  { key: "invoices", label: "发票", href: "/invoices" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },

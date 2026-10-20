@@ -8,6 +8,7 @@ import { daysUntil, entitlementPeriod } from "../src/lib/entitlement";
 import { payerOptions, repairChargeFen, type FaultCategoryKey, type RepairPayerKey } from "../src/lib/repair";
 import { monthRange, reconcileStatement, type CarrierBizTypeKey, type CarrierKey, type StatementLine } from "../src/lib/carrier";
 import { lineBaseFen, subsidyFenOf, type SubsidyStatusKey } from "../src/lib/subsidy";
+import { buildInvoiceLines, simulateInvoiceNumber, type InvoiceKindKey, type InvoiceStatusKey, type InvoiceTitleTypeKey } from "../src/lib/invoice";
 
 // 模拟经营数据 v1（第 9 周）：10 家店、3 个月（截至昨天）的采购到货、销售、以旧换新、回收机转良品再卖、作废、退货、日结。
 // 规则和真实业务一致：库存每次变动都有流水、配件余额 = 流水合计、日结系统数 = 当天收款汇总。
@@ -177,7 +178,49 @@ const out = {
   wecomCustomerTags: [] as Row[],
   subsidyPolicies: [] as Row[],
   subsidyClaims: [] as SubsidyRec[],
+  invoices: [] as InvoiceRec[],
+  invoiceLines: [] as Row[],
 };
+interface InvoiceRec {
+  id: number;
+  requestNo: string;
+  storeId: number;
+  salesOrderId: number;
+  customerId: number | null;
+  kind: InvoiceKindKey;
+  titleType: InvoiceTitleTypeKey;
+  titleName: string;
+  buyerTaxNo: string | null;
+  buyerAddressPhone: string | null;
+  buyerBankAccount: string | null;
+  receiver: string | null;
+  amountFen: number;
+  taxFen: number;
+  status: InvoiceStatusKey;
+  requestedById: number;
+  invoiceNumber: string | null;
+  issueSource: "SIMULATED" | null;
+  issuedAt: Date | null;
+  issuedById: number | null;
+  sellerSnapshot: unknown;
+  deliveredAt: Date | null;
+  redNumber: string | null;
+  redAt: Date | null;
+  redById: number | null;
+  redReason: string | null;
+  cancelledAt: Date | null;
+  cancelReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+// 公司开票信息（演示）：开具时存一份快照到发票上
+const DEMO_SELLER = { name: "店有数通讯连锁有限公司（演示）", taxNo: "91440300MA5DEMO001", addressPhone: "深圳市南山区科技园演示路 1 号 0755-12345678", bankAccount: "招商银行深圳科技园支行 755900000000001" };
+const COMPANY_TITLES = ["深圳市云帆科技有限公司", "广州启明贸易有限公司", "东莞市恒信电子有限公司", "佛山市安达物流有限公司", "珠海星海文化传媒有限公司"];
+let invoiceNumberSeq = 800000000000;
+const skuNames = new Map<number, string>();
+const serviceSkuIdSet = new Set<number>();
+let hqId = 0;
+const invoiceBySale = new Map<number, InvoiceRec>();
 interface SubsidyRec {
   id: number;
   claimNo: string;
@@ -348,6 +391,9 @@ async function main() {
     out.subsidyPolicies.push({ ...policy, categoryId, isActive: true, note: "数码产品购新补贴（演示）", createdAt: at(policy.startsOn, 9, 0), updatedAt: at(policy.startsOn, 9, 0) });
   }
   const subsidyUsed = new Map<number, Set<number>>(); // 客户 → 用过国补的品类（每人每类一台）
+  for (const x of skus) skuNames.set(x.id, x.name);
+  for (const x of skus) if (x.isService) serviceSkuIdSet.add(x.id);
+  hqId = hq.id;
   let subsidyCodeSeq = 0;
   const accessorySkus = skus.filter((s) => s.model.category.kind === "ACCESSORY" && !s.isService);
   // 服务类商品（碎屏险、延保）：买新机的约两成加一份，不进库存，单上必须有客户
@@ -517,6 +563,8 @@ async function main() {
         const subsidyClaim = out.subsidyClaims.find((c) => c.salesOrderItemId === item.id);
         const refundFen = Math.min(cashPaid, Math.max(0, Math.round((lineFen * sale.totalFen) / sale.subtotalFen) - (subsidyClaim?.subsidyFen ?? 0)));
         if (subsidyClaim) cancelClaim(subsidyClaim, t);
+        const invoice = invoiceBySale.get(sale.id);
+        if (invoice) invoiceAfterReturn(invoice, t, day);
         const method = salePays.find((p) => p.method !== "TRADE_IN" && p.method !== "SUBSIDY")?.method ?? "CASH";
         const no = docNo("RT", bizDate);
         const retId = ++ids.ret;
@@ -693,6 +741,7 @@ async function main() {
 
         dayPayments.push(...pays.map((p) => ({ method: p.method, amountFen: p.amountFen })));
         daySaleIds.push(saleId);
+        if (customerId && (claim || chance(0.2))) makeInvoice(sale, items, claim, salesperson.id, day);
         for (const item of items) if (item.deviceId && !serviceSkuIds.has(item.skuId)) soldDevices.push({ deviceId: item.deviceId, saleId, bizDate, customerId });
         // 少量几天后退货
         if (chance(0.015)) {
@@ -1265,6 +1314,87 @@ function buildCarrierDemo(storeIds: number[], users: { id: number; role: string;
   }
 }
 
+/** 开票（口径第 16 节）：开单后几分钟申请；用了国补的当天就开（国补提交审核要发票号），其余一两天内开，最近一两天的一半还没开 */
+function makeInvoice(sale: SaleRec, items: SaleItemRec[], claim: SubsidyRec | null, requestedById: number, day: number) {
+  const lines = buildInvoiceLines(
+    items.map((i) => ({ salesOrderItemId: i.id, name: skuNames.get(i.skuId) ?? "商品", spec: i.deviceId ? out.devices[i.deviceId - 1]!.code : null, qty: i.qty, returnedQty: 0, lineTotalFen: i.lineTotalFen, isService: serviceSkuIdSet.has(i.skuId) })),
+    sale,
+  );
+  if (lines.length === 0) return;
+  const kind: InvoiceKindKey = claim ? "E_NORMAL" : weighted([["E_NORMAL", 75], ["PAPER_NORMAL", 15], ["E_SPECIAL", 10]] as [InvoiceKindKey, number][], ([, w]) => w)[0];
+  const company = kind === "E_SPECIAL" || (!claim && chance(0.15));
+  const customer = out.customers[sale.customerId! - 1]!;
+  const createdAt = new Date(sale.createdAt.getTime() + between(5, 40) * 60000);
+  const now = new Date();
+  const id = out.invoices.length + 1;
+  const inv: InvoiceRec = {
+    id,
+    requestNo: docNo("KP", sale.bizDate),
+    storeId: sale.storeId,
+    salesOrderId: sale.id,
+    customerId: sale.customerId,
+    kind,
+    titleType: company ? "COMPANY" : "PERSONAL",
+    titleName: company ? pick(COMPANY_TITLES) : (customer.name as string),
+    buyerTaxNo: company ? `91440300${String(between(10000000, 99999999))}AB` : null,
+    buyerAddressPhone: kind === "E_SPECIAL" ? "深圳市福田区演示大道 88 号 0755-87654321" : null,
+    buyerBankAccount: kind === "E_SPECIAL" ? "工商银行深圳福田支行 4000000000000000001" : null,
+    receiver: kind === "PAPER_NORMAL" ? null : chance(0.6) ? (customer.phone as string) : null,
+    amountFen: lines.reduce((x, l) => x + l.amountFen, 0),
+    taxFen: lines.reduce((x, l) => x + l.taxFen, 0),
+    status: "REQUESTED",
+    requestedById,
+    invoiceNumber: null,
+    issueSource: null,
+    issuedAt: null,
+    issuedById: null,
+    sellerSnapshot: null,
+    deliveredAt: null,
+    redNumber: null,
+    redAt: null,
+    redById: null,
+    redReason: null,
+    cancelledAt: null,
+    cancelReason: null,
+    createdAt,
+    updatedAt: createdAt,
+  };
+  const age = -day;
+  if (claim || age > 1 || chance(0.5)) {
+    const issuedAt = new Date(Math.min(createdAt.getTime() + (claim ? between(10, 60) * 60000 : between(1, 26) * 3600000), now.getTime() - 3600000));
+    inv.status = "ISSUED";
+    inv.issuedAt = issuedAt;
+    inv.issuedById = hqId;
+    inv.issueSource = "SIMULATED";
+    inv.invoiceNumber = simulateInvoiceNumber(++invoiceNumberSeq, issuedAt);
+    inv.sellerSnapshot = DEMO_SELLER;
+    inv.updatedAt = issuedAt;
+    if (kind === "PAPER_NORMAL") {
+      const delivered = new Date(issuedAt.getTime() + between(2, 4) * DAY_MS);
+      if (delivered < now) inv.deliveredAt = delivered;
+    }
+    if (claim?.invoiceNo) claim.invoiceNo = inv.invoiceNumber; // 国补单提交审核时带的就是这张发票
+  }
+  out.invoices.push(inv);
+  for (const l of lines) out.invoiceLines.push({ id: out.invoiceLines.length + 1, invoiceId: id, ...l });
+  invoiceBySale.set(sale.id, inv);
+}
+
+/** 退货之后：还没开的撤回；开了的要红冲，三天以前的退货总部已经红冲了 */
+function invoiceAfterReturn(inv: InvoiceRec, t: Date, day: number) {
+  if (inv.status !== "ISSUED" || !inv.issuedAt || inv.issuedAt > t) {
+    Object.assign(inv, { status: "CANCELLED", invoiceNumber: null, issueSource: null, issuedAt: null, issuedById: null, sellerSnapshot: null, deliveredAt: null, cancelledAt: t, cancelReason: "销售单退货，自动撤回；要开票按剩下的商品重新申请", updatedAt: t });
+    return;
+  }
+  inv.status = "RED_PENDING";
+  inv.cancelReason = "销售单退货，要红冲";
+  inv.updatedAt = t;
+  if (day <= -3) {
+    const redAt = new Date(t.getTime() + DAY_MS);
+    Object.assign(inv, { status: "REDDED", redAt, redById: hqId, redNumber: simulateInvoiceNumber(++invoiceNumberSeq, redAt), redReason: "退货", updatedAt: redAt });
+  }
+}
+
 /** 国补单按开单后过了几天推进：两三天内多半还没提交；一两周在审核；一个月以上基本都到账了，少数被驳回 */
 const SUBSIDY_REJECT_REASONS = ["发票抬头和顾客实名不一致", "串号照片看不清", "成交价和发票金额对不上"];
 function advanceClaim(c: SubsidyRec, age: number) {
@@ -1343,6 +1473,9 @@ async function write() {
   await insert("服务权益", out.entitlements as unknown as Row[], (c) => prisma.serviceEntitlement.createMany({ data: c as never }));
   await insert("维修单", out.repairs as unknown as Row[], (c) => prisma.repairOrder.createMany({ data: c as never }));
   await insert("收款", out.payments as unknown as Row[], (c) => prisma.payment.createMany({ data: c as never }));
+  await prisma.invoiceSeller.create({ data: { id: 1, ...DEMO_SELLER } });
+  await insert("发票", out.invoices as unknown as Row[], (c) => prisma.invoice.createMany({ data: c as never }));
+  await insert("发票明细", out.invoiceLines, (c) => prisma.invoiceLine.createMany({ data: c as never }));
   await insert("国补政策", out.subsidyPolicies, (c) => prisma.subsidyPolicy.createMany({ data: c as never }));
   await insert("国补单", out.subsidyClaims as unknown as Row[], (c) => prisma.subsidyClaim.createMany({ data: c as never }));
   await insert("运营商佣金政策", carrierOut.rules, (c) => prisma.carrierCommissionRule.createMany({ data: c as never }));
@@ -1362,7 +1495,7 @@ async function write() {
     await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   // 自己指定了 id，自增序列要跟上，后面正常开单才不会撞号
-  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines", "subsidy_policies", "subsidy_claims"];
+  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines", "subsidy_policies", "subsidy_claims", "invoices", "invoice_lines"];
   for (const t of tables) {
     await prisma.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM "${t}"), 0), 1), (SELECT COUNT(*) > 0 FROM "${t}"))`);
   }
@@ -1373,7 +1506,7 @@ async function verify() {
   const result = await runIntegrityChecks(prisma);
   const sales = out.sales.filter((s) => s.status === "COMPLETED");
   console.log(
-    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${out.subsidyClaims.length} 张国补单、${carrierOut.business.length} 笔运营商业务（${carrierOut.settlements.length} 张往月结算单）、${out.wecomFollows.length} 条企业微信好友关系。`,
+    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${out.subsidyClaims.length} 张国补单、${out.invoices.length} 张发票、${carrierOut.business.length} 笔运营商业务（${carrierOut.settlements.length} 张往月结算单）、${out.wecomFollows.length} 条企业微信好友关系。`,
   );
   console.log(`自检：${describeIntegrity(result)}`);
   if (!integrityOk(result)) process.exitCode = 1;
