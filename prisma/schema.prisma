@@ -252,6 +252,39 @@ enum PaymentMethod {
   @@map("payment_method")
 }
 
+/// 审批规则的场景（口径第 17 节）
+enum ApprovalRuleKind {
+  SALE_DISCOUNT   // 开单让利
+  SALE_BELOW_COST // 低于成本卖
+  RETURN_REFUND   // 退货退款
+  SALE_VOID       // 作废销售单
+  TRANSFER        // 调拨
+  STOCKTAKE_LOSS  // 盘点盘亏
+
+  @@map("approval_rule_kind")
+}
+
+/// 审批单要做的事
+enum ApprovalAction {
+  SALE      // 开单
+  RETURN    // 退货
+  SALE_VOID // 作废销售单
+  TRANSFER  // 调拨申请
+  STOCKTAKE // 盘点确认
+
+  @@map("approval_action")
+}
+
+enum ApprovalStatus {
+  PENDING   // 待审批
+  EXECUTED  // 已通过（已经做掉）
+  FAILED    // 批了，但这时候做不成了
+  REJECTED  // 已驳回
+  CANCELLED // 发起人撤回
+
+  @@map("approval_status")
+}
+
 /// 发票种类（口径第 16 节）
 enum InvoiceKind {
   E_NORMAL     // 电子普票
@@ -369,6 +402,7 @@ model Store {
   carrierBusiness CarrierBusiness[]
   subsidyClaims   SubsidyClaim[]
   invoices        Invoice[]
+  approvals       ApprovalRequest[]
   wecomBindCodes  WecomBindCode[]
   kpiTargets      KpiTarget[]
 
@@ -418,6 +452,8 @@ model User {
   invoicesRequested     Invoice[]         @relation("InvoiceRequestedBy")
   invoicesIssued        Invoice[]         @relation("InvoiceIssuedBy")
   invoicesRedded        Invoice[]         @relation("InvoiceRedBy")
+  approvalsRequested    ApprovalRequest[] @relation("ApprovalRequestedBy")
+  approvalsDecided      ApprovalRequest[] @relation("ApprovalDecidedBy")
   carrierSettlements    CarrierSettlement[]
   wecomFollows          WecomFollow[]
   wecomBindCodes        WecomBindCode[]
@@ -1265,6 +1301,54 @@ model CarrierSettlementLine {
 
   @@index([settlementId])
   @@map("carrier_settlement_lines")
+}
+
+/// 审批规则（口径第 17 节）：每个场景一条，总部维护，默认关
+model ApprovalRule {
+  id           Int              @id @default(autoincrement())
+  kind         ApprovalRuleKind @unique
+  enabled      Boolean          @default(false)
+  thresholdFen Int?             @map("threshold_fen") // 金额门槛
+  thresholdBp  Int?             @map("threshold_bp") // 比例门槛（万分之几，只有开单让利用）
+  approverRole Role             @map("approver_role") // STORE_MANAGER 或 HQ
+  note         String?
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  @@map("approval_rules")
+}
+
+/// 审批单：触发了规则的事先存在这里，批了再按当时的数据做掉
+model ApprovalRequest {
+  id            Int            @id @default(autoincrement())
+  requestNo     String         @unique @map("request_no") // SP + yyyyMMdd + 4 位
+  action        ApprovalAction
+  storeId       Int            @map("store_id")
+  requestedById Int            @map("requested_by_id")
+  approverRole  Role           @map("approver_role")
+  status        ApprovalStatus @default(PENDING)
+  summary       String // 给审批人看的摘要
+  reasons       Json // 触发了哪几条规则、为什么
+  amountFen     Int            @map("amount_fen") // 关键金额（让利、退款、货值）
+  note          String? // 发起人的说明
+  payload       Json // 做这件事要的全部内容
+  dedupeKey     String?        @map("dedupe_key") // 同一件事同时只能有一张待审批（部分唯一索引）
+  decidedById   Int?           @map("decided_by_id")
+  decidedAt     DateTime?      @map("decided_at")
+  decisionNote  String?        @map("decision_note")
+  resultId      Int?           @map("result_id") // 做出来的单据 id
+  resultNo      String?        @map("result_no") // 做出来的单号
+  error         String? // 没做成的原因
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  store       Store @relation(fields: [storeId], references: [id])
+  requestedBy User  @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  decidedBy   User? @relation("ApprovalDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([status, approverRole])
+  @@index([storeId, createdAt])
+  @@index([requestedById])
+  @@map("approval_requests")
 }
 
 /// 公司开票信息（销售方，口径第 16 节）：只有一行，总部维护

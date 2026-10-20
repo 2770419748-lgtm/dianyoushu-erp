@@ -7,10 +7,13 @@ import * as sales from "@/server/sales/sales-service";
 import { createReturn, ReturnError, type ReturnInput } from "@/server/sales/return-service";
 import { lookupForSale, type SaleLookup } from "@/server/sales/lookup";
 import { previewSubsidy, SubsidyError } from "@/server/subsidy/subsidy-service";
+import { ApprovalRequiredError } from "@/server/approval/approval-check";
+import { submitForApproval } from "@/server/approval/approval-service";
 
-export type SalesActionResult = { ok: true; id?: number; orderNo?: string } | { ok: false; error: string };
+/** approval：触发了审批规则，这次没做，存成了审批单（口径第 17 节） */
+export type SalesActionResult = { ok: true; id?: number; orderNo?: string } | { ok: false; error: string; approval?: { id: number; requestNo: string } };
 
-async function run(fn: () => Promise<{ id: number; orderNo: string } | void>): Promise<SalesActionResult> {
+async function run(fn: () => Promise<{ id: number; orderNo: string } | void>, onApproval?: (error: ApprovalRequiredError) => Promise<SalesActionResult>): Promise<SalesActionResult> {
   try {
     const result = await fn();
     revalidatePath("/sales");
@@ -19,6 +22,10 @@ async function run(fn: () => Promise<{ id: number; orderNo: string } | void>): P
     revalidatePath("/stock/ledger");
     return { ok: true, id: result?.id, orderNo: result?.orderNo };
   } catch (error) {
+    if (error instanceof ApprovalRequiredError && onApproval) {
+      revalidatePath("/approvals");
+      return onApproval(error);
+    }
     if (error instanceof sales.SalesError || error instanceof PermissionError) return { ok: false, error: error.message };
     console.error(error);
     return { ok: false, error: "操作失败，请稍后再试" };
@@ -27,12 +34,18 @@ async function run(fn: () => Promise<{ id: number; orderNo: string } | void>): P
 
 export async function createSalesOrderAction(input: sales.SalesOrderInput) {
   const user = await requireUser();
-  return run(() => sales.createSalesOrder(user, input));
+  return run(
+    () => sales.createSalesOrder(user, input),
+    (error) => submitForApproval(user, error, { action: "SALE", input, details: [] }),
+  );
 }
 
 export async function voidSalesOrderAction(id: number, reason: string) {
   const user = await requireUser();
-  return run(() => sales.voidSalesOrder(user, id, reason));
+  return run(
+    () => sales.voidSalesOrder(user, id, reason),
+    (error) => submitForApproval(user, error, { action: "SALE_VOID", orderId: id, reason, details: [] }),
+  );
 }
 
 /** 开单页搜本店可卖的机器 */
@@ -81,6 +94,10 @@ export async function createReturnAction(input: ReturnInput): Promise<SalesActio
     revalidatePath("/trade-ins/stock");
     return { ok: true, id: result.id, orderNo: result.orderNo };
   } catch (error) {
+    if (error instanceof ApprovalRequiredError) {
+      revalidatePath("/approvals");
+      return submitForApproval(user, error, { action: "RETURN", input, details: [] });
+    }
     if (error instanceof ReturnError || error instanceof PermissionError) return { ok: false, error: error.message };
     console.error(error);
     return { ok: false, error: "操作失败，请稍后再试" };

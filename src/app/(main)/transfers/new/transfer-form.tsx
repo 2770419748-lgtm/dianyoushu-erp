@@ -87,6 +87,11 @@ export function TransferForm({
     startTransition(async () => {
       const result = await createTransferAction({ fromStoreId, toStoreId: values.toStoreId, note: values.note, deviceIds: selectedDeviceIds, accessories: accessoryLines });
       if (!result.ok) {
+        if (result.approval) {
+          message.info(result.error, 6);
+          router.push(`/approvals/${result.approval.id}`);
+          return;
+        }
         message.error(result.error);
         return;
       }

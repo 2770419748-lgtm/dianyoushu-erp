@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { App, Button, Card, Descriptions, Form, Input, InputNumber, Popconfirm, Space, Table, Tag, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import { formatDateTime } from "@/lib/format";
@@ -33,11 +34,16 @@ export function StocktakeDetailView({ stocktake, canEnter, canConfirm }: { stock
   const diffs = stocktake.items.filter((i) => (i.diffQty ?? 0) !== 0);
   const parsed = parseCodeList(imeiText);
 
+  const router = useRouter();
+
   function run(fn: () => Promise<StocktakeActionResult>, success: string) {
     startTransition(async () => {
       const result = await fn();
       if (result.ok) message.success(result.info ?? success, result.info ? 6 : 3);
-      else message.error(result.error);
+      else if (result.approval) {
+        message.info(result.error, 6);
+        router.push(`/approvals/${result.approval.id}`);
+      } else message.error(result.error);
     });
   }
 

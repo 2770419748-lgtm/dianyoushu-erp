@@ -180,7 +180,45 @@ const out = {
   subsidyClaims: [] as SubsidyRec[],
   invoices: [] as InvoiceRec[],
   invoiceLines: [] as Row[],
+  approvalRules: [] as Row[],
+  approvals: [] as Row[],
 };
+// 审批规则（口径第 17 节，演示打开四条）：店员让利超过 5% 要店长批、退款 3000 元起要店长批、调拨货值 2 万起和盘亏 500 元起要总部批
+const DEMO_APPROVAL_RULES = [
+  { kind: "SALE_DISCOUNT", enabled: true, thresholdFen: null, thresholdBp: 500, approverRole: "STORE_MANAGER" },
+  { kind: "SALE_BELOW_COST", enabled: false, thresholdFen: null, thresholdBp: null, approverRole: "STORE_MANAGER" },
+  { kind: "RETURN_REFUND", enabled: true, thresholdFen: 300000, thresholdBp: null, approverRole: "STORE_MANAGER" },
+  { kind: "SALE_VOID", enabled: false, thresholdFen: 0, thresholdBp: null, approverRole: "HQ" },
+  { kind: "TRANSFER", enabled: true, thresholdFen: 2000000, thresholdBp: null, approverRole: "HQ" },
+  { kind: "STOCKTAKE_LOSS", enabled: true, thresholdFen: 50000, thresholdBp: null, approverRole: "HQ" },
+];
+const fmtYuan = (fen: number) => (fen / 100).toFixed(2);
+/** 一张审批单（演示数据）：已通过的挂着做出来的销售单，待审批的带着批了就能执行的开单、调拨内容 */
+function pushApproval(row: { action: "SALE" | "TRANSFER"; storeId: number; requestedById: number; approverRole: "STORE_MANAGER" | "HQ"; status: "PENDING" | "EXECUTED" | "REJECTED"; summary: string; reasons: { kind: string; text: string }[]; amountFen: number; payload: unknown; createdAt: Date; decidedById?: number; decidedAt?: Date; decisionNote?: string; resultId?: number; resultNo?: string }) {
+  out.approvals.push({
+    id: out.approvals.length + 1,
+    requestNo: docNo("SP", new Date(`${row.createdAt.toISOString().slice(0, 10)}T00:00:00.000Z`)),
+    action: row.action,
+    storeId: row.storeId,
+    requestedById: row.requestedById,
+    approverRole: row.approverRole,
+    status: row.status,
+    summary: row.summary,
+    reasons: row.reasons,
+    amountFen: row.amountFen,
+    note: null,
+    payload: row.payload,
+    dedupeKey: null,
+    decidedById: row.decidedById ?? null,
+    decidedAt: row.decidedAt ?? null,
+    decisionNote: row.decisionNote ?? null,
+    resultId: row.resultId ?? null,
+    resultNo: row.resultNo ?? null,
+    error: null,
+    createdAt: row.createdAt,
+    updatedAt: row.decidedAt ?? row.createdAt,
+  });
+}
 interface InvoiceRec {
   id: number;
   requestNo: string;
@@ -748,6 +786,26 @@ async function main() {
         dayPayments.push(...pays.map((p) => ({ method: p.method, amountFen: p.amountFen })));
         daySaleIds.push(saleId);
         if (customerId && (claim || chance(0.2))) makeInvoice(sale, items, claim, salesperson.id, day);
+        if (salesperson.role === "STAFF" && discountFen > 0 && discountFen * 10000 >= subtotalFen * 500) {
+          const asked = new Date(plan.time.getTime() - between(3, 12) * 60000);
+          pushApproval({
+            action: "SALE",
+            storeId: store.id,
+            requestedById: salesperson.id,
+            approverRole: "STORE_MANAGER",
+            status: "EXECUTED",
+            summary: `开单 ${items.length} 行，原价合计 ${fmtYuan(subtotalFen)} 元，应收 ${fmtYuan(totalFen)} 元（让利 ${fmtYuan(discountFen)} 元）`,
+            reasons: [{ kind: "SALE_DISCOUNT", text: `这单让利 ${fmtYuan(discountFen)} 元，占原价 ${((discountFen * 100) / subtotalFen).toFixed(1)}%，超过了 5%` }],
+            amountFen: discountFen,
+            payload: { action: "SALE", input: { storeId: store.id, customerId, items: items.map((i) => (i.deviceId ? { deviceId: i.deviceId, unitPriceFen: i.unitPriceFen } : { skuId: i.skuId, qty: i.qty, unitPriceFen: i.unitPriceFen })), discountFen }, details: [] },
+            createdAt: asked,
+            decidedById: manager.id,
+            decidedAt: new Date(plan.time.getTime() - 60000),
+            decisionNote: pick(["老客户，可以", "同意", "配件已经送了，优惠可以"]),
+            resultId: saleId,
+            resultNo: no,
+          });
+        }
         for (const item of items) if (item.deviceId && !serviceSkuIds.has(item.skuId)) soldDevices.push({ deviceId: item.deviceId, saleId, bizDate, customerId });
         // 少量几天后退货
         if (chance(0.015)) {
@@ -960,6 +1018,74 @@ async function main() {
           const bal = (accessoryBal.get(line.skuId) ?? 0) + line.qty;
           accessoryBal.set(line.skuId, bal);
           ledger({ docType: "PURCHASE_RECEIPT", docNo: riNo, storeId, skuId: line.skuId, qtyDelta: line.qty, balanceAfter: bal, operatorId: manager.id, createdAt: t });
+        }
+      }
+    }
+
+    if (stores.indexOf(store) < 3) {
+      const staffer = staff.find((u) => u.role === "STAFF");
+      const pool = [...inStock.entries()].find(([, list]) => list.length > 1);
+      if (staffer && pool) {
+        const device = pool[1][0]!;
+        const sku = skus.find((x) => x.id === device.skuId)!;
+        const discount = Math.round((sku.guidePriceFen * 0.1) / 1000) * 1000;
+        const customerId = customerPool[customerPool.length - 1] ?? null;
+        const asked = new Date(Date.now() - between(10, 40) * 60000);
+        pushApproval({
+          action: "SALE",
+          storeId: store.id,
+          requestedById: staffer.id,
+          approverRole: "STORE_MANAGER",
+          status: "PENDING",
+          summary: `开单 1 行，原价合计 ${fmtYuan(sku.guidePriceFen)} 元，应收 ${fmtYuan(sku.guidePriceFen - discount)} 元（让利 ${fmtYuan(discount)} 元）`,
+          reasons: [{ kind: "SALE_DISCOUNT", text: `这单让利 ${fmtYuan(discount)} 元，占原价 ${((discount * 100) / sku.guidePriceFen).toFixed(1)}%，超过了 5%` }],
+          amountFen: discount,
+          payload: { action: "SALE", input: { storeId: store.id, customerId, items: [{ deviceId: device.id, unitPriceFen: sku.guidePriceFen }], discountFen: discount, payments: [{ method: "WECHAT", amountFen: sku.guidePriceFen - discount }] }, details: [`${sku.name} ${device.code}：原价 ${fmtYuan(sku.guidePriceFen)}，成交 ${fmtYuan(sku.guidePriceFen)}`] },
+          createdAt: asked,
+        });
+        const rejectedAt = at(bizDateOf(-3), 15, between(0, 59));
+        pushApproval({
+          action: "SALE",
+          storeId: store.id,
+          requestedById: staffer.id,
+          approverRole: "STORE_MANAGER",
+          status: "REJECTED",
+          summary: `开单 1 行，原价合计 ${fmtYuan(sku.guidePriceFen)} 元，应收 ${fmtYuan(Math.round(sku.guidePriceFen * 0.85))} 元（让利 ${fmtYuan(sku.guidePriceFen - Math.round(sku.guidePriceFen * 0.85))} 元）`,
+          reasons: [{ kind: "SALE_DISCOUNT", text: "这单让利 15.0%，超过了 5%" }],
+          amountFen: sku.guidePriceFen - Math.round(sku.guidePriceFen * 0.85),
+          payload: { action: "SALE", input: { storeId: store.id, items: [] }, details: [] },
+          createdAt: new Date(rejectedAt.getTime() - 10 * 60000),
+          decidedById: manager.id,
+          decidedAt: rejectedAt,
+          decisionNote: "让利太多，最多按 5% 给",
+        });
+      }
+      if (stores.indexOf(store) === 0) {
+        // 调拨：挑几台在库机器凑够 2 万元货值，调到第二家店，等总部批
+        const picked: DeviceRec[] = [];
+        let cost = 0;
+        for (const list of inStock.values()) {
+          for (const d of list.slice(1)) {
+            if (cost >= 2100000) break;
+            picked.push(d);
+            cost += d.costFen;
+          }
+          if (cost >= 2100000) break;
+        }
+        const to = stores[1];
+        if (to && cost >= 2000000) {
+          pushApproval({
+            action: "TRANSFER",
+            storeId: store.id,
+            requestedById: manager.id,
+            approverRole: "HQ",
+            status: "PENDING",
+            summary: `${store.name} 调到 ${to.name}：机器 ${picked.length} 台、配件 0 件，货值 ${fmtYuan(cost)} 元（按成本）`,
+            reasons: [{ kind: "TRANSFER", text: `调拨货值 ${fmtYuan(cost)} 元（按成本），达到了 20000 元` }],
+            amountFen: cost,
+            payload: { action: "TRANSFER", input: { fromStoreId: store.id, toStoreId: to.id, note: "新店缺货，先调几台", deviceIds: picked.map((d) => d.id), accessories: [] }, details: picked.map((d) => `${skus.find((x) => x.id === d.skuId)!.name} ${d.code}`) },
+            createdAt: new Date(Date.now() - 50 * 60000),
+          });
         }
       }
     }
@@ -1489,6 +1615,8 @@ async function write() {
   await insert("维修单", out.repairs as unknown as Row[], (c) => prisma.repairOrder.createMany({ data: c as never }));
   await insert("收款", out.payments as unknown as Row[], (c) => prisma.payment.createMany({ data: c as never }));
   await prisma.invoiceSeller.create({ data: { id: 1, ...DEMO_SELLER } });
+  await insert("审批规则", DEMO_APPROVAL_RULES as unknown as Row[], (c) => prisma.approvalRule.createMany({ data: c as never }));
+  await insert("审批单", out.approvals, (c) => prisma.approvalRequest.createMany({ data: c as never }));
   await insert("发票", out.invoices as unknown as Row[], (c) => prisma.invoice.createMany({ data: c as never }));
   await insert("发票明细", out.invoiceLines, (c) => prisma.invoiceLine.createMany({ data: c as never }));
   await insert("国补政策", out.subsidyPolicies, (c) => prisma.subsidyPolicy.createMany({ data: c as never }));
@@ -1510,7 +1638,7 @@ async function write() {
     await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   // 自己指定了 id，自增序列要跟上，后面正常开单才不会撞号
-  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines", "subsidy_policies", "subsidy_claims", "invoices", "invoice_lines"];
+  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines", "subsidy_policies", "subsidy_claims", "invoices", "invoice_lines", "approval_rules", "approval_requests"];
   for (const t of tables) {
     await prisma.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM "${t}"), 0), 1), (SELECT COUNT(*) > 0 FROM "${t}"))`);
   }
@@ -1521,7 +1649,7 @@ async function verify() {
   const result = await runIntegrityChecks(prisma);
   const sales = out.sales.filter((s) => s.status === "COMPLETED");
   console.log(
-    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${out.subsidyClaims.length} 张国补单、${out.invoices.length} 张发票、${carrierOut.business.length} 笔运营商业务（${carrierOut.settlements.length} 张往月结算单）、${out.wecomFollows.length} 条企业微信好友关系。`,
+    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${out.subsidyClaims.length} 张国补单、${out.invoices.length} 张发票、${out.approvals.length} 张审批单、${carrierOut.business.length} 笔运营商业务（${carrierOut.settlements.length} 张往月结算单）、${out.wecomFollows.length} 条企业微信好友关系。`,
   );
   console.log(`自检：${describeIntegrity(result)}`);
   if (!integrityOk(result)) process.exitCode = 1;

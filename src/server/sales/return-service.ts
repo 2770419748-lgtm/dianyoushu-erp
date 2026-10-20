@@ -12,6 +12,7 @@ import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/st
 import { voidEntitlementsTx } from "@/server/entitlement/entitlement-service";
 import { cancelClaimsTx } from "@/server/subsidy/subsidy-service";
 import { onOrderChangedTx } from "@/server/invoice/invoice-service";
+import { checkApproval, type ApprovalCheckOptions } from "@/server/approval/approval-check";
 import { maxRefundableFen, MANUAL_PAYMENT_METHODS, returnRefundCapFen } from "./payments";
 import { lockRow } from "@/server/db-lock";
 import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
@@ -73,7 +74,7 @@ export async function getReturnContext(user: CurrentUser, salesOrderId: number) 
 
 export type ReturnContext = NonNullable<Awaited<ReturnType<typeof getReturnContext>>>;
 
-export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInput) {
+export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInput, options: ApprovalCheckOptions = {}) {
   if (!canSell(user.role)) throw new ReturnError("你的角色不能退货");
   const salesOrderId = Number(input.salesOrderId);
   const head = await tx.salesOrder.findUnique({ where: { id: salesOrderId }, select: { storeId: true, salespersonId: true, store: { select: { id: true, regionId: true } } } });
@@ -133,6 +134,14 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
     if (!salePayments.some((p) => p.method === refundMethod)) throw new ReturnError("退款要走原单用过的收款方式");
   }
   const reason = typeof input.reason === "string" ? input.reason.trim().slice(0, 200) || null : null;
+  // 审批（口径第 17 节）：退款达到门槛的先存审批单，批了再退
+  await checkApproval(
+    tx,
+    user,
+    { action: "RETURN", refundFen },
+    { storeId: order.storeId, summary: `退货 ${order.orderNo}：退 ${plans.reduce((s, p) => s + p.qty, 0)} 件，退款 ${(refundFen / 100).toFixed(2)} 元${reason ? `（${reason}）` : ""}`, details: plans.map((p) => `销售明细 #${p.item.id} 退 ${p.qty} 件`) },
+    options,
+  );
 
   const orderNo = await nextDocNo(tx, "RT");
   const created = await tx.returnOrder.create({

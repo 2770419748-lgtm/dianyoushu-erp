@@ -156,6 +156,11 @@ export function canMarkInvoiceDelivered(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
 }
 
+/** 谁能改审批规则（口径第 17 节）：总部；谁能批看规则（店长批本店要店长批的，总部都能批），见 src/lib/approval.ts canDecide */
+export function canManageApprovalRules(role: Role): boolean {
+  return role === "HQ";
+}
+
 /** 谁能作废运营商业务单：店长（本店）、总部 */
 export function canVoidCarrier(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
@@ -206,6 +211,7 @@ const MENU_STAFF: MenuEntry[] = [
   { key: "carrier", label: "运营商业务", href: "/carrier" },
   { key: "subsidy", label: "国补", href: "/subsidy" },
   { key: "invoices", label: "发票", href: "/invoices" },
+  { key: "approvals", label: "审批", href: "/approvals" },
   { key: "sales-list", label: "我的订单", href: "/sales" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
@@ -237,6 +243,7 @@ const MENU_REGIONAL: MenuEntry[] = [
   { key: "carrier", label: "运营商业务", href: "/carrier" },
   { key: "subsidy", label: "国补", href: "/subsidy" },
   { key: "invoices", label: "发票", href: "/invoices" },
+  { key: "approvals", label: "审批", href: "/approvals" },
   ROADMAP,
 ];
 
@@ -257,6 +264,7 @@ const MENU_HQ: MenuEntry[] = [
   { key: "carrier", label: "运营商业务", href: "/carrier" },
   { key: "subsidy", label: "国补", href: "/subsidy" },
   { key: "invoices", label: "发票", href: "/invoices" },
+  { key: "approvals", label: "审批", href: "/approvals" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },

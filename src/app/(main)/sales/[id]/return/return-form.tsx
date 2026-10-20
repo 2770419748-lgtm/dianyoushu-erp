@@ -71,6 +71,11 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
     startTransition(async () => {
       const result = await createReturnAction({ salesOrderId: ctx.order.id, lines, refundFen, refundMethod: method, reason });
       if (!result.ok) {
+        if (result.approval) {
+          message.info(result.error, 6);
+          router.push(`/approvals/${result.approval.id}`);
+          return;
+        }
         message.error(result.error);
         return;
       }

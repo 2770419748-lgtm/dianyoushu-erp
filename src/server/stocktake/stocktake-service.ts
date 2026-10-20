@@ -11,6 +11,8 @@ import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/st
 import { DeviceStateError } from "@/server/stock/device-state";
 import { isValidQty, MAX_QTY } from "@/lib/limits";
 import { lockRow } from "@/server/db-lock";
+import type { Prisma } from "@/generated/prisma/client";
+import { checkApproval, type ApprovalCheckOptions } from "@/server/approval/approval-check";
 
 // 盘点服务层：建任务时把"应有"快照下来 → 录实盘（大件粘串号、小件填数量；应有刷新成录入那一刻的系统数）→ 自动算差异 → 确认后把差异加到当时余额上、写流水。
 // 大件盘亏：机器变"盘亏"；大件盘盈（系统里没有的串号）这版不自动建机器，只在录入结果里提示，由总部走入库处理。
@@ -195,55 +197,70 @@ export async function enterCounts(user: CurrentUser, id: number, input: EnterCou
 // ---------- 确认 ----------
 
 export async function confirmStocktake(user: CurrentUser, id: number) {
-  if (!canConfirmStocktake(user.role)) throw new StocktakeError("只有店长和总部能确认盘点");
-  const head = await prisma.stocktake.findUnique({ where: { id }, include: { store: true } });
-  if (!head) throw new StocktakeError("盘点单不存在");
-  assertStoreAccess(user, head.store);
-
   try {
-    await prisma.$transaction(async (tx) => {
-      await lockRow(tx, "stocktakes", id);
-      const stocktake = await tx.stocktake.findUniqueOrThrow({ where: { id }, include: { items: { include: { device: { select: { storeId: true, status: true } } } } } });
-      if (stocktake.status !== "IN_PROGRESS") throw new StocktakeError("这张盘点单已经结束");
-      const notCounted = stocktake.items.filter((i) => i.countedQty === null);
-      if (notCounted.length > 0) throw new StocktakeError(`还有 ${notCounted.length} 项没录实盘，先录完再确认`);
-
-      let lossDevices = 0;
-      let accessoryDiff = 0;
-      for (const item of stocktake.items) {
-        if (item.deviceId) {
-          // 只有“现在仍在本店、能卖、却没盘到”的才记盘亏；录完之后才卖掉、调走的，有单据可查，不算
-          if (item.countedQty === 0 && stillInStore(item.device, stocktake.storeId)) {
-            await applyDeviceAction(tx, { deviceId: item.deviceId, action: "STOCKTAKE_LOSS", docType: "STOCKTAKE_LOSS", docNo: stocktake.stocktakeNo, operatorId: user.id, note: "盘点确认盘亏" });
-            lossDevices++;
-          } else if (item.countedQty === 0 && item.expectedQty === 1) {
-            await tx.stocktakeItem.update({ where: { id: item.id }, data: { expectedQty: 0, diffQty: 0 } });
-          }
-          continue;
-        }
-        // 配件：录实盘时的差异，加到现在的余额上（录完之后的进出已经在余额里了）
-        const diff = item.diffQty ?? 0;
-        if (diff === 0) continue;
-        await changeAccessoryStock(tx, {
-          storeId: stocktake.storeId,
-          skuId: item.skuId,
-          qtyDelta: diff,
-          docType: diff > 0 ? "STOCKTAKE_GAIN" : "STOCKTAKE_LOSS",
-          docNo: stocktake.stocktakeNo,
-          operatorId: user.id,
-          note: diff > 0 ? "盘点确认盘盈" : "盘点确认盘亏",
-        });
-        accessoryDiff += diff;
-      }
-      await tx.stocktake.update({ where: { id }, data: { status: "CONFIRMED", confirmedById: user.id, confirmedAt: new Date() } });
-      await writeAudit({ userId: user.id, action: "stocktake.confirm", entity: "stocktake", entityId: id, detail: { lossDevices, accessoryDiff } }, tx);
-    });
+    await prisma.$transaction((tx) => confirmStocktakeTx(tx, user, id));
   } catch (error) {
     if (error instanceof StockError && /库存不够/.test(error.message)) {
       throw new StocktakeError(`录实盘之后又有出库，有配件不够扣了：${error.message}。请重新录一遍实盘再确认`);
     }
     wrapStockError(error);
   }
+}
+
+/** 确认盘点（事务版）：审批通过后执行时也走这里（口径第 17 节） */
+export async function confirmStocktakeTx(tx: Prisma.TransactionClient, user: CurrentUser, id: number, options: ApprovalCheckOptions = {}) {
+  if (!canConfirmStocktake(user.role)) throw new StocktakeError("只有店长和总部能确认盘点");
+  const head = await tx.stocktake.findUnique({ where: { id }, include: { store: true } });
+  if (!head) throw new StocktakeError("盘点单不存在");
+  assertStoreAccess(user, head.store);
+  await lockRow(tx, "stocktakes", id);
+  const stocktake = await tx.stocktake.findUniqueOrThrow({ where: { id }, include: { items: { include: { device: { select: { storeId: true, status: true, costFen: true, code: true } }, sku: { select: { name: true, costPriceFen: true } } } } } });
+  if (stocktake.status !== "IN_PROGRESS") throw new StocktakeError("这张盘点单已经结束");
+  const notCounted = stocktake.items.filter((i) => i.countedQty === null);
+  if (notCounted.length > 0) throw new StocktakeError(`还有 ${notCounted.length} 项没录实盘，先录完再确认`);
+
+  // 审批（口径第 17 节）：盘亏货值（按成本）达到门槛的先存审批单，批了再确认
+  const lostDevices = stocktake.items.filter((i) => i.deviceId && i.countedQty === 0 && stillInStore(i.device, stocktake.storeId));
+  const lostAccessories = stocktake.items.filter((i) => !i.deviceId && (i.diffQty ?? 0) < 0);
+  const lossCostFen = lostDevices.reduce((s, i) => s + (i.device?.costFen ?? 0), 0) + lostAccessories.reduce((s, i) => s + i.sku.costPriceFen * -(i.diffQty ?? 0), 0);
+  await checkApproval(
+    tx,
+    user,
+    { action: "STOCKTAKE", lossCostFen },
+    { storeId: stocktake.storeId, summary: `确认盘点 ${stocktake.stocktakeNo}：盘亏机器 ${lostDevices.length} 台、配件 ${lostAccessories.reduce((s, i) => s - (i.diffQty ?? 0), 0)} 件，盘亏货值 ${(lossCostFen / 100).toFixed(2)} 元（按成本）`, details: [...lostDevices.map((i) => `盘亏 ${i.sku.name} ${i.device?.code ?? ""}`), ...lostAccessories.map((i) => `盘亏 ${i.sku.name} × ${-(i.diffQty ?? 0)}`)], dedupeKey: `STOCKTAKE:${id}` },
+    options,
+  );
+
+  let lossDevices = 0;
+  let accessoryDiff = 0;
+  for (const item of stocktake.items) {
+    if (item.deviceId) {
+      // 只有“现在仍在本店、能卖、却没盘到”的才记盘亏；录完之后才卖掉、调走的，有单据可查，不算
+      if (item.countedQty === 0 && stillInStore(item.device, stocktake.storeId)) {
+        await applyDeviceAction(tx, { deviceId: item.deviceId, action: "STOCKTAKE_LOSS", docType: "STOCKTAKE_LOSS", docNo: stocktake.stocktakeNo, operatorId: user.id, note: "盘点确认盘亏" });
+        lossDevices++;
+      } else if (item.countedQty === 0 && item.expectedQty === 1) {
+        await tx.stocktakeItem.update({ where: { id: item.id }, data: { expectedQty: 0, diffQty: 0 } });
+      }
+      continue;
+    }
+    // 配件：录实盘时的差异，加到现在的余额上（录完之后的进出已经在余额里了）
+    const diff = item.diffQty ?? 0;
+    if (diff === 0) continue;
+    await changeAccessoryStock(tx, {
+      storeId: stocktake.storeId,
+      skuId: item.skuId,
+      qtyDelta: diff,
+      docType: diff > 0 ? "STOCKTAKE_GAIN" : "STOCKTAKE_LOSS",
+      docNo: stocktake.stocktakeNo,
+      operatorId: user.id,
+      note: diff > 0 ? "盘点确认盘盈" : "盘点确认盘亏",
+    });
+    accessoryDiff += diff;
+  }
+  await tx.stocktake.update({ where: { id }, data: { status: "CONFIRMED", confirmedById: user.id, confirmedAt: new Date() } });
+  await writeAudit({ userId: user.id, action: "stocktake.confirm", entity: "stocktake", entityId: id, detail: { lossDevices, accessoryDiff } }, tx);
+  return { id, stocktakeNo: stocktake.stocktakeNo };
 }
 
 export async function voidStocktake(user: CurrentUser, id: number) {

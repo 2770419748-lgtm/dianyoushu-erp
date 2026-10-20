@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { App, Button, Card, Descriptions, Input, Popconfirm, Space, Table, Tag, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import { formatDate, formatDateTime, formatFen } from "@/lib/format";
@@ -17,6 +18,7 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState("");
+  const router = useRouter();
 
   const itemColumns: TableColumnsType<Item> = [
     {
@@ -112,7 +114,10 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
                   startTransition(async () => {
                     const result = await voidSalesOrderAction(order.id, reason);
                     if (result.ok) message.success("已作废，库存已恢复");
-                    else message.error(result.error);
+                    else if (result.approval) {
+                      message.info(result.error, 6);
+                      router.push(`/approvals/${result.approval.id}`);
+                    } else message.error(result.error);
                   })
                 }
               >

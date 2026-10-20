@@ -12,6 +12,8 @@ import { parseCodeList } from "@/server/stock/imei";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { isValidQty, MAX_QTY } from "@/lib/limits";
 import { DeviceStateError } from "@/server/stock/device-state";
+import { checkApproval, type ApprovalCheckOptions } from "@/server/approval/approval-check";
+import type { Db } from "@/server/db-tx";
 
 // 调拨服务层：申请（串号锁定）→ 发出（在途，发出店扣库存）→ 收货（核对串号，收货店加库存，可部分）；申请中可作废（解锁）。
 // 库存变动全部交给 stock-service，并和单据放在同一事务。
@@ -34,8 +36,8 @@ function optionalText(value: unknown, max = 200): string | null {
   return text || null;
 }
 
-async function loadStore(id: number) {
-  const store = await prisma.store.findUnique({ where: { id }, select: { id: true, code: true, name: true, regionId: true, isActive: true } });
+async function loadStore(id: number, db: Db = prisma) {
+  const store = await db.store.findUnique({ where: { id }, select: { id: true, code: true, name: true, regionId: true, isActive: true } });
   if (!store || !store.isActive) throw new TransferError("门店不存在或已停用");
   return store;
 }
@@ -155,11 +157,20 @@ export interface TransferInput {
 }
 
 export async function createTransfer(user: CurrentUser, input: TransferInput) {
+  try {
+    return await prisma.$transaction((tx) => createTransferTx(tx, user, input));
+  } catch (error) {
+    wrapStockError(error);
+  }
+}
+
+/** 调拨申请（事务版）：审批通过后执行时也走这里（口径第 17 节） */
+export async function createTransferTx(tx: Prisma.TransactionClient, user: CurrentUser, input: TransferInput, options: ApprovalCheckOptions = {}) {
   assertCanManage(user);
   const fromStoreId = requireId(input.fromStoreId, "发出门店");
   const toStoreId = requireId(input.toStoreId, "收货门店");
   if (fromStoreId === toStoreId) throw new TransferError("发出店和收货店不能是同一家");
-  const [fromStore] = await Promise.all([loadStore(fromStoreId), loadStore(toStoreId)]);
+  const [fromStore, toStore] = await Promise.all([loadStore(fromStoreId, tx), loadStore(toStoreId, tx)]);
   assertStoreAccess(user, fromStore);
   const note = optionalText(input.note);
 
@@ -173,39 +184,33 @@ export async function createTransfer(user: CurrentUser, input: TransferInput) {
   }
   if (deviceIds.length === 0 && accessories.length === 0) throw new TransferError("至少要选一台机器或一种配件");
 
-  if (deviceIds.length > 0) {
-    const devices = await prisma.device.findMany({
-      where: { id: { in: deviceIds }, storeId: fromStoreId, status: "IN_STOCK" },
-      select: { id: true },
-    });
-    if (devices.length !== deviceIds.length) throw new TransferError("有机器不在发出店的在库里（良品不能调拨），刷新后重选");
+  const devices = deviceIds.length > 0 ? await tx.device.findMany({ where: { id: { in: deviceIds }, storeId: fromStoreId, status: "IN_STOCK" }, select: { id: true, code: true, costFen: true, sku: { select: { name: true } } } }) : [];
+  if (devices.length !== deviceIds.length) throw new TransferError("有机器不在发出店的在库里（良品不能调拨），刷新后重选");
+  let costFen = devices.reduce((s, d) => s + d.costFen, 0);
+  const details = devices.map((d) => `${d.sku.name} ${d.code}`);
+  for (const a of accessories) {
+    const stock = await tx.accessoryStock.findUnique({ where: { storeId_skuId: { storeId: fromStoreId, skuId: a.skuId } }, include: { sku: { select: { name: true, costPriceFen: true } } } });
+    if (!stock || stock.qty < a.qty) throw new TransferError(`配件库存不够（现有 ${stock?.qty ?? 0}，要调 ${a.qty}）`);
+    costFen += stock.sku.costPriceFen * a.qty;
+    details.push(`${stock.sku.name} × ${a.qty}`);
+  }
+  // 审批（口径第 17 节）：货值达到门槛的先存审批单，批了再申请（这时候机器还没锁，批下来时重新检查）
+  await checkApproval(tx, user, { action: "TRANSFER", costFen }, { storeId: fromStoreId, summary: `${fromStore.name} 调到 ${toStore.name}：机器 ${devices.length} 台、配件 ${accessories.reduce((s, a) => s + a.qty, 0)} 件，货值 ${(costFen / 100).toFixed(2)} 元（按成本）`, details }, options);
+
+  const orderNo = await nextDocNo(tx, "TR");
+  const created = await tx.transferOrder.create({
+    data: { orderNo, fromStoreId, toStoreId, note, requestedById: user.id },
+  });
+  for (const deviceId of deviceIds) {
+    const device = await tx.device.findUniqueOrThrow({ where: { id: deviceId }, select: { skuId: true } });
+    await tx.transferItem.create({ data: { transferId: created.id, skuId: device.skuId, deviceId, qty: 1 } });
+    await applyDeviceAction(tx, { deviceId, action: "LOCK_FOR_TRANSFER", docType: "TRANSFER_LOCK", docNo: orderNo, operatorId: user.id });
   }
   for (const a of accessories) {
-    const stock = await prisma.accessoryStock.findUnique({ where: { storeId_skuId: { storeId: fromStoreId, skuId: a.skuId } } });
-    if (!stock || stock.qty < a.qty) throw new TransferError(`配件库存不够（现有 ${stock?.qty ?? 0}，要调 ${a.qty}）`);
+    await tx.transferItem.create({ data: { transferId: created.id, skuId: a.skuId, qty: a.qty } });
   }
-
-  try {
-    const order = await prisma.$transaction(async (tx) => {
-      const orderNo = await nextDocNo(tx, "TR");
-      const created = await tx.transferOrder.create({
-        data: { orderNo, fromStoreId, toStoreId, note, requestedById: user.id },
-      });
-      for (const deviceId of deviceIds) {
-        const device = await tx.device.findUniqueOrThrow({ where: { id: deviceId }, select: { skuId: true } });
-        await tx.transferItem.create({ data: { transferId: created.id, skuId: device.skuId, deviceId, qty: 1 } });
-        await applyDeviceAction(tx, { deviceId, action: "LOCK_FOR_TRANSFER", docType: "TRANSFER_LOCK", docNo: orderNo, operatorId: user.id });
-      }
-      for (const a of accessories) {
-        await tx.transferItem.create({ data: { transferId: created.id, skuId: a.skuId, qty: a.qty } });
-      }
-      await writeAudit({ userId: user.id, action: "transfer.create", entity: "transfer_order", entityId: created.id, detail: { orderNo, devices: deviceIds.length, accessories: accessories.length } }, tx);
-      return created;
-    });
-    return order;
-  } catch (error) {
-    wrapStockError(error);
-  }
+  await writeAudit({ userId: user.id, action: "transfer.create", entity: "transfer_order", entityId: created.id, detail: { orderNo, devices: deviceIds.length, accessories: accessories.length } }, tx);
+  return created;
 }
 
 // ---------- 发出 ----------

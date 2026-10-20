@@ -30,6 +30,8 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/invoices": "发票",
   "/invoices/new": "申请开票",
   "/invoices/seller": "公司开票信息",
+  "/approvals": "审批",
+  "/approvals/rules": "审批规则",
   "/wecom": "企微对接",
   "/sales": "销售单",
   "/sales/new": "开单",

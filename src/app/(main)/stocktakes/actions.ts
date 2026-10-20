@@ -4,10 +4,13 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
 import * as stocktake from "@/server/stocktake/stocktake-service";
+import { ApprovalRequiredError } from "@/server/approval/approval-check";
+import { submitForApproval } from "@/server/approval/approval-service";
 
-export type StocktakeActionResult = { ok: true; id?: number; info?: string } | { ok: false; error: string };
+/** approval：触发了审批规则，这次没做，存成了审批单（口径第 17 节） */
+export type StocktakeActionResult = { ok: true; id?: number; info?: string } | { ok: false; error: string; approval?: { id: number; requestNo: string } };
 
-async function run(fn: () => Promise<{ id?: number; info?: string } | void>): Promise<StocktakeActionResult> {
+async function run(fn: () => Promise<{ id?: number; info?: string } | void>, onApproval?: (error: ApprovalRequiredError) => Promise<StocktakeActionResult>): Promise<StocktakeActionResult> {
   try {
     const result = await fn();
     revalidatePath("/stocktakes");
@@ -16,6 +19,10 @@ async function run(fn: () => Promise<{ id?: number; info?: string } | void>): Pr
     revalidatePath("/stock/ledger");
     return { ok: true, id: result?.id, info: result?.info };
   } catch (error) {
+    if (error instanceof ApprovalRequiredError && onApproval) {
+      revalidatePath("/approvals");
+      return onApproval(error);
+    }
     if (error instanceof stocktake.StocktakeError || error instanceof PermissionError) return { ok: false, error: error.message };
     console.error(error);
     return { ok: false, error: "操作失败，请稍后再试" };
@@ -38,7 +45,10 @@ export async function enterCountsAction(id: number, input: stocktake.EnterCounts
 
 export async function confirmStocktakeAction(id: number) {
   const user = await requireUser();
-  return run(() => stocktake.confirmStocktake(user, id));
+  return run(
+    () => stocktake.confirmStocktake(user, id),
+    (error) => submitForApproval(user, error, { action: "STOCKTAKE", stocktakeId: id, details: [] }),
+  );
 }
 
 export async function voidStocktakeAction(id: number) {

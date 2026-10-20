@@ -19,6 +19,9 @@ import { createEntitlementsTx, voidEntitlementsTx } from "@/server/entitlement/e
 import { lineBaseFen, type SubsidyPick } from "@/lib/subsidy";
 import { cancelClaimsTx, createClaimsTx, prepareSubsidyTx, SubsidyError } from "@/server/subsidy/subsidy-service";
 import { onOrderChangedTx } from "@/server/invoice/invoice-service";
+import { checkApproval, type ApprovalCheckOptions } from "@/server/approval/approval-check";
+
+const yuan = (fen: number) => (fen / 100).toFixed(2);
 
 // 开单服务层：选机器和配件、改价优惠、以旧换新抵扣（关联回收单）、多种收款拆分（合计必须等于应收）。
 // 口径第 11 节第 3 条：销售单、明细、收款、扣库存、写流水在一个事务里，失败全部回滚。
@@ -100,7 +103,7 @@ function wrapStockError(error: unknown): never {
 
 // ---------- 开单 ----------
 
-export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: SalesOrderInput) {
+export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: SalesOrderInput, options: ApprovalCheckOptions = {}) {
   if (!canSell(user.role)) throw new SalesError("你的角色不能开单");
   const data = parseOrder(input);
   const store = await tx.store.findUnique({ where: { id: data.storeId }, select: { id: true, regionId: true, isActive: true } });
@@ -119,6 +122,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   const lines: Line[] = [];
   // 服务行另记一份：保哪台机器、期限几个月（和 lines 按下标对应）
   const serviceOf = new Map<number, { deviceId: number | null; months: number; kind: "SCREEN_INSURANCE" | "EXTENDED_WARRANTY" | "OTHER" | null }>();
+  const lineLabels: string[] = []; // 审批单上给审批人看的明细
   // 新机行的品类（和 lines 按下标对应）：国补按品类算；回收转良品的二手机不补
   const newDeviceCategory = new Map<number, number>();
   for (const d of data.deviceLines) {
@@ -132,6 +136,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     const unitPriceFen = d.unitPriceFen ?? listPriceFen;
     if (device.tradeInOrderId === null) newDeviceCategory.set(lines.length, device.sku.model.categoryId);
     lines.push({ skuId: device.skuId, deviceId: device.id, qty: 1, listPriceFen, unitPriceFen, lineTotalFen: unitPriceFen, costFen: device.costFen });
+    lineLabels.push(`${device.sku.name} ${device.code}：原价 ${yuan(listPriceFen)}，成交 ${yuan(unitPriceFen)}`);
   }
   for (const a of data.accessoryLines) {
     const sku = await tx.sku.findUnique({ where: { id: a.skuId }, include: { model: { include: { category: true } } } });
@@ -151,6 +156,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     const listPriceFen = await resolveUnitPrice(tx, data.storeId, sku.id, sku.guidePriceFen);
     const unitPriceFen = a.unitPriceFen ?? listPriceFen;
     lines.push({ skuId: sku.id, deviceId: null, qty: a.qty, listPriceFen, unitPriceFen, lineTotalFen: unitPriceFen * a.qty, costFen: sku.costPriceFen * a.qty });
+    lineLabels.push(`${sku.name} × ${a.qty}：原价 ${yuan(listPriceFen)}，成交 ${yuan(unitPriceFen)}`);
   }
 
   const subtotalFen = lines.reduce((s, l) => s + l.lineTotalFen, 0);
@@ -185,6 +191,16 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     }
   }
   const subsidyFen = subsidy ? subsidy.picks.reduce((s, p) => s + p.subsidyFen, 0) : 0;
+
+  // 审批（口径第 17 节）：让利、低于成本卖触发了规则就先不开，存审批单，批了再开
+  const listFen = lines.reduce((s, l) => s + l.listPriceFen * l.qty, 0);
+  await checkApproval(
+    tx,
+    user,
+    { action: "SALE", listFen, totalFen, belowCostCount: lines.filter((l) => l.deviceId && l.unitPriceFen < l.costFen).length },
+    { storeId: data.storeId, summary: `开单 ${lines.length} 行，原价合计 ${yuan(listFen)} 元，应收 ${yuan(totalFen)} 元${listFen > totalFen ? `（让利 ${yuan(listFen - totalFen)} 元）` : ""}`, details: lineLabels },
+    options,
+  );
 
   // 收款：抵扣 + 国补 + 手工收款，合计必须正好等于应收
   const manual = Array.isArray(input.payments)
@@ -282,7 +298,7 @@ export async function createSalesOrder(user: CurrentUser, input: SalesOrderInput
 
 // ---------- 作废 ----------
 
-export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: number, reason: unknown) {
+export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: number, reason: unknown, options: ApprovalCheckOptions = {}) {
   if (!canVoidSales(user.role)) throw new SalesError("只有店长和总部能作废销售单");
   const head = await tx.salesOrder.findUnique({ where: { id: orderId }, select: { storeId: true, bizDate: true, store: { select: { id: true, regionId: true } } } });
   if (!head) throw new SalesError("销售单不存在");
@@ -296,6 +312,8 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
   if (order._count.returnOrders > 0) throw new SalesError("这张单已经有退货记录，不能作废，剩下的继续走退货");
   if (await tx.serviceEntitlement.count({ where: { salesOrderId: orderId, status: "CLAIMED" } })) throw new SalesError("这张单上的碎屏险已经在维修单上理赔过了，不能作废");
   const voidReason = typeof reason === "string" ? reason.trim().slice(0, 200) || null : null;
+  // 审批（口径第 17 节）：作废要批的，先存审批单；同一张单同时只能有一张待审批
+  await checkApproval(tx, user, { action: "SALE_VOID", totalFen: order.totalFen }, { storeId: order.storeId, summary: `作废 ${order.orderNo}（应收 ${yuan(order.totalFen)} 元）${voidReason ? `：${voidReason}` : ""}`, dedupeKey: `SALE_VOID:${orderId}` }, options);
 
   try {
     for (const item of order.items) {

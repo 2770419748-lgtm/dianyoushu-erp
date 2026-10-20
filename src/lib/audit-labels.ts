@@ -76,6 +76,12 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "invoice.issue": "开具发票",
   "invoice.red": "红冲发票",
   "invoice.delivered": "纸质发票到店",
+  "approval.rule.save": "改审批规则",
+  "approval.request": "提交审批",
+  "approval.approve": "审批通过",
+  "approval.failed": "审批通过但没做成",
+  "approval.reject": "驳回审批",
+  "approval.cancel": "撤回审批",
   "entitlement.reminder_scan": "生成到期提醒",
   "entitlement.reminder_contacted": "到期提醒已联系",
   "wecom.bind": "客户绑定企业微信",
@@ -113,6 +119,8 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   subsidy_claim: "国补单",
   invoice: "发票",
   invoice_seller: "公司开票信息",
+  approval_rule: "审批规则",
+  approval_request: "审批单",
 };
 
 export function auditActionLabel(action: string): string {

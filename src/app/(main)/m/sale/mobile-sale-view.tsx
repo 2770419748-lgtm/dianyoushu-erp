@@ -165,6 +165,11 @@ export function MobileSaleView({
           : { paymentMethod: method }),
       });
       if (!result.ok) {
+        if (result.approval) {
+          message.info(result.error, 6);
+          router.push(`/approvals/${result.approval.id}`);
+          return;
+        }
         message.error(result.error);
         return;
       }

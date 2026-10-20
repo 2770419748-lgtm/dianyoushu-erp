@@ -13,6 +13,7 @@ const LOCKABLE = {
   carrier_business: Prisma.raw('"carrier_business"'),
   subsidy_claims: Prisma.raw('"subsidy_claims"'),
   invoices: Prisma.raw('"invoices"'),
+  approval_requests: Prisma.raw('"approval_requests"'),
 } as const;
 
 export type LockableTable = keyof typeof LOCKABLE;
