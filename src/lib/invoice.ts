@@ -63,6 +63,32 @@ export function buildInvoiceLines(items: InvoiceSourceItem[], order: { subtotalF
 
 export class InvoiceRuleError extends Error {}
 
+// 统一社会信用代码（GB 32100-2015）：18 位，字符集没有 I、O、Z、S、V；第 18 位是前 17 位按权重算出来的校验码
+const USCC_CHARS = "0123456789ABCDEFGHJKLMNPQRTUWXY";
+const USCC_WEIGHTS = [1, 3, 9, 27, 19, 26, 16, 17, 20, 29, 25, 13, 8, 24, 10, 30, 28];
+
+/** 前 17 位算出来的校验码；位数不对或有不用的字母返回 null */
+export function usccCheckChar(first17: string): string | null {
+  if (first17.length !== 17) return null;
+  let sum = 0;
+  for (let i = 0; i < 17; i++) {
+    const value = USCC_CHARS.indexOf(first17[i]!);
+    if (value < 0) return null;
+    sum += value * USCC_WEIGHTS[i]!;
+  }
+  return USCC_CHARS[(31 - (sum % 31)) % 31]!;
+}
+
+/**
+ * 纳税人识别号有什么问题（没问题返回 null；传进来的要先转大写）：
+ * 18 位的就是统一社会信用代码，查字符和校验位；15、17、19、20 位的老号码（老税务登记号、个体户身份证号加两位）只查字母数字。
+ */
+export function taxNoProblem(taxNo: string): string | null {
+  if (!/^[0-9A-Z]{15,20}$/.test(taxNo)) return "纳税人识别号是 15～20 位字母数字（统一社会信用代码 18 位）";
+  if (taxNo.length === 18 && usccCheckChar(taxNo.slice(0, 17)) !== taxNo[17]) return "统一社会信用代码不对：里面不会有 I、O、Z、S、V，最后一位是校验码，核对一下";
+  return null;
+}
+
 export interface InvoiceTitleInput {
   kind: unknown;
   titleType: unknown;
@@ -86,7 +112,8 @@ export function validateInvoiceTitle(input: InvoiceTitleInput) {
   if (kind === "E_SPECIAL" && titleType !== "COMPANY") throw new InvoiceRuleError("专票只能开给企业");
   const buyerTaxNo = text(input.buyerTaxNo, 20).toUpperCase() || null;
   if (titleType === "COMPANY" && !buyerTaxNo) throw new InvoiceRuleError("企业抬头要填纳税人识别号");
-  if (buyerTaxNo && !/^[0-9A-Z]{15,20}$/.test(buyerTaxNo)) throw new InvoiceRuleError("纳税人识别号是 15～20 位字母数字（统一社会信用代码 18 位）");
+  const taxProblem = buyerTaxNo ? taxNoProblem(buyerTaxNo) : null;
+  if (taxProblem) throw new InvoiceRuleError(taxProblem);
   const buyerAddressPhone = text(input.buyerAddressPhone, 100) || null;
   const buyerBankAccount = text(input.buyerBankAccount, 100) || null;
   if (kind === "E_SPECIAL" && (!buyerAddressPhone || !buyerBankAccount)) throw new InvoiceRuleError("专票要填公司地址电话、开户行及账号");

@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation";
+import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
+import { PermissionError } from "@/server/auth/scope";
 import { getInvoice } from "@/server/invoice/invoice-service";
 import { InvoiceDetailView } from "./invoice-detail-view";
 
@@ -10,7 +12,11 @@ export default async function InvoicePage({ params }: PageProps<"/invoices/[id]"
   const user = await requireUser();
   const id = Number((await params).id);
   if (!Number.isInteger(id) || id <= 0) notFound();
-  const invoice = await getInvoice(user, id);
+  const invoice = await getInvoice(user, id).catch((error: unknown) => {
+    if (error instanceof PermissionError) return "forbidden" as const;
+    throw error;
+  });
+  if (invoice === "forbidden") return <NoAccess title="没有权限看这张发票" />;
   if (!invoice) notFound();
   return <InvoiceDetailView invoice={invoice} />;
 }

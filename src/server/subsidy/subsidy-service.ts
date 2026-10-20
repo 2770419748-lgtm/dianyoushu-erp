@@ -29,7 +29,7 @@ import { lockRow } from "@/server/db-lock";
 import { type Db, withTx } from "@/server/db-tx";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { isUniqueViolation } from "@/server/db-errors";
-import { issuedInvoiceNumber } from "@/server/invoice/invoice-service";
+import { issuedInvoiceNumber, isReddedOnOrder } from "@/server/invoice/invoice-service";
 
 // 国补（口径第 15 节）：总部配政策；开单时按政策算立减、校验资格，每台补贴的机器生成一张国补单；
 // 门店补资料提交审核，总部导入平台的审核 / 到账结果；作废、退货时撤销或标“需退回”。
@@ -228,7 +228,10 @@ export async function submitClaimTx(tx: Tx, user: CurrentUser, id: number, invoi
   // 不填就用这张销售单已经开好的发票号码（口径第 16 节）
   const typed = typeof invoiceNo === "string" ? invoiceNo.trim() : "";
   if (typed.length > 30) throw new SubsidyError("发票号是 6～30 位字母数字");
-  const invoice = typed || claim.invoiceNo || (await issuedInvoiceNumber(tx, claim.salesOrderId)) || "";
+  // 上次提交记下的号，如果这张票后来红冲了（退货后红冲、按剩下的重开），就不能再用，换成现在已开的
+  const saved = claim.invoiceNo && !(await isReddedOnOrder(tx, claim.salesOrderId, claim.invoiceNo)) ? claim.invoiceNo : null;
+  if (typed && (await isReddedOnOrder(tx, claim.salesOrderId, typed))) throw new SubsidyError(`发票 ${typed} 已经红冲了，填现在有效的发票号，或者不填用这张单已开的`);
+  const invoice = typed || saved || (await issuedInvoiceNumber(tx, claim.salesOrderId)) || "";
   if (!invoice) throw new SubsidyError("这张销售单还没开票：先申请开票、等总部开好，或者直接填发票号");
   if (!/^[A-Za-z0-9-]{6,30}$/.test(invoice)) throw new SubsidyError("发票号是 6～30 位字母数字");
   await tx.subsidyClaim.update({ where: { id }, data: { status: "SUBMITTED", invoiceNo: invoice, submittedAt: new Date(), rejectReason: null } });

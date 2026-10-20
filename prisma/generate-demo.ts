@@ -8,7 +8,7 @@ import { daysUntil, entitlementPeriod } from "../src/lib/entitlement";
 import { payerOptions, repairChargeFen, type FaultCategoryKey, type RepairPayerKey } from "../src/lib/repair";
 import { monthRange, reconcileStatement, type CarrierBizTypeKey, type CarrierKey, type StatementLine } from "../src/lib/carrier";
 import { lineBaseFen, subsidyFenOf, type SubsidyStatusKey } from "../src/lib/subsidy";
-import { buildInvoiceLines, simulateInvoiceNumber, type InvoiceKindKey, type InvoiceStatusKey, type InvoiceTitleTypeKey } from "../src/lib/invoice";
+import { buildInvoiceLines, simulateInvoiceNumber, usccCheckChar, type InvoiceKindKey, type InvoiceStatusKey, type InvoiceTitleTypeKey } from "../src/lib/invoice";
 
 // 模拟经营数据 v1（第 9 周）：10 家店、3 个月（截至昨天）的采购到货、销售、以旧换新、回收机转良品再卖、作废、退货、日结。
 // 规则和真实业务一致：库存每次变动都有流水、配件余额 = 流水合计、日结系统数 = 当天收款汇总。
@@ -252,8 +252,19 @@ interface InvoiceRec {
   updatedAt: Date;
 }
 // 公司开票信息（演示）：开具时存一份快照到发票上
-const DEMO_SELLER = { name: "店有数通讯连锁有限公司（演示）", taxNo: "91440300MA5DEMO001", addressPhone: "深圳市南山区科技园演示路 1 号 0755-12345678", bankAccount: "招商银行深圳科技园支行 755900000000001" };
+const DEMO_SELLER = { name: "店有数通讯连锁有限公司（演示）", taxNo: "91440300MA5DEMXX1U", addressPhone: "深圳市南山区科技园演示路 1 号 0755-12345678", bankAccount: "招商银行深圳科技园支行 755900000000001" };
 const COMPANY_TITLES = ["深圳市云帆科技有限公司", "广州启明贸易有限公司", "东莞市恒信电子有限公司", "佛山市安达物流有限公司", "珠海星海文化传媒有限公司"];
+/** 演示公司的统一社会信用代码：同一家公司一直用同一个，校验位按国标算（编的号码，不对应真实企业） */
+const companyTaxNos = new Map<string, string>();
+function companyTaxNo(title: string): string {
+  let taxNo = companyTaxNos.get(title);
+  if (!taxNo) {
+    const first17 = `91440300${between(100000000, 999999999)}`;
+    taxNo = first17 + usccCheckChar(first17)!;
+    companyTaxNos.set(title, taxNo);
+  }
+  return taxNo;
+}
 let invoiceNumberSeq = 800000000000;
 const skuNames = new Map<number, string>();
 const serviceSkuIdSet = new Set<number>();
@@ -634,6 +645,7 @@ async function main() {
           accessoryBal.set(item.skuId, bal);
           ledger({ docType: "RETURN", docNo: no, storeId: store.id, skuId: item.skuId, qtyDelta: 1, balanceAfter: bal, operatorId: manager.id, createdAt: t });
         }
+        if (invoice?.status === "REDDED" && chance(0.5)) reissueInvoice(invoice, sale, bizDate); // 一半红冲后按剩下的重开
         dayReturnIds.push(retId);
       }
 
@@ -1450,7 +1462,7 @@ function buildCarrierDemo(storeIds: number[], users: { id: number; role: string;
 }
 
 /** 开票（口径第 16 节）：开单后几分钟申请；用了国补的当天就开（国补提交审核要发票号），其余一两天内开，最近一两天的一半还没开 */
-function makeInvoice(sale: SaleRec, items: SaleItemRec[], claim: SubsidyRec | null, requestedById: number, day: number) {
+function makeInvoice(sale: SaleRec, items: SaleItemRec[], claim: SubsidyRec | null, requestedById: number, day: number, startAt?: Date) {
   const lines = buildInvoiceLines(
     items.map((i) => ({ salesOrderItemId: i.id, name: skuNames.get(i.skuId) ?? "商品", spec: i.deviceId ? out.devices[i.deviceId - 1]!.code : null, qty: i.qty, returnedQty: 0, lineTotalFen: i.lineTotalFen, isService: serviceSkuIdSet.has(i.skuId) })),
     sale,
@@ -1459,9 +1471,10 @@ function makeInvoice(sale: SaleRec, items: SaleItemRec[], claim: SubsidyRec | nu
   const kind: InvoiceKindKey = claim ? "E_NORMAL" : weighted([["E_NORMAL", 75], ["PAPER_NORMAL", 15], ["E_SPECIAL", 10]] as [InvoiceKindKey, number][], ([, w]) => w)[0];
   const company = kind === "E_SPECIAL" || (!claim && chance(0.15));
   const customer = out.customers[sale.customerId! - 1]!;
-  const createdAt = new Date(sale.createdAt.getTime() + between(5, 40) * 60000);
+  const createdAt = startAt ?? new Date(sale.createdAt.getTime() + between(5, 40) * 60000);
   const now = new Date();
   const id = out.invoices.length + 1;
+  const titleName = company ? pick(COMPANY_TITLES) : (customer.name as string);
   const inv: InvoiceRec = {
     id,
     requestNo: docNo("KP", sale.bizDate),
@@ -1470,11 +1483,11 @@ function makeInvoice(sale: SaleRec, items: SaleItemRec[], claim: SubsidyRec | nu
     customerId: sale.customerId,
     kind,
     titleType: company ? "COMPANY" : "PERSONAL",
-    titleName: company ? pick(COMPANY_TITLES) : (customer.name as string),
-    buyerTaxNo: company ? `91440300${String(between(10000000, 99999999))}AB` : null,
+    titleName,
+    buyerTaxNo: company ? companyTaxNo(titleName) : null,
     buyerAddressPhone: kind === "E_SPECIAL" ? "深圳市福田区演示大道 88 号 0755-87654321" : null,
     buyerBankAccount: kind === "E_SPECIAL" ? "工商银行深圳福田支行 4000000000000000001" : null,
-    receiver: kind === "PAPER_NORMAL" ? null : chance(0.6) ? (customer.phone as string) : null,
+    receiver: kind === "PAPER_NORMAL" ? null : chance(0.55) ? (customer.phone as string) : chance(0.3) ? `${between(10000000, 3999999999)}@qq.com` : null,
     amountFen: lines.reduce((x, l) => x + l.amountFen, 0),
     taxFen: lines.reduce((x, l) => x + l.taxFen, 0),
     status: "REQUESTED",
@@ -1495,6 +1508,16 @@ function makeInvoice(sale: SaleRec, items: SaleItemRec[], claim: SubsidyRec | nu
     updatedAt: createdAt,
   };
   const age = -day;
+  // 少数申请还没开就撤回了：抬头填错了撤回重新申请，或者顾客说不用开了（国补的单要发票，不撤）
+  if (!startAt && !claim && age > 1 && chance(0.03)) {
+    const cancelledAt = new Date(createdAt.getTime() + between(10, 180) * 60000);
+    const retry = chance(0.6);
+    Object.assign(inv, { status: "CANCELLED", cancelledAt, cancelReason: retry ? "抬头填错了，撤回重新申请" : "顾客说不用开了", updatedAt: cancelledAt });
+    out.invoices.push(inv);
+    for (const l of lines) out.invoiceLines.push({ id: out.invoiceLines.length + 1, invoiceId: id, ...l });
+    if (retry) makeInvoice(sale, items, claim, requestedById, day, new Date(cancelledAt.getTime() + between(2, 15) * 60000));
+    return;
+  }
   if (claim || age > 1 || chance(0.5)) {
     const issuedAt = new Date(Math.min(createdAt.getTime() + (claim ? between(10, 60) * 60000 : between(1, 26) * 3600000), now.getTime() - 3600000));
     inv.status = "ISSUED";
@@ -1509,6 +1532,49 @@ function makeInvoice(sale: SaleRec, items: SaleItemRec[], claim: SubsidyRec | nu
       if (delivered < now) inv.deliveredAt = delivered;
     }
     if (claim?.invoiceNo) claim.invoiceNo = inv.invoiceNumber; // 国补单提交审核时带的就是这张发票
+  }
+  out.invoices.push(inv);
+  for (const l of lines) out.invoiceLines.push({ id: out.invoiceLines.length + 1, invoiceId: id, ...l });
+  invoiceBySale.set(sale.id, inv);
+}
+
+/** 红冲之后按剩下的商品重新申请、开具（口径第 16 节）：抬头照旧，红冲后几个小时内门店重新申请 */
+function reissueInvoice(old: InvoiceRec, sale: SaleRec, bizDate: Date) {
+  const items = out.saleItems.filter((i) => i.orderId === sale.id);
+  const lines = buildInvoiceLines(
+    items.map((i) => ({ salesOrderItemId: i.id, name: skuNames.get(i.skuId) ?? "商品", spec: i.deviceId ? out.devices[i.deviceId - 1]!.code : null, qty: i.qty, returnedQty: i.returnedQty, lineTotalFen: i.lineTotalFen, isService: serviceSkuIdSet.has(i.skuId) })),
+    sale,
+  );
+  if (lines.length === 0 || !old.redAt) return;
+  const createdAt = new Date(old.redAt.getTime() + between(30, 240) * 60000);
+  const issuedAt = new Date(createdAt.getTime() + between(1, 20) * 3600000);
+  const issued = issuedAt.getTime() < Date.now() - 3600000;
+  const id = out.invoices.length + 1;
+  const inv: InvoiceRec = {
+    ...old,
+    id,
+    requestNo: docNo("KP", new Date(bizDate.getTime() + DAY_MS)),
+    amountFen: lines.reduce((x, l) => x + l.amountFen, 0),
+    taxFen: lines.reduce((x, l) => x + l.taxFen, 0),
+    status: issued ? "ISSUED" : "REQUESTED",
+    invoiceNumber: issued ? simulateInvoiceNumber(++invoiceNumberSeq, issuedAt) : null,
+    issueSource: issued ? "SIMULATED" : null,
+    issuedAt: issued ? issuedAt : null,
+    issuedById: issued ? hqId : null,
+    sellerSnapshot: issued ? DEMO_SELLER : null,
+    deliveredAt: null,
+    redNumber: null,
+    redAt: null,
+    redById: null,
+    redReason: null,
+    cancelledAt: null,
+    cancelReason: null,
+    createdAt,
+    updatedAt: issued ? issuedAt : createdAt,
+  };
+  if (issued && inv.kind === "PAPER_NORMAL") {
+    const delivered = new Date(issuedAt.getTime() + between(2, 4) * DAY_MS);
+    if (delivered.getTime() < Date.now()) inv.deliveredAt = delivered;
   }
   out.invoices.push(inv);
   for (const l of lines) out.invoiceLines.push({ id: out.invoiceLines.length + 1, invoiceId: id, ...l });

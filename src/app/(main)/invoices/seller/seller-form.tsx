@@ -39,7 +39,7 @@ export function SellerForm({ seller }: { seller: Seller | null }) {
         <Form.Item name="name" label="公司名称" rules={[{ required: true, message: "填公司名称" }]}>
           <Input maxLength={100} />
         </Form.Item>
-        <Form.Item name="taxNo" label="纳税人识别号" rules={[{ required: true, pattern: /^[0-9A-Za-z]{15,20}$/, message: "15～20 位字母数字" }]}>
+        <Form.Item name="taxNo" label="纳税人识别号" rules={[{ required: true, pattern: /^[0-9A-Za-z]{15,20}$/, message: "15～20 位字母数字（统一社会信用代码 18 位）" }]}>
           <Input maxLength={20} />
         </Form.Item>
         <Form.Item name="addressPhone" label="地址电话" rules={[{ required: true, message: "填地址电话" }]}>

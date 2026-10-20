@@ -20,6 +20,6 @@ export default defineConfig({
     command: "pnpm dev",
     url: "http://localhost:3000/login",
     reuseExistingServer: true,
-    timeout: 120_000,
+    timeout: 240_000,
   },
 });

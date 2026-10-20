@@ -158,6 +158,8 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
       + (SELECT COUNT(*) FROM invoices i
         WHERE (i.status IN ('ISSUED', 'RED_PENDING', 'REDDED')) <> (i.invoice_number IS NOT NULL AND i.issued_at IS NOT NULL)
           OR (i.status = 'REDDED') <> (i.red_number IS NOT NULL AND i.red_at IS NOT NULL))
+      + (SELECT COUNT(*) FROM invoices a JOIN invoices b ON a.red_number = b.invoice_number)
+      + (SELECT COUNT(*) FROM invoices a JOIN invoices b ON a.red_number = b.red_number AND a.id < b.id)
     )::bigint AS n`;
   const [approval] = await prisma.$queryRaw<{ n: bigint }[]>`
     SELECT (

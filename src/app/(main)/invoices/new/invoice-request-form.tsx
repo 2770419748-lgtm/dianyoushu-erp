@@ -104,7 +104,7 @@ export function InvoiceRequestForm({ draft }: { draft: Draft }) {
             <Input maxLength={100} style={{ width: 280 }} />
           </Form.Item>
           {titleType === "COMPANY" ? (
-            <Form.Item name="buyerTaxNo" label="纳税人识别号" rules={[{ required: true, pattern: /^[0-9A-Za-z]{15,20}$/, message: "15～20 位字母数字" }]}>
+            <Form.Item name="buyerTaxNo" label="纳税人识别号" rules={[{ required: true, pattern: /^[0-9A-Za-z]{15,20}$/, message: "15～20 位字母数字（统一社会信用代码 18 位）" }]}>
               <Input maxLength={20} style={{ width: 240 }} />
             </Form.Item>
           ) : null}

@@ -1387,7 +1387,7 @@ model Invoice {
   issuedById        Int?                @map("issued_by_id")
   sellerSnapshot    Json?               @map("seller_snapshot") // 开具时的销售方信息
   deliveredAt       DateTime?           @map("delivered_at") // 纸质票到店
-  redNumber         String?             @map("red_number") // 红字发票号码
+  redNumber         String?             @map("red_number") // 红字发票号码（部分唯一索引，迁移 invoice_red_number_unique）
   redAt             DateTime?           @map("red_at")
   redById           Int?                @map("red_by_id")
   redReason         String?             @map("red_reason")

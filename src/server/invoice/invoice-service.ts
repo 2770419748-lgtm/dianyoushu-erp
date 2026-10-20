@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import type { InvoiceStatus } from "@/generated/prisma/enums";
 import { monthRange } from "@/lib/carrier";
-import { buildInvoiceLines, INVOICE_ACTIVE_STATUSES, InvoiceRuleError, normalizeInvoiceNumber, simulateInvoiceNumber, validateInvoiceTitle, type InvoiceTitleInput } from "@/lib/invoice";
+import { buildInvoiceLines, INVOICE_ACTIVE_STATUSES, InvoiceRuleError, normalizeInvoiceNumber, simulateInvoiceNumber, taxNoProblem, validateInvoiceTitle, type InvoiceTitleInput } from "@/lib/invoice";
 import { canManageInvoice, canMarkInvoiceDelivered, canSell } from "@/server/auth/permissions";
 import { assertStoreAccess, canAccessStoreSafe, PermissionError, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
@@ -54,7 +54,8 @@ export async function saveSeller(user: CurrentUser, input: { name: unknown; taxN
   const addressPhone = text(input.addressPhone, 100);
   const bankAccount = text(input.bankAccount, 100);
   if (!name || !addressPhone || !bankAccount) throw new InvoiceError("公司名称、地址电话、开户行及账号都要填");
-  if (!/^[0-9A-Z]{15,20}$/.test(taxNo)) throw new InvoiceError("纳税人识别号是 15～20 位字母数字");
+  const taxProblem = taxNoProblem(taxNo);
+  if (taxProblem) throw new InvoiceError(taxProblem);
   const data = { name, taxNo, addressPhone, bankAccount };
   await prisma.invoiceSeller.upsert({ where: { id: 1 }, create: { id: 1, ...data }, update: data });
   await writeAudit({ userId: user.id, action: "invoice.seller.save", entity: "invoice_seller", entityId: 1, detail: data });
@@ -80,11 +81,11 @@ function draftLines(order: NonNullable<Awaited<ReturnType<typeof orderForInvoice
   );
 }
 
-/** 申请开票页要的：这张单能开多少、明细、为什么不能开、这个客户上次的抬头 */
+/** 申请开票页要的：这张单能开多少、明细、为什么不能开、这个客户上次的抬头。别店的单抛 PermissionError（页面显示无权限页） */
 export async function invoiceDraft(user: CurrentUser, salesOrderId: number) {
   const order = await orderForInvoice(prisma, salesOrderId);
   if (!order) return null;
-  wrapAccess(() => assertStoreAccess(user, order.store));
+  assertStoreAccess(user, order.store);
   const lines = draftLines(order);
   const active = await prisma.invoice.findFirst({ where: { salesOrderId, status: { in: INVOICE_ACTIVE_STATUSES } }, select: { id: true, requestNo: true, status: true } });
   const blocked = !canSell(user.role) ? "你的角色不能申请开票" : order.status !== "COMPLETED" ? "作废的单不能开票" : active ? `这张单已经有在办的发票 ${active.requestNo}` : lines.length === 0 ? "这张单没有可开票的金额（都退了）" : null;
@@ -159,10 +160,14 @@ async function simulatedNumber(tx: Tx): Promise<string> {
   return simulateInvoiceNumber(counter.value, todayBizDate());
 }
 
+const INVOICE_NUMBER_LOCK_NS = -76; // 咨询锁命名空间：-73 维修串号、-74 国补客户、-75 运营商结算、-76 发票号码
+
 async function resolveNumber(tx: Tx, raw: unknown, label: string): Promise<{ number: string; source: "SIMULATED" | "MANUAL" }> {
   if (typeof raw === "string" && raw.trim()) {
     const number = normalizeInvoiceNumber(raw);
     if (!number) throw new InvoiceError(`${label}是 8～20 位数字`);
+    // 同一个号码排队：两个总部同时把同一个号登记成发票号和红字号时，后一个能查到前一个（两列各自还有部分唯一索引兜底）
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${INVOICE_NUMBER_LOCK_NS}::int, hashtext(${number}::text))`;
     const dup = await tx.invoice.findFirst({ where: { OR: [{ invoiceNumber: number }, { redNumber: number }] }, select: { requestNo: true } });
     if (dup) throw new InvoiceError(`${label} ${number} 已经登记在 ${dup.requestNo} 上了`);
     return { number, source: "MANUAL" };
@@ -230,6 +235,11 @@ export const invoiceActions = {
 // ---------- 国补联动 ----------
 
 /** 这张销售单已开票的发票号码（国补单提交审核时自动带出） */
+/** 这个号码是不是这张销售单上已经红冲掉的发票（国补重新提交时不能再用） */
+export async function isReddedOnOrder(db: Db, salesOrderId: number, invoiceNumber: string): Promise<boolean> {
+  return (await db.invoice.count({ where: { salesOrderId, invoiceNumber, status: "REDDED" } })) > 0;
+}
+
 export async function issuedInvoiceNumber(db: Db, salesOrderId: number): Promise<string | null> {
   const invoice = await db.invoice.findFirst({ where: { salesOrderId, status: "ISSUED" }, orderBy: { id: "desc" }, select: { invoiceNumber: true } });
   return invoice?.invoiceNumber ?? null;
@@ -330,7 +340,7 @@ export async function getInvoice(user: CurrentUser, id: number) {
     },
   });
   if (!invoice) return null;
-  wrapAccess(() => assertStoreAccess(user, invoice.store));
+  assertStoreAccess(user, invoice.store); // 别店的抛 PermissionError，页面显示无权限页
   return {
     ...invoice,
     salesOrder: { id: invoice.salesOrder.id, orderNo: invoice.salesOrder.orderNo, bizDate: invoice.salesOrder.bizDate, canOpen: canAccessStoreSafe(user, invoice.salesOrder.store) && (user.role !== "STAFF" || invoice.salesOrder.salespersonId === user.id) },

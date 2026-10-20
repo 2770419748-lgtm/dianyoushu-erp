@@ -3,7 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
-import { cancelInvoiceTx, issueInvoiceTx, markDeliveredTx, redInvoiceTx, requestInvoiceTx } from "@/server/invoice/invoice-service";
+import { PermissionError } from "@/server/auth/scope";
+import { cancelInvoiceTx, getInvoice, issueInvoiceTx, markDeliveredTx, redInvoiceTx, requestInvoiceTx } from "@/server/invoice/invoice-service";
 import { createReturnTx } from "@/server/sales/return-service";
 import { createSalesOrderTx, voidSalesOrderTx } from "@/server/sales/sales-service";
 import { receiveDevices } from "@/server/stock/stock-service";
@@ -62,7 +63,7 @@ afterAll(async () => {
 });
 
 async function setSeller(tx: Prisma.TransactionClient) {
-  const data = { name: "测试公司", taxNo: "91440300TEST00001X", addressPhone: "测试地址 0755-1", bankAccount: "测试银行 1" };
+  const data = { name: "测试公司", taxNo: "91440300MA5TEXT018", addressPhone: "测试地址 0755-1", bankAccount: "测试银行 1" };
   await tx.invoiceSeller.upsert({ where: { id: 1 }, create: { id: 1, ...data }, update: data });
 }
 
@@ -193,6 +194,50 @@ describe("发票（连本机库，事务回滚）", () => {
       const { invoiceNumber } = await issueInvoiceTx(tx, f.hq, iv.id);
       await submitClaimTx(tx, f.staff, claim.id, "");
       expect((await tx.subsidyClaim.findUniqueOrThrow({ where: { id: claim.id } })).invoiceNo).toBe(invoiceNumber);
+
+      // 平台驳回后，这张票红冲、重新开了一张：重提不填号要换成新号，填旧号拒
+      await tx.subsidyClaim.update({ where: { id: claim.id }, data: { status: "REJECTED", rejectReason: "发票抬头和顾客实名不一致" } });
+      await redInvoiceTx(tx, f.hq, iv.id, { reason: "抬头开错" });
+      const again = await requestInvoiceTx(tx, f.staff, { salesOrderId: s.orderId, ...person, titleName: "改好的抬头" });
+      const reissued = await issueInvoiceTx(tx, f.hq, again.id);
+      await expect(submitClaimTx(tx, f.staff, claim.id, invoiceNumber)).rejects.toThrow("已经红冲了");
+      await submitClaimTx(tx, f.staff, claim.id, "");
+      expect((await tx.subsidyClaim.findUniqueOrThrow({ where: { id: claim.id } })).invoiceNo).toBe(reissued.invoiceNumber);
     });
+  });
+
+  it("红字号码不能重复、不能和别的发票号撞：服务层拒，数据库唯一索引兜底，自检查得出来", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const f = fixture;
+    await inRolledBackTx(async (tx) => {
+      await setSeller(tx);
+      const ids: number[] = [];
+      for (const seed of [41, 42, 43]) {
+        const s = await sale(tx, seed);
+        const r = await requestInvoiceTx(tx, f.staff, { salesOrderId: s.orderId, ...person });
+        await issueInvoiceTx(tx, f.hq, r.id);
+        ids.push(r.id);
+      }
+      await redInvoiceTx(tx, f.hq, ids[0]!, { redNumber: "26441020000000770001", reason: "测试" });
+      await expect(redInvoiceTx(tx, f.hq, ids[1]!, { redNumber: "26441020000000770001", reason: "测试" })).rejects.toThrow("已经登记在");
+      const third = await tx.invoice.findUniqueOrThrow({ where: { id: ids[2]! } });
+      await expect(redInvoiceTx(tx, f.hq, ids[1]!, { redNumber: third.invoiceNumber!, reason: "测试" })).rejects.toThrow("已经登记在");
+
+      await tx.$executeRaw`SAVEPOINT dup`;
+      await expect(tx.invoice.update({ where: { id: ids[1]! }, data: { status: "REDDED", redNumber: "26441020000000770001", redAt: new Date() } })).rejects.toMatchObject({ code: "P2002" });
+      await tx.$executeRaw`ROLLBACK TO SAVEPOINT dup`;
+
+      expect((await runIntegrityChecks(tx as unknown as PrismaClient)).invoice).toBe(0);
+      await tx.invoice.update({ where: { id: ids[1]! }, data: { status: "REDDED", redNumber: third.invoiceNumber, redAt: new Date() } }); // 绕过服务层写成别人的发票号
+      expect((await runIntegrityChecks(tx as unknown as PrismaClient)).invoice).toBe(1);
+    });
+  });
+
+  it("别店的发票：详情抛 PermissionError（页面显示无权限页，不是出错页）", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const other = await prisma.invoice.findFirst({ where: { storeId: { not: fixture.storeId } }, select: { id: true } });
+    if (!other) return ctx.skip();
+    await expect(getInvoice(fixture.staff, other.id)).rejects.toBeInstanceOf(PermissionError);
+    await expect(getInvoice(fixture.hq, other.id)).resolves.toBeTruthy();
   });
 });

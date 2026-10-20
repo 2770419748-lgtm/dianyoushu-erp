@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation";
+import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
+import { PermissionError } from "@/server/auth/scope";
 import { invoiceDraft } from "@/server/invoice/invoice-service";
 import { InvoiceRequestForm } from "./invoice-request-form";
 
@@ -14,7 +16,11 @@ export default async function NewInvoicePage({ searchParams }: PageProps<"/invoi
   const user = await requireUser();
   const orderId = Number(one((await searchParams).orderId));
   if (!Number.isInteger(orderId) || orderId <= 0) notFound();
-  const draft = await invoiceDraft(user, orderId);
+  const draft = await invoiceDraft(user, orderId).catch((error: unknown) => {
+    if (error instanceof PermissionError) return "forbidden" as const;
+    throw error;
+  });
+  if (draft === "forbidden") return <NoAccess title="没有权限给这张销售单申请开票" />;
   if (!draft) notFound();
   return <InvoiceRequestForm draft={draft} />;
 }

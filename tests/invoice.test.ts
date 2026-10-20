@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInvoiceLines, InvoiceRuleError, normalizeInvoiceNumber, simulateInvoiceNumber, taxOf, validateInvoiceTitle } from "@/lib/invoice";
+import { buildInvoiceLines, InvoiceRuleError, normalizeInvoiceNumber, simulateInvoiceNumber, taxOf, validateInvoiceTitle, taxNoProblem, usccCheckChar } from "@/lib/invoice";
 
 // 发票（口径第 16 节）：明细和税额怎么算、抬头校验、发票号码。纯函数，不连库。
 
@@ -29,13 +29,25 @@ describe("发票：明细和税额", () => {
 
 describe("发票：抬头", () => {
   it("个人只要抬头；企业要税号；专票只能开给企业、还要地址电话和开户行", () => {
-    expect(validateInvoiceTitle({ kind: "E_NORMAL", titleType: "PERSONAL", titleName: " 张三 ", buyerTaxNo: "91440300MA5DEMO001" })).toMatchObject({ titleName: "张三", buyerTaxNo: null });
+    expect(validateInvoiceTitle({ kind: "E_NORMAL", titleType: "PERSONAL", titleName: " 张三 ", buyerTaxNo: "91440300MA5DEMXX1U" })).toMatchObject({ titleName: "张三", buyerTaxNo: null });
     expect(() => validateInvoiceTitle({ kind: "E_NORMAL", titleType: "COMPANY", titleName: "某公司" })).toThrow("纳税人识别号");
     expect(() => validateInvoiceTitle({ kind: "E_NORMAL", titleType: "COMPANY", titleName: "某公司", buyerTaxNo: "123" })).toThrow("15～20 位");
     expect(() => validateInvoiceTitle({ kind: "E_SPECIAL", titleType: "PERSONAL", titleName: "张三" })).toThrow("专票只能开给企业");
-    expect(() => validateInvoiceTitle({ kind: "E_SPECIAL", titleType: "COMPANY", titleName: "某公司", buyerTaxNo: "91440300ma5demo001" })).toThrow("地址电话");
-    expect(validateInvoiceTitle({ kind: "E_SPECIAL", titleType: "COMPANY", titleName: "某公司", buyerTaxNo: "91440300ma5demo001", buyerAddressPhone: "深圳 0755-1", buyerBankAccount: "招行 1" })).toMatchObject({ buyerTaxNo: "91440300MA5DEMO001" });
+    expect(() => validateInvoiceTitle({ kind: "E_SPECIAL", titleType: "COMPANY", titleName: "某公司", buyerTaxNo: "91440300ma5demxx1u" })).toThrow("地址电话");
+    expect(validateInvoiceTitle({ kind: "E_SPECIAL", titleType: "COMPANY", titleName: "某公司", buyerTaxNo: "91440300ma5demxx1u", buyerAddressPhone: "深圳 0755-1", buyerBankAccount: "招行 1" })).toMatchObject({ buyerTaxNo: "91440300MA5DEMXX1U" });
     expect(() => validateInvoiceTitle({ kind: "XX", titleType: "PERSONAL", titleName: "张三" })).toThrow(InvoiceRuleError);
+  });
+
+  it("纳税人识别号：18 位按统一社会信用代码查（没有 I、O、Z、S、V，最后一位是校验码）；其他位数的老号码只查字母数字", () => {
+    expect(usccCheckChar("91440300MA5DEMXX1")).toBe("U");
+    expect(usccCheckChar("9144030OIZSV00001")).toBeNull();
+    expect(taxNoProblem("91440300MA5DEMXX1U")).toBeNull();
+    expect(taxNoProblem("91440300MA5DEMXX1A")).toContain("校验码");
+    expect(taxNoProblem("9144030OIZSV00001X")).toContain("I、O、Z、S、V");
+    expect(taxNoProblem("440300123456789")).toBeNull(); // 15 位老税务登记号
+    expect(taxNoProblem("44030019900101123X01")).toBeNull(); // 20 位
+    expect(taxNoProblem("12345")).toContain("15～20 位");
+    expect(() => validateInvoiceTitle({ kind: "E_NORMAL", titleType: "COMPANY", titleName: "某公司", buyerTaxNo: "9144030oizsv00001x" })).toThrow("统一社会信用代码不对");
   });
 
   it("电子票接收方是邮箱或手机，纸质票不要接收方", () => {
