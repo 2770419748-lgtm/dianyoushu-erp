@@ -133,6 +133,8 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     if (sku.isService) {
       if (a.qty !== 1) throw new SalesError(`${sku.name} 是服务，一行只能 1 份；两台机器各买一份就加两行`);
       if (a.serviceDeviceId !== null && !data.deviceLines.some((d) => d.deviceId === a.serviceDeviceId)) throw new SalesError(`${sku.name} 保的机器要是这张单里卖的机器`);
+      // 延保接在这台机器的保修后面（口径第 12 节），所以要和机器同一张单买、选保哪台；单独补买延保这一版不做
+      if (sku.serviceKind === "EXTENDED_WARRANTY" && a.serviceDeviceId === null) throw new SalesError(`${sku.name} 要和机器同一张单买，选保本单哪台机器（从这台的保修到期次日起算）`);
       const key = `${sku.id}:${a.serviceDeviceId ?? "无"}`;
       if (Array.from(serviceOf.entries()).some(([i, s]) => `${lines[i]!.skuId}:${s.deviceId ?? "无"}` === key)) throw new SalesError(`同一台机器的 ${sku.name} 选了两次`);
       serviceOf.set(lines.length, { deviceId: a.serviceDeviceId, months: sku.serviceMonths ?? 0, kind: sku.serviceKind });
@@ -410,9 +412,9 @@ export async function listSellableServices(user: CurrentUser, storeId: number) {
   const skus = await prisma.sku.findMany({
     where: { isService: true, isActive: true },
     orderBy: { name: "asc" },
-    select: { id: true, name: true, serviceMonths: true, guidePriceFen: true, storePrices: { where: { storeId }, select: { priceFen: true } } },
+    select: { id: true, name: true, serviceMonths: true, serviceKind: true, guidePriceFen: true, storePrices: { where: { storeId }, select: { priceFen: true } } },
   });
-  return skus.map((s) => ({ skuId: s.id, name: s.name, months: s.serviceMonths ?? 0, priceFen: effectivePriceFen(s.guidePriceFen, s.storePrices[0]?.priceFen ?? null) }));
+  return skus.map((s) => ({ skuId: s.id, name: s.name, months: s.serviceMonths ?? 0, kind: s.serviceKind, priceFen: effectivePriceFen(s.guidePriceFen, s.storePrices[0]?.priceFen ?? null) }));
 }
 
 export type SellableService = Awaited<ReturnType<typeof listSellableServices>>[number];

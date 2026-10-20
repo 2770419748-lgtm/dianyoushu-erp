@@ -84,10 +84,15 @@ function splitCsvLine(line: string): string[] {
   return out.map((s) => s.trim());
 }
 
+/** 一行佣金、返销最多 10 万元（远超任何号卡、宽带佣金；也防止超出数据库整数范围） */
+export const MAX_STATEMENT_LINE_FEN = 10_000_000;
+
 function yuanToFenStrict(text: string, lineNo: number, label: string): number {
   if (!text) return 0;
   if (!/^\d+(\.\d{1,2})?$/.test(text)) throw new StatementParseError(`第 ${lineNo} 行的${label}“${text}”不是金额`);
-  return Math.round(Number(text) * 100);
+  const fen = Math.round(Number(text) * 100);
+  if (fen > MAX_STATEMENT_LINE_FEN) throw new StatementParseError(`第 ${lineNo} 行的${label}“${text}”太大了，一行最多 ${MAX_STATEMENT_LINE_FEN / 100} 元`);
+  return fen;
 }
 
 const HEADERS = { orderNo: "受理单号", phone: "办理号码", bizType: "业务类型", commission: "佣金", clawback: "返销" } as const;
@@ -114,7 +119,10 @@ export function parseStatementCsv(text: string): StatementLine[] {
     const typeText = get(idx.bizType);
     const bizType = typeText ? (typeByLabel.get(typeText) ?? null) : null;
     if (typeText && !bizType) throw new StatementParseError(`第 ${lineNo} 行的业务类型“${typeText}”不认识（新号入网、携号转入、合约机、宽带、套餐升级）`);
-    return { carrierOrderNo, phone, bizType, commissionFen: yuanToFenStrict(get(idx.commission), lineNo, "佣金"), clawbackFen: yuanToFenStrict(get(idx.clawback), lineNo, "返销") };
+    const commissionFen = yuanToFenStrict(get(idx.commission), lineNo, "佣金");
+    const clawbackFen = yuanToFenStrict(get(idx.clawback), lineNo, "返销");
+    if (commissionFen > 0 && clawbackFen > 0) throw new StatementParseError(`第 ${lineNo} 行佣金和返销都有，一行只能是一种，拆成两行`);
+    return { carrierOrderNo, phone, bizType, commissionFen, clawbackFen };
   });
 }
 

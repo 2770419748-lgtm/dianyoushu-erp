@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
+import { isUniqueViolation } from "@/server/db-errors";
 import {
   carrierActions,
   CarrierError,
@@ -24,6 +25,8 @@ async function run(fn: () => Promise<{ id?: number; message?: string } | void>):
     return { ok: true, id: result?.id, message: result?.message };
   } catch (error) {
     if (error instanceof CarrierError || error instanceof PermissionError) return { ok: false, error: error.message };
+    // 两个人同时登记同一个受理单号、同时对同一个月的账：数据库唯一约束兜底
+    if (isUniqueViolation(error)) return { ok: false, error: "刚被别人登记或对过账了，刷新看一下" };
     console.error(error);
     return { ok: false, error: "操作失败，请稍后再试" };
   }

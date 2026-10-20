@@ -89,6 +89,15 @@ export interface CarrierBusinessInput {
 }
 
 const PHONE = /^1\d{10}$/;
+const CARRIER_ORDER_NO = /^[A-Za-z0-9-]{4,40}$/;
+
+/** 受理单号：格式对、同一运营商没作废的业务里不重复（对账按它对，重复了只能对上一笔）；数据库还有部分唯一索引兜底 */
+async function checkCarrierOrderNo(tx: Tx, carrier: Carrier, carrierOrderNo: string | null, exceptId?: number) {
+  if (!carrierOrderNo) return;
+  if (!CARRIER_ORDER_NO.test(carrierOrderNo)) throw new CarrierError("受理单号只能是字母、数字和横线（4～40 位）");
+  const dup = await tx.carrierBusiness.findFirst({ where: { carrier, carrierOrderNo, status: { not: "VOIDED" }, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { orderNo: true } });
+  if (dup) throw new CarrierError(`${CARRIER_LABELS[carrier]}的受理单号 ${carrierOrderNo} 已经登记在 ${dup.orderNo} 上了`);
+}
 
 export async function registerBusinessTx(tx: Tx, user: CurrentUser, input: CarrierBusinessInput) {
   if (!canHandleCarrier(user.role)) throw new CarrierError("你的角色不能登记运营商业务");
@@ -107,7 +116,7 @@ export async function registerBusinessTx(tx: Tx, user: CurrentUser, input: Carri
   const monthlyFeeFen = input.monthlyFeeFen === undefined || input.monthlyFeeFen === null || input.monthlyFeeFen === "" ? null : Number(input.monthlyFeeFen);
   if (monthlyFeeFen !== null && !isValidFen(monthlyFeeFen)) throw new CarrierError("月租金额不对");
   const carrierOrderNo = text(input.carrierOrderNo, 40) || null;
-  if (carrierOrderNo && !/^[A-Za-z0-9-]{4,40}$/.test(carrierOrderNo)) throw new CarrierError("受理单号只能是字母、数字和横线");
+  await checkCarrierOrderNo(tx, carrier, carrierOrderNo);
 
   let customerId: number | null = null;
   if (input.customerId) {
@@ -164,6 +173,7 @@ export async function confirmBusinessTx(tx: Tx, user: CurrentUser, id: number, i
   if (user.role === "STAFF" && row.handledById !== user.id) throw new CarrierError("店员只能确认自己经办的业务，别人的找店长");
   if (row.status !== "SUBMITTED") throw new CarrierError("已登记的业务才能确认开通或失败");
   const carrierOrderNo = text(input.carrierOrderNo, 40) || row.carrierOrderNo;
+  if (input.activated && carrierOrderNo !== row.carrierOrderNo) await checkCarrierOrderNo(tx, row.carrier, carrierOrderNo, id);
   if (input.activated) {
     await tx.carrierBusiness.update({ where: { id }, data: { status: "ACTIVATED", activatedAt: new Date(), carrierOrderNo } });
   } else {
@@ -201,12 +211,11 @@ export async function syncSimulatedStatus(user: CurrentUser, options: { db?: Db;
     let failed = 0;
     for (const r of rows) {
       if (random() < 0.92) {
+        // 条件写入：读出来之后被店员手动确认、作废了的不动
         const carrierOrderNo = r.carrierOrderNo ?? `${r.carrier}${Date.now().toString().slice(-8)}${String(r.id).padStart(6, "0")}`;
-        await tx.carrierBusiness.update({ where: { id: r.id }, data: { status: "ACTIVATED", activatedAt: new Date(), carrierOrderNo } });
-        activated++;
+        activated += (await tx.carrierBusiness.updateMany({ where: { id: r.id, status: "SUBMITTED" }, data: { status: "ACTIVATED", activatedAt: new Date(), carrierOrderNo } })).count;
       } else {
-        await tx.carrierBusiness.update({ where: { id: r.id }, data: { status: "FAILED", failedReason: FAIL_REASONS[Math.floor(random() * FAIL_REASONS.length)]! } });
-        failed++;
+        failed += (await tx.carrierBusiness.updateMany({ where: { id: r.id, status: "SUBMITTED" }, data: { status: "FAILED", failedReason: FAIL_REASONS[Math.floor(random() * FAIL_REASONS.length)]! } })).count;
       }
     }
     await writeAudit({ userId: user.id, action: "carrier.sync_simulated", detail: { activated, failed } }, tx);
@@ -222,7 +231,11 @@ export const carrierActions = {
 
 // ---------- 结算对账 ----------
 
+/** 同一个运营商的结算单一次只对一张：两个月份同时导入时，后一张要等前一张对完再读候选，不会把同一笔结算两次 */
+const CARRIER_SETTLE_LOCK_NS = -75;
+
 async function importLinesTx(tx: Tx, user: CurrentUser, carrier: Carrier, month: string, lines: StatementLine[], source: "FILE" | "SIMULATED") {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${CARRIER_SETTLE_LOCK_NS}::int, hashtext(${carrier}::text))`;
   if (await tx.carrierSettlement.findUnique({ where: { carrier_month: { carrier, month } } })) throw new CarrierError(`${CARRIER_LABELS[carrier]} ${month} 已经对过账了，一个月只能对一次`);
   const { from, to } = monthRange(month);
   // 候选：这个运营商已开通、已结算的业务（返销可能是以前月份的）
@@ -252,8 +265,15 @@ async function importLinesTx(tx: Tx, user: CurrentUser, carrier: Carrier, month:
     },
   });
   await tx.carrierSettlementLine.createMany({ data: result.lines.map((l) => ({ settlementId: settlement.id, carrierOrderNo: l.carrierOrderNo, phone: l.phone, bizType: l.bizType, commissionFen: l.commissionFen, clawbackFen: l.clawbackFen, businessId: l.businessId, result: l.result })) });
-  for (const s of result.settle) await tx.carrierBusiness.update({ where: { id: s.id }, data: { status: "SETTLED", settledFen: s.settledFen, settlementId: settlement.id } });
-  for (const c of result.clawback) await tx.carrierBusiness.update({ where: { id: c.id }, data: { status: "CLAWED_BACK", clawbackFen: c.clawbackFen } });
+  // 条件写入兜底：读候选之后被别处改过状态的，整张单不落（加了锁正常碰不到）
+  for (const s of result.settle) {
+    const done = await tx.carrierBusiness.updateMany({ where: { id: s.id, status: "ACTIVATED" }, data: { status: "SETTLED", settledFen: s.settledFen, settlementId: settlement.id } });
+    if (done.count === 0) throw new CarrierError("有业务刚被别的结算单对过了，刷新后重新导入");
+  }
+  for (const c of result.clawback) {
+    const done = await tx.carrierBusiness.updateMany({ where: { id: c.id, status: { in: ["ACTIVATED", "SETTLED"] } }, data: { status: "CLAWED_BACK", clawbackFen: c.clawbackFen } });
+    if (done.count === 0) throw new CarrierError("有业务刚被别的结算单返销过了，刷新后重新导入");
+  }
   await writeAudit({ userId: user.id, action: "carrier.settlement.import", entity: "carrier_settlement", entityId: settlement.id, detail: { settlementNo, carrier, month, source, lines: lines.length, missing: result.missing.length } }, tx);
   return { id: settlement.id, settlementNo };
 }

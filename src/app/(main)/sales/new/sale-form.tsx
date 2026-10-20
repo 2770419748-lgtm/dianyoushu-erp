@@ -181,6 +181,7 @@ export function SaleForm({
     // 本单只有一台机器时默认保它；有好几台要店员选
     const deviceId = serviceDeviceId ?? (deviceLines.length === 1 ? deviceLines[0]!.deviceId : undefined);
     if (deviceLines.length > 1 && deviceId === undefined) return message.warning("本单有好几台机器，选一下这份服务保哪台");
+    if (sv.kind === "EXTENDED_WARRANTY" && deviceId === undefined) return message.warning(`${sv.name} 要和机器同一张单买：先加机器，再选保哪台`);
     const device = deviceLines.find((l) => l.deviceId === deviceId);
     const key = `s-${sv.skuId}-${deviceId ?? 0}`;
     if (lines.some((l) => l.key === key)) return message.warning(`这台机器已经加过 ${sv.name}`);

@@ -43,6 +43,8 @@ describe("结算单 CSV", () => {
     expect(() => parseStatementCsv("受理单号,佣金\nA1,1.234")).toThrow("不是金额");
     expect(() => parseStatementCsv("受理单号,办理号码,佣金\n,,10")).toThrow("第 2 行没有受理单号也没有号码");
     expect(() => parseStatementCsv("受理单号,业务类型,佣金\nA1,靓号,10")).toThrow("业务类型“靓号”不认识");
+    expect(() => parseStatementCsv("受理单号,佣金,返销\nA1,80,80")).toThrow("第 2 行佣金和返销都有");
+    expect(() => parseStatementCsv("受理单号,佣金\nA1,99999999.99")).toThrow("太大了");
   });
 
   it("生成的 CSV 能原样读回来", () => {

@@ -73,7 +73,7 @@ export function SettlementDetailView({ detail }: { detail: CarrierSettlementDeta
           <Alert
             type="warning"
             showIcon
-            title={`有 ${problem} 处要跟运营商核对：金额不符 ${detail.diffCount} 笔、结算单里有但我们没登记 ${detail.unmatchedCount} 笔、我们开通了但结算单里没有 ${detail.missing.length} 笔`}
+            title={`有 ${problem} 处要跟运营商核对：金额不符 ${detail.diffCount} 笔、结算单里有但我们没登记 ${detail.unmatchedCount} 笔、我们开通了但结算单里没有的现在还剩 ${detail.missing.length} 笔`}
             description="金额不符的按运营商给的记实收；漏给的还是“已开通”，下个月结算单补给了会对上，或者拿着清单找运营商渠道经理申诉。"
           />
         ) : (
@@ -83,7 +83,8 @@ export function SettlementDetailView({ detail }: { detail: CarrierSettlementDeta
       <Card title={`结算单明细（${detail.lines.length} 行）`}>
         <Table rowKey="id" size="small" columns={lineColumns} dataSource={detail.lines} scroll={{ x: true }} pagination={{ pageSize: 50, hideOnSinglePage: true }} />
       </Card>
-      <Card title={`我们开通了、这张结算单里没有的（${detail.missing.length}）`}>
+      <Card title={`我们开通了、这张结算单里没有的：导入时 ${detail.missingCount} 笔，现在还有 ${detail.missing.length} 笔没给`}>
+        <Typography.Paragraph type="secondary">清单按现在的状态算：后面月份的结算单补给了的，就不在这里了。</Typography.Paragraph>
         <Table rowKey="id" size="small" columns={missingColumns} dataSource={detail.missing} scroll={{ x: true }} locale={{ emptyText: "没有漏给的" }} pagination={{ pageSize: 50, hideOnSinglePage: true }} />
       </Card>
     </Space>

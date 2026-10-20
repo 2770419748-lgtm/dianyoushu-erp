@@ -360,6 +360,7 @@ async function main() {
     const extendedSku = serviceSkus.find((x) => SERVICE_KIND_BY_SKU.get(x.id) === "EXTENDED_WARRANTY");
     if (extendedSku) {
       const popularOld = [...deviceSkus].sort((a, b) => deviceWeight(b) - deviceWeight(a)).slice(0, 20);
+      const oldCloses = new Map<string, { closeId: number; wechatFen: number; saleIds: number[]; bizDate: Date }>(); // 那天的日结（同一天两张老单合一张）
       for (let k = 0; k < 4; k++) {
         const oldDate = bizDateOf(-between(380, 420));
         const sku = pick(popularOld);
@@ -369,7 +370,9 @@ async function main() {
         const saleId = ++ids.sale;
         const no = docNo("SO", oldDate);
         const salesperson = pick(staff);
-        const customerId = customerFor(true)!;
+        // 老客户单独建档，建档时间早于开单（不从后面的客户池里借）
+        const customerId = ++ids.customer;
+        out.customers.push({ id: customerId, name: pick(SURNAMES) + pick(GIVEN) + (chance(0.4) ? pick(GIVEN) : ""), phone: newPhone(), note: null, createdAt: new Date(t.getTime() - between(5, 20) * 60000) });
         const deviceItem: SaleItemRec = { id: ++ids.saleItem, orderId: saleId, skuId: sku.id, deviceId: device.id, qty: 1, unitPriceFen: sku.guidePriceFen, discountFen: 0, lineTotalFen: sku.guidePriceFen, costFen: device.costFen, returnedQty: 0 };
         const serviceItem: SaleItemRec = { id: ++ids.saleItem, orderId: saleId, skuId: extendedSku.id, deviceId: null, qty: 1, unitPriceFen: extendedSku.guidePriceFen, discountFen: 0, lineTotalFen: extendedSku.guidePriceFen, costFen: extendedSku.costPriceFen, returnedQty: 0 };
         const totalFen = deviceItem.lineTotalFen + serviceItem.lineTotalFen;
@@ -382,6 +385,21 @@ async function main() {
         out.entitlements.push({ id: ++ids.entitlement, customerId, storeId: store.id, salesOrderId: saleId, salesOrderItemId: serviceItem.id, skuId: extendedSku.id, deviceId: device.id, ...entitlementPeriod("EXTENDED_WARRANTY", oldDate, extendedSku.serviceMonths!), status: "ACTIVE", voidedAt: null, createdAt: t, updatedAt: t });
         soldDevices.push({ deviceId: device.id, saleId, bizDate: oldDate, customerId });
         oldSaleIds.add(saleId);
+        const dayKey = oldDate.toISOString().slice(0, 10);
+        const close = oldCloses.get(dayKey) ?? { closeId: ++ids.close, wechatFen: 0, saleIds: [], bizDate: oldDate };
+        close.wechatFen += totalFen;
+        close.saleIds.push(saleId);
+        oldCloses.set(dayKey, close);
+      }
+      // 老单那几天的日结：店长当晚确认，系统数 = 当天老单的微信收款（演示数据别的日子从 92 天前开始）
+      for (const c of oldCloses.values()) {
+        const t = at(c.bizDate, 22, between(0, 30));
+        out.closes.push({ id: c.closeId, closeNo: docNo("DC", c.bizDate), storeId: store.id, bizDate: c.bizDate, status: "CONFIRMED", confirmedById: manager.id, confirmedAt: t, note: null, createdAt: t, updatedAt: t });
+        for (const method of ["CASH", "WECHAT", "ALIPAY", "CARD", "INSTALLMENT", "OTHER", "TRADE_IN"] as PaymentMethod[]) {
+          const fen = method === "WECHAT" ? c.wechatFen : 0;
+          out.closeLines.push({ id: ++ids.closeLine, dailyCloseId: c.closeId, method, systemFen: fen, actualFen: fen, diffFen: 0 });
+        }
+        for (const id of c.saleIds) out.sales.find((x) => x.id === id)!.dailyCloseId = c.closeId;
       }
     }
 

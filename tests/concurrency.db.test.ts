@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
+import type { CurrentUser } from "@/server/auth/current-user";
+import { importSettlementCsv } from "@/server/carrier/carrier-service";
 import { lockStoreDay } from "@/server/dailyclose/guard";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 
@@ -112,5 +114,33 @@ describe("并发（连本机库）", () => {
     await Promise.all([first, second, other]);
     expect(events.indexOf("B 拿到锁")).toBeGreaterThan(events.indexOf("A 结束"));
     expect(events.indexOf("别店拿到锁")).toBeLessThan(events.indexOf("A 结束"));
+  });
+  it("同一运营商两个月的结算单同时导入：同一笔业务只结算一次（按运营商排队，运营商复查记录项 1）", async (ctx) => {
+    if (!ready) return ctx.skip();
+    const hq = await prisma.user.findFirst({ where: { role: "HQ" } });
+    const store = await prisma.store.findFirst({ orderBy: { id: "asc" }, skip: 2, select: { id: true } });
+    if (!hq || !store) return ctx.skip();
+    const user = { ...hq, store: null, region: null } as CurrentUser;
+    const months = ["2019-01", "2019-02"]; // 不会有真实结算单的月份
+    const business = await prisma.carrierBusiness.create({
+      data: { orderNo: "RACE-YY-0001", storeId: store.id, handledById: hq.id, carrier: "CTCC", bizType: "BROADBAND", phone: "13800009951", packageName: "并发测试", carrierOrderNo: "RACE-JS-0001", bizDate: new Date("2019-01-10"), expectedCommissionFen: 13000, clawbackMonths: 12, status: "ACTIVATED", activatedAt: new Date() },
+    });
+    try {
+      const csv = "受理单号,佣金\nRACE-JS-0001,130";
+      const results = await Promise.allSettled(months.map((month) => importSettlementCsv(user, { carrier: "CTCC", month, csv })));
+      expect(results.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"]);
+      const paid = await prisma.carrierSettlementLine.count({ where: { businessId: business.id, result: { in: ["MATCHED", "DIFF"] }, clawbackFen: 0 } });
+      expect(paid).toBe(1);
+      const after = await prisma.carrierBusiness.findUniqueOrThrow({ where: { id: business.id } });
+      expect([after.status, after.settledFen]).toEqual(["SETTLED", 13000]);
+    } finally {
+      const settlements = await prisma.carrierSettlement.findMany({ where: { carrier: "CTCC", month: { in: months } }, select: { id: true } });
+      const ids = settlements.map((s) => s.id);
+      await prisma.carrierBusiness.update({ where: { id: business.id }, data: { settlementId: null } });
+      await prisma.carrierSettlementLine.deleteMany({ where: { settlementId: { in: ids } } });
+      await prisma.carrierSettlement.deleteMany({ where: { id: { in: ids } } });
+      await prisma.carrierBusiness.delete({ where: { id: business.id } });
+      await prisma.auditLog.deleteMany({ where: { action: "carrier.settlement.import", entityId: { in: ids.map(String) } } });
+    }
   });
 });

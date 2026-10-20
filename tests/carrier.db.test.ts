@@ -197,6 +197,24 @@ describe("运营商业务（连本机库，事务回滚）", () => {
     });
   });
 
+  it("受理单号：同一运营商没作废的不能重复，作废了可以再用；确认开通时也校验格式", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const f = fixture;
+    await inRolledBackTx(async (tx) => {
+      await setRule(tx, "CMCC", "NEW_LINE", 8000);
+      await setRule(tx, "CUCC", "NEW_LINE", 7000);
+      const first = await registerBusinessTx(tx, f.staff, { ...base(f.storeId, "13800009931"), carrierOrderNo: "DUP-0001" });
+      await expect(registerBusinessTx(tx, f.staff, { ...base(f.storeId, "13800009932"), carrierOrderNo: "DUP-0001" })).rejects.toThrow("已经登记在");
+      await expect(registerBusinessTx(tx, f.staff, { ...base(f.storeId, "13800009932"), carrier: "CUCC", carrierOrderNo: "DUP-0001" })).resolves.toBeTruthy(); // 不同运营商不算重复
+      const second = await registerBusinessTx(tx, f.staff, base(f.storeId, "13800009933"));
+      await expect(confirmBusinessTx(tx, f.staff, second.id, { activated: true, carrierOrderNo: "中文 单号!" })).rejects.toThrow("字母、数字和横线");
+      await expect(confirmBusinessTx(tx, f.staff, second.id, { activated: true, carrierOrderNo: "DUP-0001" })).rejects.toThrow("已经登记在");
+      await voidBusinessTx(tx, f.manager, first.id, "登记错了");
+      await confirmBusinessTx(tx, f.staff, second.id, { activated: true, carrierOrderNo: "DUP-0001" });
+      expect((await tx.carrierBusiness.findUniqueOrThrow({ where: { id: second.id } })).carrierOrderNo).toBe("DUP-0001");
+    });
+  });
+
   it("业务明细：店员只看到自己经办的", async (ctx) => {
     if (!fixture) return ctx.skip();
     const f = fixture;

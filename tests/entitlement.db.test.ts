@@ -112,6 +112,8 @@ describe("服务权益（连本机库，事务回滚）", () => {
       const period = entitlementPeriod("EXTENDED_WARRANTY", order.bizDate, extended.serviceMonths!);
       expect([ymd(e.startedOn), ymd(e.expiresOn)]).toEqual([ymd(period.startedOn), ymd(period.expiresOn)]);
       expect(ymd(e.startedOn)).toBe(ymd(new Date(warrantyEndsOn(order.bizDate).getTime() + 86400000)));
+      // 延保要和机器同单买、保本单的机器：不绑机器的拦下
+      await expect(createSalesOrderTx(tx, f.user, { storeId: f.storeId, customerId, items: [{ skuId: extended.id, qty: 1 }], paymentMethod: "CASH" })).rejects.toThrow("要和机器同一张单买");
     });
   });
 
