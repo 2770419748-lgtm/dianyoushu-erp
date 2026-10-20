@@ -273,12 +273,25 @@ const MENU_HQ: MenuEntry[] = [
   ROADMAP,
 ];
 
-/** 登录后左侧菜单。options.wecom：企业微信对接开着（真对接或演示里的模拟）时，总部多一个“企微对接” */
+const WECOM_SIDEBAR: MenuEntry = { key: "wecom-sidebar", label: "企微侧边栏", href: "/wecom/sidebar" };
+
+/** 在“后续规划”前面插几项 */
+function beforeRoadmap(menu: MenuEntry[], extra: MenuEntry[]): MenuEntry[] {
+  const at = menu.findIndex((m) => m.key === "roadmap");
+  return [...menu.slice(0, at), ...extra, ...menu.slice(at)];
+}
+
+/**
+ * 登录后左侧菜单。options.wecom：企业微信对接开着（真对接或演示里的模拟）时，总部多一个“企微对接”，
+ * 店员、店长多一个“企微侧边栏”（口径第 12 节第三步）
+ */
 export function getMenuForRole(role: Role, options: { wecom?: boolean } = {}): MenuEntry[] {
   if (role === "HQ" && options.wecom) {
     const logsAt = MENU_HQ.findIndex((m) => m.key === "logs");
     return [...MENU_HQ.slice(0, logsAt), { key: "wecom", label: "企微对接", href: "/wecom" }, ...MENU_HQ.slice(logsAt)];
   }
+  if (options.wecom && role === "STAFF") return beforeRoadmap(MENU_STAFF, [WECOM_SIDEBAR]);
+  if (options.wecom && role === "STORE_MANAGER") return beforeRoadmap(MENU_STORE_MANAGER, [WECOM_SIDEBAR]);
   switch (role) {
     case "STAFF":
       return MENU_STAFF;

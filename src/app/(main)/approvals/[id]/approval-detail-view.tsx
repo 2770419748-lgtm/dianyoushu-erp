@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Alert, App, Button, Card, Descriptions, Input, List, Modal, Space, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Descriptions, Input, Modal, Space, Tag, Typography } from "antd";
+import { SimpleList } from "@/components/simple-list";
 import { APPROVAL_ACTION_LABELS, APPROVAL_RULE_LABELS, APPROVAL_STATUS_COLORS, APPROVAL_STATUS_LABELS, APPROVER_ROLE_LABELS, type ApprovalRuleKindKey } from "@/lib/approval";
 import { formatDateTime, formatFen } from "@/lib/format";
 import type { ApprovalDetail } from "@/server/approval/approval-service";
@@ -78,22 +79,20 @@ export function ApprovalDetailView({ detail }: { detail: ApprovalDetail }) {
         />
       </Card>
       <Card title="为什么要批" size="small">
-        <List
-          size="small"
-          dataSource={detail.reasons}
-          renderItem={(r) => (
-            <List.Item>
-              <Space>
-                <Tag>{APPROVAL_RULE_LABELS[r.kind as ApprovalRuleKindKey] ?? r.kind}</Tag>
-                {r.text}
-              </Space>
-            </List.Item>
+        <SimpleList
+          items={detail.reasons}
+          rowKey={(r) => r.kind}
+          render={(r) => (
+            <Space>
+              <Tag>{APPROVAL_RULE_LABELS[r.kind as ApprovalRuleKindKey] ?? r.kind}</Tag>
+              {r.text}
+            </Space>
           )}
         />
       </Card>
       {detail.details.length > 0 ? (
         <Card title="明细" size="small">
-          <List size="small" dataSource={detail.details} renderItem={(d) => <List.Item>{d}</List.Item>} />
+          <SimpleList items={detail.details} rowKey={(_, i) => i} render={(d) => d} />
         </Card>
       ) : null}
       <Modal title={modal === "approve" ? "通过" : "驳回"} open={modal !== null} confirmLoading={pending} onCancel={() => setModal(null)} onOk={() => act(() => (modal === "approve" ? approveAction(detail.id, note) : rejectAction(detail.id, note)))} destroyOnHidden>

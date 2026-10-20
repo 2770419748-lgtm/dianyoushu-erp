@@ -4,6 +4,7 @@ import { COOKIE_NAME, verifySessionToken } from "@/server/auth/token";
 // 请求入口做三件事：
 // 1. 坏的 % 编码地址直接 404；
 // 2. 看一眼登录 cookie：没登录的去登录页，已登录的别再进登录页（只是“乐观检查”，账号是否有效在页面和服务层查库确认）；
+//    企微侧边栏 /wecom-app 例外，它用自己的票；
 // 3. 给页面加内容安全策略（CSP），限制页面只能运行本站发出的脚本，防注入（XSS）。
 
 /**
@@ -15,7 +16,7 @@ import { COOKIE_NAME, verifySessionToken } from "@/server/auth/token";
  * 开发环境多一个 'unsafe-eval'：React 开发模式用 eval 还原报错堆栈，生产环境不需要。
  * 没加 upgrade-insecure-requests：备案前用 http://服务器IP 演示时，它会把请求强行升级成 https 导致打不开。
  */
-function contentSecurityPolicy(nonce: string): string {
+function contentSecurityPolicy(nonce: string, options: { frameSelf?: boolean } = {}): string {
   const isDev = process.env.NODE_ENV === "development";
   return [
     "default-src 'self'",
@@ -29,13 +30,14 @@ function contentSecurityPolicy(nonce: string): string {
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
-    "frame-ancestors 'none'",
+    // 企微侧边栏（/wecom-app）允许被本站框住：演示页用 iframe 模拟企业微信的侧边栏。真机如果被挡，再按实测加企业微信的域名
+    options.frameSelf ? "frame-ancestors 'self'" : "frame-ancestors 'none'",
   ].join("; ");
 }
 
-function nextWithCsp(request: NextRequest): NextResponse {
+function nextWithCsp(request: NextRequest, options: { frameSelf?: boolean } = {}): NextResponse {
   const nonce = btoa(crypto.randomUUID());
-  const csp = contentSecurityPolicy(nonce);
+  const csp = contentSecurityPolicy(nonce, options);
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", csp); // Next.js 从这里取 nonce
@@ -52,6 +54,8 @@ export async function proxy(request: NextRequest) {
   } catch {
     return new NextResponse(null, { status: 404 });
   }
+  // 企微侧边栏：不看 ERP 登录（它有自己的票，页面和接口里核对），也不往 ERP 登录页跳
+  if (pathname === "/wecom-app" || pathname.startsWith("/wecom-app/")) return nextWithCsp(request, { frameSelf: true });
   const session = await verifySessionToken(request.cookies.get(COOKIE_NAME)?.value);
 
   if (pathname.startsWith("/login")) {

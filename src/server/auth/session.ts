@@ -10,7 +10,7 @@ const SESSION_DAYS = 7;
  * 如果一律按“生产环境就加 Secure”，浏览器会丢掉 cookie，怎么都登录不进去。
  * 也可以用环境变量 COOKIE_SECURE=1 / 0 强制。
  */
-async function shouldUseSecureCookie(): Promise<boolean> {
+export async function shouldUseSecureCookie(): Promise<boolean> {
   if (process.env.COOKIE_SECURE === "1") return true;
   if (process.env.COOKIE_SECURE === "0") return false;
   const proto = (await headers()).get("x-forwarded-proto")?.split(",")[0]?.trim();

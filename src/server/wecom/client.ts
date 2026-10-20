@@ -32,6 +32,10 @@ export interface WecomClient {
   getExternalContact(externalUserid: string): Promise<{ name: string; avatar: string | null }>;
   /** 加好友事件里的 welcome_code 只能在 20 秒内用一次 */
   sendWelcomeMessage(welcomeCode: string, text: string): Promise<void>;
+  /** 侧边栏网页授权：用授权跳回来的 code 换员工的企业微信账号；不是企业成员（比如客户自己点开）返回 null */
+  getUserIdByOAuthCode(code: string): Promise<string | null>;
+  /** 应用的 jsapi_ticket：侧边栏 JS-SDK 的 agentConfig 签名要用，和令牌一样落库缓存 */
+  getAgentJsapiTicket(): Promise<string>;
 }
 
 // ---------- 错误码 ----------
@@ -64,6 +68,8 @@ const TOKEN_ERRCODES = new Set([40014, 41001, 42001]);
 export const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const TOKEN_CACHE_KEY = "app";
 const TOKEN_LOCK_KEY = 7311001; // 咨询锁的键（单个 bigint，和门店日结用的两个 int 的锁不在一个键空间）
+const TICKET_CACHE_KEY = "agent_ticket"; // 应用的 jsapi_ticket，有效期也是 7200 秒，同样过期前 5 分钟刷新
+const TICKET_LOCK_KEY = 7311002;
 
 export function tokenNeedsRefresh(expiresAt: Date | null | undefined, now: Date): boolean {
   return !expiresAt || expiresAt.getTime() - now.getTime() <= TOKEN_REFRESH_MARGIN_MS;
@@ -100,19 +106,21 @@ export function createRealWecomClient(options: { corpId: string; secret: string;
     return { token: String(data.access_token), expiresAt: new Date(now().getTime() + seconds * 1000) };
   }
 
-  /** 读缓存；快过期或者 stale（刚被企业微信判无效的那个）就排队刷新 */
-  async function getToken(stale?: string): Promise<string> {
-    const cached = await db.wecomTokenCache.findUnique({ where: { key: TOKEN_CACHE_KEY } });
-    if (cached && cached.token !== stale && !tokenNeedsRefresh(cached.expiresAt, now())) return cached.token;
+  /** 读缓存；快过期或者 stale（刚被企业微信判无效的那个）就排队刷新。令牌和 jsapi_ticket 都走这里 */
+  async function cached(key: string, lockKey: number, fetchFresh: () => Promise<{ token: string; expiresAt: Date }>, stale?: string): Promise<string> {
+    const hit = await db.wecomTokenCache.findUnique({ where: { key } });
+    if (hit && hit.token !== stale && !tokenNeedsRefresh(hit.expiresAt, now())) return hit.token;
     return withTx(db, async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${TOKEN_LOCK_KEY}::bigint)`;
-      const again = await tx.wecomTokenCache.findUnique({ where: { key: TOKEN_CACHE_KEY } });
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKey}::bigint)`;
+      const again = await tx.wecomTokenCache.findUnique({ where: { key } });
       if (again && again.token !== stale && !tokenNeedsRefresh(again.expiresAt, now())) return again.token; // 排队时别人已经刷新好了
-      const fresh = await fetchToken();
-      await tx.wecomTokenCache.upsert({ where: { key: TOKEN_CACHE_KEY }, create: { key: TOKEN_CACHE_KEY, ...fresh }, update: fresh });
+      const fresh = await fetchFresh();
+      await tx.wecomTokenCache.upsert({ where: { key }, create: { key, ...fresh }, update: fresh });
       return fresh.token;
     });
   }
+
+  const getToken = (stale?: string) => cached(TOKEN_CACHE_KEY, TOKEN_LOCK_KEY, fetchToken, stale);
 
   async function call(path: string, init: { method?: "GET" | "POST"; query?: Record<string, string>; body?: unknown } = {}): Promise<WecomJson> {
     let token = await getToken();
@@ -152,6 +160,18 @@ export function createRealWecomClient(options: { corpId: string; secret: string;
     async sendWelcomeMessage(welcomeCode, text) {
       await call("/externalcontact/send_welcome_msg", { method: "POST", body: { welcome_code: welcomeCode, text: { content: text } } });
     },
+    async getUserIdByOAuthCode(code) {
+      const data = await call("/auth/getuserinfo", { query: { code } });
+      const userid = data.userid ?? data.UserId; // 企业成员才有；外部的人只有 openid
+      return typeof userid === "string" && userid ? userid : null;
+    },
+    async getAgentJsapiTicket() {
+      return cached(TICKET_CACHE_KEY, TICKET_LOCK_KEY, async () => {
+        const data = await call("/ticket/get", { query: { type: "agent_config" } });
+        const seconds = Number(data.expires_in) || 7200;
+        return { token: String(data.ticket), expiresAt: new Date(now().getTime() + seconds * 1000) };
+      });
+    },
   };
 }
 
@@ -176,6 +196,12 @@ export function createSimulatedWecomClient(): WecomClient {
       return { name: simulatedNickname(externalUserid), avatar: null };
     },
     async sendWelcomeMessage() {},
+    async getUserIdByOAuthCode() {
+      throw new WecomError("模拟模式没有企业微信网页授权，侧边栏从“企微侧边栏”演示页打开");
+    },
+    async getAgentJsapiTicket() {
+      return "simulated-agent-ticket";
+    },
   };
 }
 

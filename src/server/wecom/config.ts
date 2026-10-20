@@ -46,5 +46,20 @@ export const BIND_CODE_DAYS = 30;
 /** 回调请求的时间戳和服务器时间差超过 5 分钟就拒收（防止有人把抓到的请求再发一遍） */
 export const CALLBACK_MAX_SKEW_SECONDS = 300;
 
+/** 外部联系人 id（客户的）：企业微信给的一串字母数字，侧边栏、客服从浏览器或回调拿到，先查格式 */
+export const EXTERNAL_USERID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * 侧边栏的企业微信网页授权地址（scope=snsapi_base，静默授权只拿员工账号）。
+ * 授权完企业微信跳回 redirectUri?code=…&state=…，state 用来防有人伪造跳转。
+ */
+export function buildOAuthUrl(input: { corpId: string; agentId: string; redirectUri: string; state: string }): string {
+  const qs = new URLSearchParams({ appid: input.corpId, redirect_uri: input.redirectUri, response_type: "code", scope: "snsapi_base", state: input.state, agentid: input.agentId });
+  return `https://open.weixin.qq.com/connect/oauth2/authorize?${qs}#wechat_redirect`;
+}
+
+/** 侧边栏 JS-SDK（企业微信老版本 jweixin + jwxwork 两个脚本，agentConfig 注入应用身份）。真联调时以官方文档的地址和版本为准 */
+export const WECOM_JSSDK_URLS = ["https://res.wx.qq.com/open/js/jweixin-1.2.0.js", "https://open.work.weixin.qq.com/wwopen/js/jwxwork-1.0.0.js"] as const;
+
 /** 企业微信 userid 的格式：1～64 位字母、数字和 _ - . @ */
 export const WECOM_USERID_PATTERN = /^[A-Za-z0-9_.@-]{1,64}$/;

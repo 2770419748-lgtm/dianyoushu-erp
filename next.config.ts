@@ -21,7 +21,11 @@ const nextConfig: NextConfig = {
   output: process.env.BUILD_STANDALONE === "1" ? "standalone" : undefined,
   poweredByHeader: false, // 不在响应头里暴露 "X-Powered-By: Next.js"
   async headers() {
-    return [{ source: "/:path*", headers: SECURITY_HEADERS }];
+    return [
+      { source: "/:path*", headers: SECURITY_HEADERS },
+      // 企微侧边栏允许被本站框住（演示页用 iframe 模拟企业微信的侧边栏）；后面的同名头覆盖前面的
+      { source: "/wecom-app/:path*", headers: [{ key: "X-Frame-Options", value: "SAMEORIGIN" }] },
+    ];
   },
 };
 

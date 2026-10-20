@@ -33,6 +33,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/approvals": "审批",
   "/approvals/rules": "审批规则",
   "/wecom": "企微对接",
+  "/wecom/sidebar": "企微侧边栏",
   "/sales": "销售单",
   "/sales/new": "开单",
   "/trade-ins": "回收单",

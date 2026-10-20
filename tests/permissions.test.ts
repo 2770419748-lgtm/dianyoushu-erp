@@ -71,9 +71,10 @@ describe("企业微信跟进关系谁能看（口径第 12 节）", () => {
     expect(canSeeWecomFollow({ id: 9, role: "STORE_MANAGER", storeId: 3, regionId: null }, orphan)).toBe(false);
     expect(canSeeWecomFollow({ id: 1, role: "HQ", storeId: null, regionId: null }, orphan)).toBe(true);
   });
-  it("企业微信对接开着时总部菜单多“企微对接”，别的角色不变", () => {
+  it("企业微信对接开着时总部菜单多“企微对接”，店员店长多“企微侧边栏”（第三步），区域经理不变", () => {
     expect(getMenuForRole("HQ").some((m) => m.key === "wecom")).toBe(false);
     expect(getMenuForRole("HQ", { wecom: true }).some((m) => m.key === "wecom")).toBe(true);
-    expect(getMenuForRole("STAFF", { wecom: true })).toEqual(getMenuForRole("STAFF"));
+    expect(getMenuForRole("STAFF", { wecom: true }).filter((m) => m.key !== "wecom-sidebar")).toEqual(getMenuForRole("STAFF"));
+    expect(getMenuForRole("REGIONAL_MANAGER", { wecom: true })).toEqual(getMenuForRole("REGIONAL_MANAGER"));
   });
 });

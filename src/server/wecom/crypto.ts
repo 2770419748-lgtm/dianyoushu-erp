@@ -20,6 +20,15 @@ export function verifyWecomSignature(signature: string, token: string, timestamp
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
+/**
+ * 侧边栏 JS-SDK 的 agentConfig 签名：sha1("jsapi_ticket=…&noncestr=…&timestamp=…&url=…")，
+ * url 是当前页面的完整地址（不含 # 后面的部分），参数名全小写、按这个顺序拼
+ */
+export function agentConfigSignature(ticket: string, nonceStr: string, timestamp: number, url: string): string {
+  const cleanUrl = url.split("#")[0]!;
+  return createHash("sha1").update(`jsapi_ticket=${ticket}&noncestr=${nonceStr}&timestamp=${timestamp}&url=${cleanUrl}`).digest("hex");
+}
+
 export function isValidAesKey(aesKey: string): boolean {
   return /^[A-Za-z0-9+/]{43}$/.test(aesKey) && Buffer.from(`${aesKey}=`, "base64").length === 32;
 }

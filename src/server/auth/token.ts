@@ -28,6 +28,7 @@ export async function verifySessionToken(token: string | undefined): Promise<Ses
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, getKey(), { algorithms: ["HS256"] });
+    if (payload.aud !== undefined) return null; // 带用途的票（比如企微侧边栏的）不是 ERP 登录票；侧边栏的密钥本来也不同，这里再挡一道
     const userId = payload.userId;
     if (typeof userId !== "number" || !Number.isInteger(userId)) return null;
     const sv = typeof payload.sv === "number" && Number.isInteger(payload.sv) ? payload.sv : 0;
