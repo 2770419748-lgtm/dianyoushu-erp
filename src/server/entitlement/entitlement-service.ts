@@ -3,7 +3,7 @@ import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ReminderStage } from "@/generated/prisma/enums";
-import { daysUntil, entitlementExpiresOn, stageDateRange, type ReminderStageKey } from "@/lib/entitlement";
+import { daysUntil, entitlementPeriod, stageDateRange, type ReminderStageKey } from "@/lib/entitlement";
 import { maskPhone } from "@/lib/sales-labels";
 import { canFollowUpReminders, canRunReminderScan, canSell } from "@/server/auth/permissions";
 import { assertStoreAccess, PermissionError, storeScopeWhere } from "@/server/auth/scope";
@@ -25,6 +25,7 @@ export interface EntitlementLine {
   skuId: number;
   deviceId: number | null;
   months: number;
+  kind: "SCREEN_INSURANCE" | "EXTENDED_WARRANTY" | "OTHER" | null; // 延保从保修到期次日起算
 }
 
 /** 开单事务里调用：每个服务行一条权益，生效日 = 营业日 */
@@ -38,8 +39,7 @@ export async function createEntitlementsTx(tx: Tx, input: { customerId: number; 
       salesOrderItemId: l.salesOrderItemId,
       skuId: l.skuId,
       deviceId: l.deviceId,
-      startedOn: input.bizDate,
-      expiresOn: entitlementExpiresOn(input.bizDate, l.months),
+      ...entitlementPeriod(l.kind, input.bizDate, l.months),
     })),
   });
   return result.count;
@@ -52,8 +52,8 @@ export async function voidEntitlementsTx(tx: Tx, where: { salesOrderId: number }
   return result.count;
 }
 
-function shape<T extends { expiresOn: Date }>(row: T, today: Date) {
-  return { ...row, daysLeft: daysUntil(row.expiresOn, today) };
+function shape<T extends { startedOn: Date; expiresOn: Date }>(row: T, today: Date) {
+  return { ...row, daysLeft: daysUntil(row.expiresOn, today), daysToStart: daysUntil(row.startedOn, today) };
 }
 
 /** 客户详情页的权益列表：客户档案全公司共享，权益也不分门店（口径第 8 节） */

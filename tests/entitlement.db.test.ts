@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
+import { entitlementPeriod, warrantyEndsOn } from "@/lib/entitlement";
 import { scanEntitlementReminders } from "@/server/entitlement/entitlement-service";
 import { createPurchaseOrder } from "@/server/purchase/purchase-service";
 import { createReturnTx } from "@/server/sales/return-service";
@@ -40,7 +41,7 @@ beforeAll(async () => {
     const [store, deviceSku, serviceSku, hq] = await Promise.all([
       prisma.store.findFirst({ where: { isActive: true }, orderBy: { id: "asc" } }),
       prisma.sku.findFirst({ where: { isActive: true, guidePriceFen: { gt: 0 }, model: { category: { kind: "DEVICE" } } }, orderBy: { id: "asc" } }),
-      prisma.sku.findFirst({ where: { isActive: true, isService: true, serviceMonths: 12 }, orderBy: { id: "asc" } }),
+      prisma.sku.findFirst({ where: { isActive: true, isService: true, serviceMonths: 12, serviceKind: "SCREEN_INSURANCE" }, orderBy: { id: "asc" } }),
       prisma.user.findFirst({ where: { role: "HQ" }, orderBy: { id: "asc" } }),
     ]);
     if (store && deviceSku && serviceSku && hq) {
@@ -95,6 +96,22 @@ describe("服务权益（连本机库，事务回滚）", () => {
       expect(serviceItem.costFen).toBe(f.serviceCostFen);
       expect(await tx.stockLedger.count({ where: { docNo: sale.orderNo, skuId: f.serviceSkuId } })).toBe(0);
       expect(await tx.accessoryStock.count({ where: { skuId: f.serviceSkuId } })).toBe(0);
+    });
+  });
+
+  it("开单带延保：从保修到期次日起算（营业日 + 12 个月），到期日再往后推服务期限", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const f = fixture;
+    const extended = await prisma.sku.findFirst({ where: { isActive: true, serviceKind: "EXTENDED_WARRANTY" } });
+    if (!extended) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const { customerId, deviceIds } = await setup(tx, 7);
+      const sale = await createSalesOrderTx(tx, f.user, { storeId: f.storeId, customerId, items: [{ deviceId: deviceIds[0] }, { skuId: extended.id, qty: 1, serviceDeviceId: deviceIds[0] }], paymentMethod: "CASH" });
+      const e = await tx.serviceEntitlement.findFirstOrThrow({ where: { salesOrderId: sale.id } });
+      const order = await tx.salesOrder.findUniqueOrThrow({ where: { id: sale.id } });
+      const period = entitlementPeriod("EXTENDED_WARRANTY", order.bizDate, extended.serviceMonths!);
+      expect([ymd(e.startedOn), ymd(e.expiresOn)]).toEqual([ymd(period.startedOn), ymd(period.expiresOn)]);
+      expect(ymd(e.startedOn)).toBe(ymd(new Date(warrantyEndsOn(order.bizDate).getTime() + 86400000)));
     });
   });
 

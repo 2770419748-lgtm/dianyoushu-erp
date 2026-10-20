@@ -30,6 +30,22 @@ export function entitlementExpiresOn(startedOn: Date, months: number): Date {
   return new Date(addMonthsClamped(startedOn, months).getTime() - DAY_MS);
 }
 
+/** 本店卖出的机器保修 12 个月（官方保修一年），从开单营业日算，到期日算法和服务权益一样（口径第 13 节） */
+export const WARRANTY_MONTHS = 12;
+
+export function warrantyEndsOn(purchasedOn: Date): Date {
+  return entitlementExpiresOn(purchasedOn, WARRANTY_MONTHS);
+}
+
+/**
+ * 一份服务的生效日和到期日（口径第 12 节）：碎屏险、其他服务从开单营业日起算；
+ * 延保接在保修后面，从保修到期次日起算（2026-10-20 坤总定），所以买 1 年延保 = 开单后第 13～24 个月。
+ */
+export function entitlementPeriod(kind: "SCREEN_INSURANCE" | "EXTENDED_WARRANTY" | "OTHER" | null, bizDate: Date, months: number): { startedOn: Date; expiresOn: Date } {
+  const startedOn = kind === "EXTENDED_WARRANTY" ? new Date(warrantyEndsOn(bizDate).getTime() + DAY_MS) : bizDate;
+  return { startedOn, expiresOn: entitlementExpiresOn(startedOn, months) };
+}
+
 /** 离到期还有几天：到期当天是 0，已经过期是负数 */
 export function daysUntil(expiresOn: Date, today: Date): number {
   return Math.round((expiresOn.getTime() - today.getTime()) / DAY_MS);
@@ -41,11 +57,12 @@ export function reminderStageFor(daysLeft: number): ReminderStageKey | null {
   return daysLeft <= REMINDER_T7_MAX_DAYS ? "T7" : "T30";
 }
 
-/** 页面上显示的权益状态 */
-export function entitlementStateLabel(status: "ACTIVE" | "VOIDED" | "CLAIMED", daysLeft: number): string {
+/** 页面上显示的权益状态；daysToStart > 0 是还没到生效日（延保要等保修到期） */
+export function entitlementStateLabel(status: "ACTIVE" | "VOIDED" | "CLAIMED", daysLeft: number, daysToStart = 0): string {
   if (status === "VOIDED") return "已失效";
   if (status === "CLAIMED") return "已理赔"; // 碎屏险在维修单上用掉了（口径第 13 节）
   if (daysLeft < 0) return "已过期";
+  if (daysToStart > 0) return "未生效";
   if (daysLeft <= REMINDER_T30_MAX_DAYS) return "即将到期";
   return "保障中";
 }

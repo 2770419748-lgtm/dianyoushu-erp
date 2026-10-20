@@ -1000,7 +1000,7 @@ model ServiceEntitlement {
   skuId            Int               @map("sku_id")
   deviceId         Int?              @map("device_id") // 保的哪台机器：开单时店员选，同单没有机器时为空
   deviceReturnedAt DateTime?         @map("device_returned_at") // 保的机器退回来了、服务没退：服务照常有效，但不再算这台机器的保障（机器可能再卖给别人）
-  startedOn        DateTime          @map("started_on") @db.Date // 生效日 = 销售单营业日
+  startedOn        DateTime          @map("started_on") @db.Date // 生效日：销售单营业日；延保是保修到期次日（营业日 + 12 个月）
   expiresOn        DateTime          @map("expires_on") @db.Date // 到期日（当天 24:00 失效），数据库 CHECK >= 生效日
   status           EntitlementStatus @default(ACTIVE)
   voidedAt         DateTime?         @map("voided_at")

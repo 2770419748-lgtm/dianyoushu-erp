@@ -114,7 +114,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   type Line = { skuId: number; deviceId: number | null; qty: number; listPriceFen: number; unitPriceFen: number; lineTotalFen: number; costFen: number };
   const lines: Line[] = [];
   // 服务行另记一份：保哪台机器、期限几个月（和 lines 按下标对应）
-  const serviceOf = new Map<number, { deviceId: number | null; months: number }>();
+  const serviceOf = new Map<number, { deviceId: number | null; months: number; kind: "SCREEN_INSURANCE" | "EXTENDED_WARRANTY" | "OTHER" | null }>();
   for (const d of data.deviceLines) {
     const device = await tx.device.findUnique({ where: { id: d.deviceId }, include: { sku: { select: { id: true, name: true, guidePriceFen: true } } } });
     if (!device) throw new SalesError("机器不存在");
@@ -135,7 +135,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
       if (a.serviceDeviceId !== null && !data.deviceLines.some((d) => d.deviceId === a.serviceDeviceId)) throw new SalesError(`${sku.name} 保的机器要是这张单里卖的机器`);
       const key = `${sku.id}:${a.serviceDeviceId ?? "无"}`;
       if (Array.from(serviceOf.entries()).some(([i, s]) => `${lines[i]!.skuId}:${s.deviceId ?? "无"}` === key)) throw new SalesError(`同一台机器的 ${sku.name} 选了两次`);
-      serviceOf.set(lines.length, { deviceId: a.serviceDeviceId, months: sku.serviceMonths ?? 0 });
+      serviceOf.set(lines.length, { deviceId: a.serviceDeviceId, months: sku.serviceMonths ?? 0, kind: sku.serviceKind });
     } else if (a.serviceDeviceId !== null) {
       throw new SalesError(`${sku.name} 不是服务类商品，不用选保哪台机器`);
     }
@@ -219,7 +219,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
       storeId: data.storeId,
       salesOrderId: order.id,
       bizDate,
-      lines: Array.from(serviceOf.entries()).map(([index, s]) => ({ salesOrderItemId: itemIds[index]!, skuId: lines[index]!.skuId, deviceId: s.deviceId, months: s.months })),
+      lines: Array.from(serviceOf.entries()).map(([index, s]) => ({ salesOrderItemId: itemIds[index]!, skuId: lines[index]!.skuId, deviceId: s.deviceId, months: s.months, kind: s.kind })),
     });
   }
 
@@ -323,7 +323,7 @@ export async function getSalesOrder(user: CurrentUser, id: number) {
       customer: { select: { id: true, name: true, phone: true } },
       salesperson: { select: { id: true, name: true } },
       voidedBy: { select: { name: true } },
-      items: { include: { sku: { select: { name: true, isService: true } }, device: { select: { code: true } }, entitlement: { select: { id: true, status: true, expiresOn: true, deviceReturnedAt: true, device: { select: { code: true } } } } } },
+      items: { include: { sku: { select: { name: true, isService: true } }, device: { select: { code: true } }, entitlement: { select: { id: true, status: true, startedOn: true, expiresOn: true, deviceReturnedAt: true, device: { select: { code: true } } } } } },
       payments: { orderBy: { id: "asc" } },
       tradeInOrder: { select: { id: true, orderNo: true, modelName: true, deviceCode: true, appraisedFen: true } },
       returnOrders: {

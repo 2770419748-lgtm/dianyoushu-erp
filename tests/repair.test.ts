@@ -26,8 +26,8 @@ describe("售后维修：谁来付", () => {
 
   it("碎屏险只管屏幕，过期了不能用；延保管非人为故障", () => {
     const ents = [
-      { id: 1, kind: "SCREEN_INSURANCE" as const, expiresOn: d("2027-01-01") },
-      { id: 2, kind: "EXTENDED_WARRANTY" as const, expiresOn: d("2027-06-01") },
+      { id: 1, kind: "SCREEN_INSURANCE" as const, startedOn: d("2026-01-02"), expiresOn: d("2027-01-01") },
+      { id: 2, kind: "EXTENDED_WARRANTY" as const, startedOn: d("2026-06-02"), expiresOn: d("2027-06-01") },
     ];
     const screen = payerOptions({ fault: "SCREEN", today: d("2026-10-20"), purchasedOn: null, entitlements: ents });
     expect(allowed(screen)).toEqual(["CUSTOMER", "SCREEN_INSURANCE"]);
@@ -37,6 +37,18 @@ describe("售后维修：谁来付", () => {
     expect(board.find((o) => o.payer === "EXTENDED_WARRANTY")!.entitlementId).toBe(2);
     const expired = payerOptions({ fault: "SCREEN", today: d("2027-02-01"), purchasedOn: null, entitlements: ents });
     expect(expired.find((o) => o.payer === "SCREEN_INSURANCE")!.allowed).toBe(false);
+  });
+
+  it("延保从保修到期次日起算：保修期内延保还没生效，先走保修；保修过了延保接上", () => {
+    // 2026-03-10 买的机器 + 1 年延保：保修到 2027-03-09，延保 2027-03-10 ～ 2028-03-09
+    const ents = [{ id: 3, kind: "EXTENDED_WARRANTY" as const, startedOn: d("2027-03-10"), expiresOn: d("2028-03-09") }];
+    const inWarranty = payerOptions({ fault: "BATTERY", today: d("2026-10-20"), purchasedOn: d("2026-03-10"), entitlements: ents });
+    expect(allowed(inWarranty)).toEqual(["CUSTOMER", "WARRANTY"]);
+    expect(inWarranty.find((o) => o.payer === "EXTENDED_WARRANTY")!.reason).toContain("2027-03-10 起生效");
+    const lastWarrantyDay = payerOptions({ fault: "BATTERY", today: d("2027-03-09"), purchasedOn: d("2026-03-10"), entitlements: ents });
+    expect(allowed(lastWarrantyDay)).toEqual(["CUSTOMER", "WARRANTY"]);
+    const firstExtendedDay = payerOptions({ fault: "BATTERY", today: d("2027-03-10"), purchasedOn: d("2026-03-10"), entitlements: ents });
+    expect(allowed(firstExtendedDay)).toEqual(["CUSTOMER", "EXTENDED_WARRANTY"]);
   });
 
   it("客户应付：自费 = 配件费 + 工时费，其他都是 0；屏幕和进水算人为损坏", () => {

@@ -15,7 +15,7 @@ import { RepairHistory } from "../../repairs/repair-history";
 
 type OrderRow = CustomerDetail["orders"][number];
 
-const STATE_COLORS: Record<string, string> = { 保障中: "green", 即将到期: "orange", 已过期: "default", 已失效: "default", 已理赔: "purple" };
+const STATE_COLORS: Record<string, string> = { 保障中: "green", 即将到期: "orange", 未生效: "blue", 已过期: "default", 已失效: "default", 已理赔: "purple" };
 
 type FollowRow = CustomerWecom["follows"][number];
 
@@ -50,7 +50,7 @@ export function CustomerDetailView({ detail, wecom, repairs }: { detail: Custome
     {
       title: "状态",
       render: (_, e) => {
-        const label = entitlementStateLabel(e.status, e.daysLeft);
+        const label = entitlementStateLabel(e.status, e.daysLeft, e.daysToStart);
         return <Tag color={STATE_COLORS[label]}>{label}</Tag>;
       },
     },

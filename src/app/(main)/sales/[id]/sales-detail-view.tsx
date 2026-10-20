@@ -26,7 +26,7 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
               {i.sku.name} {i.entitlement.status === "VOIDED" ? <Tag>已失效</Tag> : null}
             </span>
             <Typography.Text type="secondary">
-              {i.entitlement.device ? `保 ${i.entitlement.device.code}${i.entitlement.deviceReturnedAt ? "（机器已退回）" : ""}，` : ""}到 {formatDate(i.entitlement.expiresOn)} 止
+              {i.entitlement.device ? `保 ${i.entitlement.device.code}${i.entitlement.deviceReturnedAt ? "（机器已退回）" : ""}，` : ""}{i.entitlement.startedOn.getTime() > order.bizDate.getTime() ? `${formatDate(i.entitlement.startedOn)} 起（保修到期后），` : ""}到 {formatDate(i.entitlement.expiresOn)} 止
             </Typography.Text>
           </Space>
         ) : (

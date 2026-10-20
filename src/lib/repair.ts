@@ -1,5 +1,7 @@
 // 售后维修的规则（口径第 13 节）：状态名、故障类型、保修期、谁能付。纯函数，页面和服务层共用，单元测试见 tests/repair.test.ts。
-import { daysUntil, entitlementExpiresOn } from "./entitlement";
+import { daysUntil, WARRANTY_MONTHS, warrantyEndsOn } from "./entitlement";
+
+export { WARRANTY_MONTHS, warrantyEndsOn };
 
 export type RepairStatusKey = "RECEIVED" | "QUOTED" | "REPAIRING" | "READY" | "CLOSED" | "VOIDED";
 export type RepairPayerKey = "CUSTOMER" | "WARRANTY" | "SCREEN_INSURANCE" | "EXTENDED_WARRANTY";
@@ -47,12 +49,6 @@ export const SERVICE_KIND_LABELS: Record<ServiceKindKey, string> = {
   OTHER: "其他",
 };
 
-/** 本店卖出的机器保修 12 个月（官方保修一年），从开单营业日算，到期日算法和服务权益一样 */
-export const WARRANTY_MONTHS = 12;
-
-export function warrantyEndsOn(purchasedOn: Date): Date {
-  return entitlementExpiresOn(purchasedOn, WARRANTY_MONTHS);
-}
 
 /** 屏幕碎、进水算人为损坏：保修和延保都不管，屏幕找碎屏险 */
 export function isAccidentalDamage(fault: FaultCategoryKey): boolean {
@@ -63,7 +59,7 @@ export interface CoverageInput {
   fault: FaultCategoryKey;
   today: Date;
   purchasedOn: Date | null; // 本店卖出的机器才有
-  entitlements: { id: number; kind: ServiceKindKey; expiresOn: Date }[]; // 客户生效中、保这台机器的服务
+  entitlements: { id: number; kind: ServiceKindKey; startedOn: Date; expiresOn: Date }[]; // 客户生效中、保这台机器的服务
 }
 
 export interface PayerOption {
@@ -78,9 +74,11 @@ export function payerOptions(input: CoverageInput): PayerOption[] {
   const accidental = isAccidentalDamage(input.fault);
   const warrantyEnd = input.purchasedOn ? warrantyEndsOn(input.purchasedOn) : null;
   const inWarranty = warrantyEnd !== null && daysUntil(warrantyEnd, input.today) >= 0;
-  const valid = input.entitlements.filter((e) => daysUntil(e.expiresOn, input.today) >= 0);
+  // 在保障期内的：已经到了生效日、还没过到期日（延保要等保修到期次日才生效）
+  const valid = input.entitlements.filter((e) => daysUntil(e.expiresOn, input.today) >= 0 && daysUntil(e.startedOn, input.today) <= 0);
   const screen = valid.find((e) => e.kind === "SCREEN_INSURANCE");
   const extended = valid.find((e) => e.kind === "EXTENDED_WARRANTY");
+  const extendedLater = input.entitlements.find((e) => e.kind === "EXTENDED_WARRANTY" && daysUntil(e.startedOn, input.today) > 0);
   const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
   const warranty: PayerOption = !input.purchasedOn
@@ -98,7 +96,9 @@ export function payerOptions(input: CoverageInput): PayerOption[] {
       : { payer: "SCREEN_INSURANCE", allowed: true, reason: `碎屏险到 ${ymd(screen.expiresOn)}，理赔后用掉`, entitlementId: screen.id };
 
   const extendedOption: PayerOption = !extended
-    ? { payer: "EXTENDED_WARRANTY", allowed: false, reason: "没有生效中的延保" }
+    ? extendedLater
+      ? { payer: "EXTENDED_WARRANTY", allowed: false, reason: `延保 ${ymd(extendedLater.startedOn)} 起生效（保修期内先走保修）` }
+      : { payer: "EXTENDED_WARRANTY", allowed: false, reason: "没有生效中的延保" }
     : accidental
       ? { payer: "EXTENDED_WARRANTY", allowed: false, reason: "屏幕、进水算人为损坏，延保不管" }
       : { payer: "EXTENDED_WARRANTY", allowed: true, reason: `延保到 ${ymd(extended.expiresOn)}，期内不限次数`, entitlementId: extended.id };

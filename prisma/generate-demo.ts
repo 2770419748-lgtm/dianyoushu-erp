@@ -4,7 +4,7 @@ import { PrismaClient } from "../src/generated/prisma/client";
 import type { DeviceStatus, LedgerDocType, PaymentMethod } from "../src/generated/prisma/enums";
 import { formatDate } from "../src/lib/format";
 import { describeIntegrity, integrityOk, runIntegrityChecks } from "./integrity-checks";
-import { daysUntil, entitlementExpiresOn } from "../src/lib/entitlement";
+import { daysUntil, entitlementPeriod } from "../src/lib/entitlement";
 import { payerOptions, repairChargeFen, type FaultCategoryKey, type RepairPayerKey } from "../src/lib/repair";
 import { monthRange, reconcileStatement, type CarrierBizTypeKey, type CarrierKey, type StatementLine } from "../src/lib/carrier";
 
@@ -354,6 +354,37 @@ async function main() {
     const repairPickups = new Map<number, RepairRec[]>(); // 第几天 → 那天来取机的维修单
     const openRepairCodes = new Set<string>();
 
+    // 去年的老客户（口径第 12、13 节）：13～14 个月前在本店买机器、加了 1 年延保。延保接在保修后面，现在正在保障期，
+    // 这些机器拿来修（非人为故障）就是延保付。老单只有采购到货、开单、收款，不挂日结（那么早的日结不在演示数据里）。
+    const oldSaleIds = new Set<number>();
+    const extendedSku = serviceSkus.find((x) => SERVICE_KIND_BY_SKU.get(x.id) === "EXTENDED_WARRANTY");
+    if (extendedSku) {
+      const popularOld = [...deviceSkus].sort((a, b) => deviceWeight(b) - deviceWeight(a)).slice(0, 20);
+      for (let k = 0; k < 4; k++) {
+        const oldDate = bizDateOf(-between(380, 420));
+        const sku = pick(popularOld);
+        receive(store.id, oldDate, at(oldDate, 10, between(0, 30)), [{ skuId: sku.id, qty: 1, unitCostFen: sku.costPriceFen, device: true }]);
+        const device = inStock.get(sku.id)!.pop()!;
+        const t = at(oldDate, between(11, 19), between(0, 59));
+        const saleId = ++ids.sale;
+        const no = docNo("SO", oldDate);
+        const salesperson = pick(staff);
+        const customerId = customerFor(true)!;
+        const deviceItem: SaleItemRec = { id: ++ids.saleItem, orderId: saleId, skuId: sku.id, deviceId: device.id, qty: 1, unitPriceFen: sku.guidePriceFen, discountFen: 0, lineTotalFen: sku.guidePriceFen, costFen: device.costFen, returnedQty: 0 };
+        const serviceItem: SaleItemRec = { id: ++ids.saleItem, orderId: saleId, skuId: extendedSku.id, deviceId: null, qty: 1, unitPriceFen: extendedSku.guidePriceFen, discountFen: 0, lineTotalFen: extendedSku.guidePriceFen, costFen: extendedSku.costPriceFen, returnedQty: 0 };
+        const totalFen = deviceItem.lineTotalFen + serviceItem.lineTotalFen;
+        ledger({ docType: "SALE", docNo: no, storeId: store.id, skuId: sku.id, deviceId: device.id, qtyDelta: -1, statusBefore: "IN_STOCK", statusAfter: "SOLD", operatorId: salesperson.id, createdAt: t });
+        device.status = "SOLD";
+        device.updatedAt = t;
+        out.sales.push({ id: saleId, orderNo: no, storeId: store.id, customerId, salespersonId: salesperson.id, status: "COMPLETED", bizDate: oldDate, subtotalFen: totalFen, discountFen: 0, totalFen, tradeInOrderId: null, dailyCloseId: null, note: null, voidedById: null, voidedAt: null, voidReason: null, createdAt: t, updatedAt: t });
+        out.saleItems.push(deviceItem, serviceItem);
+        out.payments.push({ id: ++ids.payment, salesOrderId: saleId, returnOrderId: null, method: "WECHAT", amountFen: totalFen, tradeInOrderId: null, reference: null, createdAt: t });
+        out.entitlements.push({ id: ++ids.entitlement, customerId, storeId: store.id, salesOrderId: saleId, salesOrderItemId: serviceItem.id, skuId: extendedSku.id, deviceId: device.id, ...entitlementPeriod("EXTENDED_WARRANTY", oldDate, extendedSku.serviceMonths!), status: "ACTIVE", voidedAt: null, createdAt: t, updatedAt: t });
+        soldDevices.push({ deviceId: device.id, saleId, bizDate: oldDate, customerId });
+        oldSaleIds.add(saleId);
+      }
+    }
+
     for (let day = -DAYS; day <= -1; day++) {
       const bizDate = bizDateOf(day);
       const weekday = new Date(bizDate.getTime() + 8 * 3600000).getUTCDay();
@@ -546,7 +577,7 @@ async function main() {
         out.payments.push(...pays);
         saleById.set(saleId, sale);
         const entitlement: EntitlementRec | null = service
-          ? { id: ++ids.entitlement, customerId: customerId!, storeId: store.id, salesOrderId: saleId, salesOrderItemId: service.item.id, skuId: service.item.skuId, deviceId: service.deviceId, startedOn: bizDate, expiresOn: entitlementExpiresOn(bizDate, service.months), status: "ACTIVE", voidedAt: null, createdAt: plan.time, updatedAt: plan.time }
+          ? { id: ++ids.entitlement, customerId: customerId!, storeId: store.id, salesOrderId: saleId, salesOrderItemId: service.item.id, skuId: service.item.skuId, deviceId: service.deviceId, ...entitlementPeriod(SERVICE_KIND_BY_SKU.get(service.item.skuId)!, bizDate, service.months), status: "ACTIVE", voidedAt: null, createdAt: plan.time, updatedAt: plan.time }
           : null;
         if (entitlement) out.entitlements.push(entitlement);
 
@@ -651,7 +682,8 @@ async function main() {
       let customerId: number;
       const candidates = soldDevices.filter((d) => daysUntil(bizDate, d.bizDate) >= 7 && !returnScheduled.has(d.saleId) && !openRepairCodes.has(out.devices[d.deviceId - 1]!.code));
       if (candidates.length > 0 && chance(0.7)) {
-        const sold = pick(candidates);
+        const oldCandidates = candidates.filter((c) => oldSaleIds.has(c.saleId));
+        const sold = oldCandidates.length > 0 && chance(0.15) ? pick(oldCandidates) : pick(candidates);
         const device = out.devices[sold.deviceId - 1]!;
         const sku = skus.find((x) => x.id === device.skuId)!;
         deviceId = device.id;
@@ -670,7 +702,7 @@ async function main() {
       const laborFen = between(laborLo, laborHi) * 100;
       const costFen = Math.round(partsFen * 0.6) + 2000;
       // 谁付：能用碎屏险、保修、延保的九成都用上，剩下自费
-      const ents = deviceId ? out.entitlements.filter((e) => e.deviceId === deviceId && e.status === "ACTIVE").map((e) => ({ id: e.id, kind: SERVICE_KIND_BY_SKU.get(e.skuId)!, expiresOn: e.expiresOn })) : [];
+      const ents = deviceId ? out.entitlements.filter((e) => e.deviceId === deviceId && e.status === "ACTIVE").map((e) => ({ id: e.id, kind: SERVICE_KIND_BY_SKU.get(e.skuId)!, startedOn: e.startedOn, expiresOn: e.expiresOn })) : [];
       const options = payerOptions({ fault, today: bizDate, purchasedOn, entitlements: ents.filter((e) => e.kind !== "OTHER") });
       const covered = options.find((o) => o.payer !== "CUSTOMER" && o.allowed);
       const option = covered && chance(0.9) ? covered : options[0]!;
@@ -920,7 +952,8 @@ function buildReminders() {
 function buildKpis(storeIds: number[]) {
   const monthKey = (d: Date) => d.toISOString().slice(0, 7);
   const today = bizDateOf(0);
-  const months = new Set<string>(out.sales.map((s) => monthKey(s.bizDate)));
+  const firstDay = bizDateOf(-DAYS);
+  const months = new Set<string>(out.sales.filter((s) => s.bizDate >= firstDay).map((s) => monthKey(s.bizDate)));
   months.add(monthKey(today));
   const completed = out.sales.filter((s) => s.status === "COMPLETED");
   const itemsByOrder = new Map<number, SaleItemRec[]>();

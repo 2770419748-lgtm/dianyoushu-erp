@@ -102,7 +102,12 @@ export async function lookupRepairDevice(user: CurrentUser, rawCode: string, db:
     sale: sale ? { orderNo: sale.orderNo, bizDate: sale.bizDate, storeName: sale.store.name, customer: sale.customer ? { id: sale.customer.id, name: sale.customer.name, phoneMasked: maskPhone(sale.customer.phone) } : null } : null,
     warrantyEndsOn: sale ? warrantyEndsOn(sale.bizDate) : null,
     inWarranty: sale ? daysUntil(warrantyEndsOn(sale.bizDate), today) >= 0 : false,
-    entitlements: entitlements.map((e) => ({ id: e.id, name: e.deviceId ? e.sku.name : `${e.sku.name}（客户名下，不绑机器）`, expiresOn: e.expiresOn, daysLeft: daysUntil(e.expiresOn, today) })),
+    entitlements: entitlements.map((e) => ({
+      id: e.id,
+      name: (e.deviceId ? e.sku.name : `${e.sku.name}（客户名下，不绑机器）`) + (daysUntil(e.startedOn, today) > 0 ? `（${formatDate(e.startedOn)} 起生效）` : ""),
+      expiresOn: e.expiresOn,
+      daysLeft: daysUntil(e.expiresOn, today),
+    })),
     openRepair,
   };
 }
@@ -200,7 +205,7 @@ async function coverageEntitlements(db: Db, repair: { customerId: number; device
     orderBy: { expiresOn: "desc" },
     include: { sku: { select: { name: true, serviceKind: true } } },
   });
-  return rows.map((r) => ({ id: r.id, kind: r.sku.serviceKind as ServiceKindKey, expiresOn: r.expiresOn, name: r.sku.name }));
+  return rows.map((r) => ({ id: r.id, kind: r.sku.serviceKind as ServiceKindKey, startedOn: r.startedOn, expiresOn: r.expiresOn, name: r.sku.name }));
 }
 
 /** 报价那天（营业日）：保修、服务有没有过期按报价那天算，取机晚几天不影响 */
