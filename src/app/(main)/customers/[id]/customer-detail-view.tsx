@@ -12,6 +12,7 @@ import type { CustomerEntitlement } from "@/server/entitlement/entitlement-servi
 import type { CustomerWecom } from "@/server/wecom/contact-service";
 import type { RepairHistoryRow } from "@/server/repair/repair-service";
 import { RepairHistory } from "../../repairs/repair-history";
+import { WecomTransferButton } from "./wecom-transfer-button";
 
 type OrderRow = CustomerDetail["orders"][number];
 
@@ -21,7 +22,7 @@ type FollowRow = CustomerWecom["follows"][number];
 
 const TAG_SOURCE_LABELS: Record<string, string> = { AUTO: "系统", MANUAL: "员工", WECOM: "企业微信" };
 
-export function CustomerDetailView({ detail, wecom, repairs }: { detail: CustomerDetail; wecom: CustomerWecom | null; repairs: RepairHistoryRow[] }) {
+export function CustomerDetailView({ detail, wecom, repairs, transferTargets = [] }: { detail: CustomerDetail; wecom: CustomerWecom | null; repairs: RepairHistoryRow[]; transferTargets?: { id: number; label: string }[] }) {
   const { customer, orders, orderCount, entitlements } = detail;
 
   const entitlementColumns: TableColumnsType<CustomerEntitlement> = [
@@ -86,7 +87,7 @@ export function CustomerDetailView({ detail, wecom, repairs }: { detail: Custome
         <Table rowKey="id" size="small" columns={entitlementColumns} dataSource={entitlements} pagination={false} scroll={{ x: true }} locale={{ emptyText: "没有买过碎屏险、延保" }} />
       </Card>
 
-      {wecom ? <WecomSection wecom={wecom} /> : null}
+      {wecom ? <WecomSection wecom={wecom} transferTargets={transferTargets} /> : null}
 
       {repairs.length > 0 ? <RepairHistory rows={repairs} /> : null}
 
@@ -99,7 +100,7 @@ export function CustomerDetailView({ detail, wecom, repairs }: { detail: Custome
 }
 
 /** 企业微信区：绑定状态、跟进人（按口径第 12 节只显示你看得到的）、标签 */
-function WecomSection({ wecom }: { wecom: CustomerWecom }) {
+function WecomSection({ wecom, transferTargets }: { wecom: CustomerWecom; transferTargets: { id: number; label: string }[] }) {
   const columns: TableColumnsType<FollowRow> = [
     { title: "跟进员工", dataIndex: "staff" },
     { title: "门店", dataIndex: "store", render: (v: string | null) => v ?? "-" },
@@ -110,9 +111,22 @@ function WecomSection({ wecom }: { wecom: CustomerWecom }) {
         f.status === "ACTIVE" ? (
           <Tag color="green">跟进中</Tag>
         ) : (
-          <Tag>{f.deletedBy === "EMPLOYEE" ? "员工删了客户" : "客户删了员工"}{f.deletedAt ? ` · ${formatDate(f.deletedAt)}` : ""}</Tag>
+          <Tag>{f.deletedBy === "EMPLOYEE" ? "员工删了客户" : f.deletedBy === "TRANSFERRED" ? "已转给别人" : "客户删了员工"}{f.deletedAt ? ` · ${formatDate(f.deletedAt)}` : ""}</Tag>
         ),
     },
+    ...(wecom.follows.some((f) => f.canTransfer || f.transferring)
+      ? [
+          {
+            title: "转接",
+            render: (_: unknown, f: FollowRow) =>
+              f.transferring ? (
+                <Tag color="orange">{f.transferring.status === "WAITING_DELETE" ? "等删除成员" : "转接中"} → {f.transferring.to}</Tag>
+              ) : f.canTransfer ? (
+                <WecomTransferButton followId={f.id} staff={f.staff} targets={transferTargets.filter((t) => t.id !== f.staffId)} />
+              ) : null,
+          },
+        ]
+      : []),
   ];
   return (
     <Card title="企业微信">

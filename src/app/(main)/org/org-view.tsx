@@ -69,6 +69,9 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
   const [storeModal, setStoreModal] = useState<{ open: boolean; record?: OrgStore }>({ open: false });
   const [userModal, setUserModal] = useState<{ open: boolean; record?: OrgUser }>({ open: false });
   const [passwordModal, setPasswordModal] = useState<{ open: boolean; record?: OrgUser }>({ open: false });
+  // 停用有企业微信客户的员工：选接手人（口径第 12 节第三步）
+  const [leaveModal, setLeaveModal] = useState<{ open: boolean; record?: OrgUser }>({ open: false });
+  const [takeoverId, setTakeoverId] = useState<number | undefined>(undefined);
 
   const [regionForm] = Form.useForm<{ name: string }>();
   const [storeForm] = Form.useForm<{ code: string; name: string; regionId: number; address?: string }>();
@@ -265,11 +268,21 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
           <Button size="small" onClick={() => openPassword(u)}>
             重置密码
           </Button>
-          <ToggleButton
-            active={u.isActive}
-            disabled={u.id === currentUserId}
-            onConfirm={() => submit(() => setUserActiveAction(u.id, !u.isActive))}
-          />
+          {showWecom && u.isActive && u.activeFollows > 0 ? (
+            <Button
+              size="small"
+              danger
+              disabled={u.id === currentUserId}
+              onClick={() => {
+                setTakeoverId(undefined);
+                setLeaveModal({ open: true, record: u });
+              }}
+            >
+              停用
+            </Button>
+          ) : (
+            <ToggleButton active={u.isActive} disabled={u.id === currentUserId} onConfirm={() => submit(() => setUserActiveAction(u.id, !u.isActive))} />
+          )}
         </Space>
       ),
     },
@@ -475,6 +488,33 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
             </Form.Item>
           )}
         </Form>
+      </Modal>
+
+      {/* 停用有企业微信客户的员工：选接手人 */}
+      <Modal
+        title={`停用：${leaveModal.record?.name ?? ""}`}
+        open={leaveModal.open}
+        confirmLoading={pending}
+        okText="停用"
+        okButtonProps={{ danger: true }}
+        onCancel={() => setLeaveModal({ open: false })}
+        onOk={() => submit(() => setUserActiveAction(leaveModal.record!.id, false, takeoverId), () => setLeaveModal({ open: false }))}
+        destroyOnHidden
+      >
+        <Typography.Paragraph>
+          停用马上生效，这个人不能再登录。他还有 {leaveModal.record?.activeFollows ?? 0} 个企业微信客户在跟进，选一个接手人，系统生成离职继承任务：
+          企业微信后台删掉这个人之后自动提交，客户 24 小时内可以拒绝。也可以先不选，以后在“企微对接 → 客户继承”里再安排。
+        </Typography.Paragraph>
+        <Select
+          allowClear
+          style={{ width: "100%" }}
+          placeholder="接手人（可以以后再选）"
+          value={takeoverId}
+          onChange={setTakeoverId}
+          options={data.users
+            .filter((x) => x.isActive && x.wecomUserid && x.id !== leaveModal.record?.id && (x.role === "STAFF" || x.role === "STORE_MANAGER" || x.role === "HQ"))
+            .map((x) => ({ value: x.id, label: `${x.name}（${x.storeId ? (storeById.get(x.storeId)?.name ?? "") : ROLE_LABELS[x.role]}）` }))}
+        />
       </Modal>
 
       {/* 重置密码 */}

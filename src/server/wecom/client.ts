@@ -46,6 +46,21 @@ export interface WecomClient {
   sendKfText(input: { openKfid: string; externalUserid: string; text: string }): Promise<{ msgid: string }>;
   /** 微信客服：转人工（放进待接入池，按企业微信后台的分配规则派给接待人员） */
   transferKfToHuman(input: { openKfid: string; externalUserid: string }): Promise<void>;
+  /** 这个成员是不是已经从企业微信通讯录删掉了（离职继承要先删人） */
+  isMemberDeleted(userid: string): Promise<boolean>;
+  /** 提交客户继承（在职转接或离职继承），一次最多 100 个客户；返回每个客户的错误码（0 = 提交成功） */
+  transferCustomers(input: { kind: TransferKindKey; handoverUserid: string; takeoverUserid: string; externalUserids: string[] }): Promise<Record<string, number>>;
+  /** 查客户继承的结果：1 接替完毕、2 等待接替、3 客户拒绝、4 接手人客户数到上限、5 没有接替记录 */
+  getTransferResults(input: { kind: TransferKindKey; handoverUserid: string; takeoverUserid: string; externalUserids: string[] }): Promise<Record<string, number>>;
+}
+
+export type TransferKindKey = "ON_JOB" | "RESIGNED";
+
+/** 演示里约每 8 个客户有 1 个拒绝（按客户 id 固定，同一个人每次一样） */
+export function simulatedTransferRefused(externalUserid: string): boolean {
+  let h = 0;
+  for (const ch of externalUserid) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % 8 === 0;
 }
 
 // ---------- 错误码 ----------
@@ -187,6 +202,37 @@ export function createRealWecomClient(options: { corpId: string; secret: string;
     async transferKfToHuman(input) {
       await call("/kf/service_state/trans", { method: "POST", body: { open_kfid: input.openKfid, external_userid: input.externalUserid, service_state: 2 } });
     },
+    async isMemberDeleted(userid) {
+      try {
+        await call("/user/get", { query: { userid } });
+        return false;
+      } catch (error) {
+        if (error instanceof WecomError && error.errcode === 60111) return true;
+        throw error;
+      }
+    },
+    async transferCustomers(input) {
+      const path = input.kind === "ON_JOB" ? "/externalcontact/transfer_customer" : "/externalcontact/resigned/transfer_customer";
+      const data = await call(path, { method: "POST", body: { handover_userid: input.handoverUserid, takeover_userid: input.takeoverUserid, external_userid: input.externalUserids } });
+      const result: Record<string, number> = {};
+      for (const c of (Array.isArray(data.customer) ? data.customer : []) as { external_userid?: string; errcode?: number }[]) if (c.external_userid) result[c.external_userid] = Number(c.errcode ?? 0);
+      return result;
+    },
+    async getTransferResults(input) {
+      const path = input.kind === "ON_JOB" ? "/externalcontact/transfer_result" : "/externalcontact/resigned/transfer_result";
+      const wanted = new Set(input.externalUserids);
+      const result: Record<string, number> = {};
+      let cursor = "";
+      for (let page = 0; page < 50; page++) {
+        const data = await call(path, { method: "POST", body: { handover_userid: input.handoverUserid, takeover_userid: input.takeoverUserid, cursor } });
+        for (const c of (Array.isArray(data.customer) ? data.customer : []) as { external_userid?: string; status?: number }[]) {
+          if (c.external_userid && wanted.has(c.external_userid)) result[c.external_userid] = Number(c.status ?? 0);
+        }
+        cursor = typeof data.next_cursor === "string" ? data.next_cursor : "";
+        if (!cursor) break;
+      }
+      return result;
+    },
     async getAgentJsapiTicket() {
       return cached(TICKET_CACHE_KEY, TICKET_LOCK_KEY, async () => {
         const data = await call("/ticket/get", { query: { type: "agent_config" } });
@@ -235,6 +281,16 @@ export function createSimulatedWecomClient(options: { kfInbox?: KfInboundMessage
       return { msgid: `simout-${crypto.randomUUID()}` };
     },
     async transferKfToHuman() {},
+    // 客户继承：模拟模式当作成员已经在企业微信后台删了、24 小时也过了，提交后一查就有结果
+    async isMemberDeleted() {
+      return true;
+    },
+    async transferCustomers(input) {
+      return Object.fromEntries(input.externalUserids.map((id) => [id, 0]));
+    },
+    async getTransferResults(input) {
+      return Object.fromEntries(input.externalUserids.map((id) => [id, simulatedTransferRefused(id) ? 3 : 1]));
+    },
   };
 }
 

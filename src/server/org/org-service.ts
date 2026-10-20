@@ -8,6 +8,7 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { getWecomClient, WecomError } from "@/server/wecom/client";
 import { WECOM_USERID_PATTERN, wecomMode } from "@/server/wecom/config";
 import { writeAudit } from "@/server/audit";
+import { createResignedTransfers, WecomTransferError } from "@/server/wecom/transfer-service";
 
 // 组织管理服务层：区域、门店、员工的新增、编辑、停用。只有总部能调；每次写入记操作日志。
 // 页面里的 Server Function 只负责把表单值传进来，规则都在这里。
@@ -68,10 +69,11 @@ export async function getOrgTree() {
     }),
     prisma.user.findMany({
       orderBy: { id: "asc" },
-      select: { id: true, username: true, name: true, role: true, storeId: true, regionId: true, isActive: true, wecomUserid: true },
+      select: { id: true, username: true, name: true, role: true, storeId: true, regionId: true, isActive: true, wecomUserid: true, _count: { select: { wecomFollows: { where: { status: "ACTIVE" } } } } },
     }),
   ]);
-  return { regions, users };
+  // activeFollows：跟进中的企业微信客户数，停用时提示安排接手人（口径第 12 节第三步）
+  return { regions, users: users.map(({ _count, ...u }) => ({ ...u, activeFollows: _count.wecomFollows })) };
 }
 
 export type OrgTree = Awaited<ReturnType<typeof getOrgTree>>;
@@ -278,11 +280,25 @@ export async function resetUserPassword(actor: Actor, id: number, password: unkn
   await writeAudit({ userId: actor.id, action: "user.reset_password", entity: "user", entityId: id });
 }
 
-export async function setUserActive(actor: Actor, id: number, isActive: boolean) {
+/**
+ * 停用、启用员工。停用马上生效，不等企业微信的客户继承（口径第 12 节第三步）；
+ * 传了接手人就给他跟进中的企业微信客户生成离职继承任务，没传的以后在客户继承页再安排。继承出错不影响停用，写在提示里。
+ */
+export async function setUserActive(actor: CurrentUser, id: number, isActive: boolean, options: { takeoverUserId?: number } = {}) {
   assertCanManage(actor);
   await assertNotDemoAccount(id);
   if (id === actor.id && !isActive) throw new OrgError("不能停用自己");
   const user = await prisma.user.update({ where: { id }, data: { isActive, sessionVersion: { increment: 1 } } });
   await writeAudit({ userId: actor.id, action: isActive ? "user.activate" : "user.deactivate", entity: "user", entityId: id });
-  return user;
+  let notice: string | undefined;
+  if (!isActive && options.takeoverUserId) {
+    try {
+      const result = await createResignedTransfers(actor, { fromUserId: id, toUserId: options.takeoverUserId });
+      notice = `${result.count} 个企业微信客户交给${result.to}：企业微信后台删掉这个人之后自动提交继承，进度在客户继承页看`;
+    } catch (error) {
+      if (!(error instanceof WecomTransferError)) throw error;
+      notice = `账号已停用，企业微信客户没交接成：${error.message}，到客户继承页再安排`;
+    }
+  }
+  return { ...user, notice };
 }

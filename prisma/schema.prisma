@@ -223,6 +223,25 @@ enum WecomEventStatus {
 }
 
 /// 客户标签从哪来
+/// 企业微信客户继承的种类（口径第 12 节第三步）
+enum WecomTransferKind {
+  ON_JOB   // 在职转接：店长、总部把一个员工的客户转给另一个员工
+  RESIGNED // 离职继承：员工离职，客户交给接手人（要先在企业微信后台删掉这个成员）
+
+  @@map("wecom_transfer_kind")
+}
+
+/// 企业微信客户继承的进度
+enum WecomTransferStatus {
+  WAITING_DELETE // 离职继承：等企业微信后台删除这个成员，删了才能提交
+  SUBMITTED      // 已提交，等客户接替（客户 24 小时内可以拒绝）
+  DONE           // 接替完毕：跟进关系转到接手人名下
+  REFUSED        // 客户拒绝了
+  FAILED         // 其他原因没成（接手人客户数到上限、企业微信报错……），error 里写原因
+
+  @@map("wecom_transfer_status")
+}
+
 /// 微信客服会话现在谁在接（口径第 12 节第三步）
 enum WecomKfSessionState {
   AUTO  // 自动答复
@@ -473,6 +492,9 @@ model User {
   carrierSettlements    CarrierSettlement[]
   wecomFollows          WecomFollow[]
   wecomBindCodes        WecomBindCode[]
+  wecomTransfersFrom    WecomTransfer[] @relation("WecomTransferFrom")
+  wecomTransfersTo      WecomTransfer[] @relation("WecomTransferTo")
+  wecomTransfersCreated WecomTransfer[] @relation("WecomTransferCreatedBy")
 
   @@index([storeId])
   @@index([regionId])
@@ -867,6 +889,7 @@ model Customer {
   wecomTags     WecomCustomerTag[]
   wecomBindCodes WecomBindCode[]
   wecomKfSessions WecomKfSession[]
+  wecomTransfers  WecomTransfer[]
 
   @@map("customers")
 }
@@ -1518,15 +1541,16 @@ model WecomFollow {
   userId         Int?              @map("user_id") // 对应的 ERP 员工（按 wecomUserid 找，可能还没对上）
   customerId     Int?              @map("customer_id") // 绑定后指向 ERP 客户
   status         WecomFollowStatus @default(ACTIVE)
-  deletedBy      String?           @map("deleted_by") // 谁删的谁：EMPLOYEE 员工删了客户 / CUSTOMER 客户删了员工
+  deletedBy      String?           @map("deleted_by") // 谁删的谁：EMPLOYEE 员工删了客户 / CUSTOMER 客户删了员工 / TRANSFERRED 继承给了别人
   state          String? // 加好友时活码带的 state（开单绑定码），追渠道用
   firstAddAt     DateTime          @map("first_add_at")
   deletedAt      DateTime?         @map("deleted_at")
   createdAt      DateTime          @default(now()) @map("created_at")
   updatedAt      DateTime          @updatedAt @map("updated_at")
 
-  customer Customer? @relation(fields: [customerId], references: [id])
-  user     User?     @relation(fields: [userId], references: [id])
+  customer  Customer?       @relation(fields: [customerId], references: [id])
+  user      User?           @relation(fields: [userId], references: [id])
+  transfers WecomTransfer[]
 
   @@unique([externalUserid, wecomUserid])
   @@index([customerId])
@@ -1602,6 +1626,37 @@ model WecomEvent {
 
   @@index([status, receivedAt])
   @@map("wecom_events")
+}
+
+/// 企业微信客户继承（口径第 12 节第三步）：一个客户的一条跟进关系一条；同一条跟进关系同时只能有一个没办完的（部分唯一索引）
+model WecomTransfer {
+  id              Int                 @id @default(autoincrement())
+  kind            WecomTransferKind
+  followId        Int                 @map("follow_id") // 原来那条跟进关系
+  externalUserid  String              @map("external_userid")
+  customerId      Int?                @map("customer_id")
+  fromUserId      Int?                @map("from_user_id") // 原跟进员工（ERP 里对得上才有）
+  fromWecomUserid String              @map("from_wecom_userid")
+  toUserId        Int                 @map("to_user_id") // 接手人
+  toWecomUserid   String              @map("to_wecom_userid")
+  status          WecomTransferStatus
+  createdById     Int                 @map("created_by_id")
+  submittedAt     DateTime?           @map("submitted_at")
+  finishedAt      DateTime?           @map("finished_at")
+  error           String?
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  follow    WecomFollow @relation(fields: [followId], references: [id])
+  customer  Customer?   @relation(fields: [customerId], references: [id])
+  fromUser  User?       @relation("WecomTransferFrom", fields: [fromUserId], references: [id])
+  toUser    User        @relation("WecomTransferTo", fields: [toUserId], references: [id])
+  createdBy User        @relation("WecomTransferCreatedBy", fields: [createdById], references: [id])
+
+  @@index([status])
+  @@index([externalUserid, createdAt])
+  @@index([fromUserId])
+  @@map("wecom_transfers")
 }
 
 /// 微信客服拉消息的游标：每个客服账号一个，拉完一页就存（官方建议游标入库，不然重启后会重复拉或漏拉）

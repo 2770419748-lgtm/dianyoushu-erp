@@ -126,6 +126,11 @@ export function canSeeWecomFollow(
   }
 }
 
+/** 谁能转接企业微信客户、安排离职继承（口径第 12 节第三步）：店长（本店员工的客户）、总部 */
+export function canTransferWecomCustomer(role: Role): boolean {
+  return role === "STORE_MANAGER" || role === "HQ";
+}
+
 /** 谁能办售后：接件、报价、维修、取机结算（口径第 13 节）：店员、店长、总部；区域经理只看 */
 export function canHandleRepair(role: Role): boolean {
   return role === "STAFF" || role === "STORE_MANAGER" || role === "HQ";
@@ -274,6 +279,7 @@ const MENU_HQ: MenuEntry[] = [
 ];
 
 const WECOM_SIDEBAR: MenuEntry = { key: "wecom-sidebar", label: "企微侧边栏", href: "/wecom/sidebar" };
+const WECOM_TRANSFERS: MenuEntry = { key: "wecom-transfers", label: "客户继承", href: "/wecom/transfers" };
 
 /** 在“后续规划”前面插几项 */
 function beforeRoadmap(menu: MenuEntry[], extra: MenuEntry[]): MenuEntry[] {
@@ -283,7 +289,7 @@ function beforeRoadmap(menu: MenuEntry[], extra: MenuEntry[]): MenuEntry[] {
 
 /**
  * 登录后左侧菜单。options.wecom：企业微信对接开着（真对接或演示里的模拟）时，总部多一个“企微对接”，
- * 店员、店长多一个“企微侧边栏”（口径第 12 节第三步）
+ * 店员、店长多一个“企微侧边栏”，店长再多一个“客户继承”（口径第 12 节第三步）
  */
 export function getMenuForRole(role: Role, options: { wecom?: boolean } = {}): MenuEntry[] {
   if (role === "HQ" && options.wecom) {
@@ -291,7 +297,7 @@ export function getMenuForRole(role: Role, options: { wecom?: boolean } = {}): M
     return [...MENU_HQ.slice(0, logsAt), { key: "wecom", label: "企微对接", href: "/wecom" }, ...MENU_HQ.slice(logsAt)];
   }
   if (options.wecom && role === "STAFF") return beforeRoadmap(MENU_STAFF, [WECOM_SIDEBAR]);
-  if (options.wecom && role === "STORE_MANAGER") return beforeRoadmap(MENU_STORE_MANAGER, [WECOM_SIDEBAR]);
+  if (options.wecom && role === "STORE_MANAGER") return beforeRoadmap(MENU_STORE_MANAGER, [WECOM_SIDEBAR, WECOM_TRANSFERS]);
   switch (role) {
     case "STAFF":
       return MENU_STAFF;

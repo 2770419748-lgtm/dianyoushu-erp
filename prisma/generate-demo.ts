@@ -179,6 +179,7 @@ const out = {
   wecomTags: [] as Row[],
   wecomCustomerTags: [] as Row[],
   kfSessions: [] as Row[],
+  wecomTransfers: [] as Row[],
   kfMessages: [] as Row[],
   subsidyPolicies: [] as Row[],
   subsidyClaims: [] as SubsidyRec[],
@@ -1213,6 +1214,55 @@ function buildWecomDemo(deviceSkuList: { id: number; modelName: string }[], user
     const addedAt = at(bizDateOf(-between(1, 60)), between(10, 21), between(0, 59));
     out.wecomFollows.push({ id: out.wecomFollows.length + 1, externalUserid: `wm${hex()}${hex()}`, wecomUserid: staff.username, userId: staff.id, customerId: null, status: "ACTIVE", deletedBy: null, state: null, firstAddAt: addedAt, deletedAt: null, createdAt: addedAt, updatedAt: addedAt });
   }
+  buildTransferDemo(users);
+}
+
+/**
+ * 客户继承演示数据（口径第 12 节第三步）：店长把店员的客户转给同店同事（调岗、排班调整），十来条在职转接：
+ * 大多已接替完毕（原跟进关系标“已转走”、同事名下有了新的），两条客户拒绝，两条刚提交还在等（演示时点“查进度”出结果）。
+ */
+function buildTransferDemo(users: { id: number; username: string; role: string; storeId: number | null }[]) {
+  const managers = new Map(users.filter((u) => u.role === "STORE_MANAGER" && u.storeId).map((u) => [u.storeId!, u]));
+  const staffByStore = new Map<number, typeof users>();
+  for (const u of users) if ((u.role === "STAFF" || u.role === "STORE_MANAGER") && u.storeId) staffByStore.set(u.storeId, [...(staffByStore.get(u.storeId) ?? []), u]);
+  const storeOf = new Map(users.map((u) => [u.id, u.storeId]));
+  const candidates = out.wecomFollows.filter((f) => f.status === "ACTIVE" && f.customerId && f.userId && (f.firstAddAt as Date).getTime() < Date.now() - 70 * DAY_MS);
+  const used = new Set<string>();
+  for (let i = 0; i < 12 && candidates.length > 0; i++) {
+    const follow = pick(candidates);
+    if (used.has(follow.externalUserid as string)) continue;
+    const storeId = storeOf.get(follow.userId as number);
+    const manager = storeId ? managers.get(storeId) : undefined;
+    const colleagues = (storeId ? (staffByStore.get(storeId) ?? []) : []).filter((u) => u.id !== follow.userId);
+    if (!manager || colleagues.length === 0) continue;
+    used.add(follow.externalUserid as string);
+    const to = pick(colleagues);
+    const status = i < 8 ? "DONE" : i < 10 ? "REFUSED" : "SUBMITTED";
+    const createdAt = status === "SUBMITTED" ? new Date(Date.now() - between(2, 20) * 3600000) : at(bizDateOf(-between(5, 60)), between(10, 18), between(0, 59));
+    const finishedAt = status === "SUBMITTED" ? null : new Date(createdAt.getTime() + DAY_MS + between(0, 6) * 3600000);
+    out.wecomTransfers.push({
+      id: out.wecomTransfers.length + 1,
+      kind: "ON_JOB",
+      followId: follow.id,
+      externalUserid: follow.externalUserid,
+      customerId: follow.customerId,
+      fromUserId: follow.userId,
+      fromWecomUserid: follow.wecomUserid,
+      toUserId: to.id,
+      toWecomUserid: to.username,
+      status,
+      createdById: manager.id,
+      submittedAt: createdAt,
+      finishedAt,
+      error: status === "REFUSED" ? "客户拒绝了" : null,
+      createdAt,
+      updatedAt: finishedAt ?? createdAt,
+    });
+    if (status === "DONE") {
+      Object.assign(follow, { status: "DELETED", deletedBy: "TRANSFERRED", deletedAt: finishedAt, updatedAt: finishedAt });
+      out.wecomFollows.push({ id: out.wecomFollows.length + 1, externalUserid: follow.externalUserid, wecomUserid: to.username, userId: to.id, customerId: follow.customerId, status: "ACTIVE", deletedBy: null, state: "transfer", firstAddAt: finishedAt, deletedAt: null, createdAt: finishedAt, updatedAt: finishedAt });
+    }
+  }
 }
 
 /**
@@ -1807,6 +1857,7 @@ async function write() {
   await insert("企微跟进关系", out.wecomFollows, (c) => prisma.wecomFollow.createMany({ data: c as never }));
   await insert("企微标签", out.wecomTags, (c) => prisma.wecomTag.createMany({ data: c as never }));
   await insert("客户标签", out.wecomCustomerTags, (c) => prisma.wecomCustomerTag.createMany({ data: c as never }));
+  await insert("企微客户继承", out.wecomTransfers, (c) => prisma.wecomTransfer.createMany({ data: c as never }));
   await insert("微信客服会话", out.kfSessions, (c) => prisma.wecomKfSession.createMany({ data: c as never }));
   await insert("微信客服消息", out.kfMessages, (c) => prisma.wecomKfMessage.createMany({ data: c as never }));
   await prisma.wecomKfCursor.create({ data: { openKfid: SIMULATED_KF_ID, cursor: "sim-demo" } });
@@ -1817,7 +1868,7 @@ async function write() {
     await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   // 自己指定了 id，自增序列要跟上，后面正常开单才不会撞号
-  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines", "subsidy_policies", "subsidy_claims", "invoices", "invoice_lines", "approval_rules", "approval_requests", "wecom_kf_sessions", "wecom_kf_messages"];
+  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines", "subsidy_policies", "subsidy_claims", "invoices", "invoice_lines", "approval_rules", "approval_requests", "wecom_kf_sessions", "wecom_kf_messages", "wecom_transfers"];
   for (const t of tables) {
     await prisma.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM "${t}"), 0), 1), (SELECT COUNT(*) > 0 FROM "${t}"))`);
   }

@@ -1,7 +1,7 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { canSeeWecomFollow, canSell } from "@/server/auth/permissions";
+import { canSeeWecomFollow, canSell, canTransferWecomCustomer } from "@/server/auth/permissions";
 import { assertStoreAccess, PermissionError } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
@@ -242,7 +242,10 @@ export async function getCustomerWecom(user: CurrentUser, customerId: number) {
   const follows = await prisma.wecomFollow.findMany({
     where: { customerId },
     orderBy: { firstAddAt: "asc" },
-    include: { user: { select: { id: true, name: true, store: { select: { id: true, name: true, regionId: true } } } } },
+    include: {
+      user: { select: { id: true, name: true, isActive: true, store: { select: { id: true, name: true, regionId: true } } } },
+      transfers: { where: { status: { in: ["WAITING_DELETE", "SUBMITTED"] } }, select: { status: true, toUser: { select: { name: true } } } },
+    },
   });
   const visible = follows.filter((f) => canSeeWecomFollow(user, { userId: f.userId, storeId: f.user?.store?.id ?? null, regionId: f.user?.store?.regionId ?? null }));
   const showTags = user.role === "HQ" || visible.length > 0;
@@ -251,7 +254,12 @@ export async function getCustomerWecom(user: CurrentUser, customerId: number) {
     : [];
   return {
     bound: customer.wecomExternalUserid ? { nickname: customer.wecomNickname, boundAt: customer.wecomBoundAt } : null,
-    follows: visible.map((f) => ({ id: f.id, staff: f.user?.name ?? f.wecomUserid, store: f.user?.store?.name ?? null, status: f.status, deletedBy: f.deletedBy, firstAddAt: f.firstAddAt, deletedAt: f.deletedAt })),
+    follows: visible.map((f) => {
+      const open = f.transfers[0] ?? null;
+      // 能不能“转接跟进人”（口径第 12 节第三步）：店长转本店在职员工的，总部任意；正在转接的不能再转
+      const canTransfer = canTransferWecomCustomer(user.role) && f.status === "ACTIVE" && !open && f.user !== null && f.user.isActive && (user.role === "HQ" || f.user.store?.id === user.storeId);
+      return { id: f.id, staffId: f.userId, staff: f.user?.name ?? f.wecomUserid, store: f.user?.store?.name ?? null, status: f.status, deletedBy: f.deletedBy, firstAddAt: f.firstAddAt, deletedAt: f.deletedAt, canTransfer, transferring: open ? { status: open.status, to: open.toUser.name } : null };
+    }),
     hiddenFollows: follows.length - visible.length,
     tags: tags.map((t) => ({ group: t.tag.groupName, name: t.tag.name, source: t.source })),
   };

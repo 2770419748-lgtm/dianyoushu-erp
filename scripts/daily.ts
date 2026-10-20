@@ -7,10 +7,12 @@ import { replayFailedEvents } from "@/server/wecom/callback-service";
 import { wecomMode } from "@/server/wecom/config";
 import { cleanupExpiredBindCodes } from "@/server/wecom/contact-service";
 import { cleanupKfMessages } from "@/server/wecom/kf-service";
+import { processTransfers } from "@/server/wecom/transfer-service";
 
 // pnpm daily：每天跑一次（建议早上 9 点）。服务器上用 tools 服务跑：docker compose run --rm tools pnpm daily（见 docs/部署.md）。
 // 1. 生成碎屏险、延保的到期提醒（口径第 12 节：剩 8～30 天、剩 0～7 天两档，每档只生成一次，漏跑一天也不会漏人）
-// 2. 企业微信：处理失败的回调事件重放一遍；过期没扫的开单二维码，删掉企业微信那边的活码配置；微信客服消息只留 180 天
+// 2. 企业微信：处理失败的回调事件重放一遍；过期没扫的开单二维码，删掉企业微信那边的活码配置；微信客服消息只留 180 天；
+//    客户继承：离职员工删了就提交、已提交的查结果回写
 // 每一步单独 try：前一步出错不影响后面；有出错的退出码 1，计划任务能据此告警。
 // 脚本里要用服务层（带 server-only 标记），所以 package.json 里用 tsx --conditions=react-server 跑。
 
@@ -42,6 +44,9 @@ async function main() {
       const cleanup = await cleanupExpiredBindCodes({ client });
       report.cleanup = cleanup;
       if (cleanup.failed.length > 0) failed = true;
+      const transfers = await processTransfers({ client });
+      report.transfers = transfers;
+      if (transfers.errors.length > 0) failed = true;
     } catch (error) {
       failed = true;
       report.wecom = `出错：${error instanceof Error ? error.message : String(error)}`;

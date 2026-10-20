@@ -49,6 +49,9 @@ export function WecomOverviewView({ data }: { data: WecomOverview }) {
             <Link href="/wecom/kf">
               <Button size="small">微信客服</Button>
             </Link>
+            <Link href="/wecom/transfers">
+              <Button size="small">客户继承</Button>
+            </Link>
           </Space>
         }
       >

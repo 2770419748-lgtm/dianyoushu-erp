@@ -69,7 +69,11 @@ export async function resetUserPasswordAction(id: number, password: string) {
   return run(() => org.resetUserPassword(user, id, password));
 }
 
-export async function setUserActiveAction(id: number, isActive: boolean) {
+export async function setUserActiveAction(id: number, isActive: boolean, takeoverUserId?: number) {
   const user = await requireUser();
-  return run(() => org.setUserActive(user, id, isActive));
+  let notice: string | undefined;
+  const result = await run(async () => {
+    notice = (await org.setUserActive(user, id, isActive, { takeoverUserId })).notice;
+  });
+  return result.ok && notice ? { ok: true as const, notice } : result;
 }
