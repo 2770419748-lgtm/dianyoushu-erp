@@ -16,6 +16,8 @@ import { buildSalePayments, PaymentError } from "./payments";
 import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
 import { lockRow } from "@/server/db-lock";
 import { createEntitlementsTx, voidEntitlementsTx } from "@/server/entitlement/entitlement-service";
+import { lineBaseFen, type SubsidyPick } from "@/lib/subsidy";
+import { cancelClaimsTx, createClaimsTx, prepareSubsidyTx, SubsidyError } from "@/server/subsidy/subsidy-service";
 
 // 开单服务层：选机器和配件、改价优惠、以旧换新抵扣（关联回收单）、多种收款拆分（合计必须等于应收）。
 // 口径第 11 节第 3 条：销售单、明细、收款、扣库存、写流水在一个事务里，失败全部回滚。
@@ -42,6 +44,7 @@ export interface SalesOrderInput {
   tradeInOrderId?: unknown; // 以旧换新：关联一张本店未用过的回收单，估价全额抵扣
   payments?: { method: unknown; amountFen: unknown }[]; // 手工收款，可以拆多种
   paymentMethod?: unknown; // 兼容只收一种的写法：剩余金额全按这一种收
+  subsidy?: { qualificationCode: unknown } | null; // 用国补（口径第 15 节）：顾客的补贴资格码，补哪台、补多少由系统按政策算
   note?: unknown;
 }
 
@@ -115,8 +118,10 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   const lines: Line[] = [];
   // 服务行另记一份：保哪台机器、期限几个月（和 lines 按下标对应）
   const serviceOf = new Map<number, { deviceId: number | null; months: number; kind: "SCREEN_INSURANCE" | "EXTENDED_WARRANTY" | "OTHER" | null }>();
+  // 新机行的品类（和 lines 按下标对应）：国补按品类算；回收转良品的二手机不补
+  const newDeviceCategory = new Map<number, number>();
   for (const d of data.deviceLines) {
-    const device = await tx.device.findUnique({ where: { id: d.deviceId }, include: { sku: { select: { id: true, name: true, guidePriceFen: true } } } });
+    const device = await tx.device.findUnique({ where: { id: d.deviceId }, include: { sku: { select: { id: true, name: true, guidePriceFen: true, model: { select: { categoryId: true } } } } } });
     if (!device) throw new SalesError("机器不存在");
     if (device.storeId !== data.storeId) throw new SalesError(`${device.code} 不在本店`);
     if (!deviceCanSell(device.status)) throw new SalesError(`${device.code} 现在不能卖`);
@@ -124,6 +129,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     // 门店售价、指导价都是 0（回收机用通用商品）时退到这台的成本，见 deviceDefaultPriceFen
     const listPriceFen = (await resolveUnitPrice(tx, data.storeId, device.skuId, device.sku.guidePriceFen)) || device.costFen;
     const unitPriceFen = d.unitPriceFen ?? listPriceFen;
+    if (device.tradeInOrderId === null) newDeviceCategory.set(lines.length, device.sku.model.categoryId);
     lines.push({ skuId: device.skuId, deviceId: device.id, qty: 1, listPriceFen, unitPriceFen, lineTotalFen: unitPriceFen, costFen: device.costFen });
   }
   for (const a of data.accessoryLines) {
@@ -165,15 +171,29 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   const customerId = data.customerId ?? tradeIn?.customerId ?? null;
   if (serviceOf.size > 0 && customerId === null) throw new SalesError("单里有碎屏险、延保这类服务，要先选客户（服务记在客户名下，到期要提醒）");
 
-  // 收款：抵扣 + 手工收款，合计必须正好等于应收
+  // 国补（口径第 15 节）：要有客户和资格码；按政策挑一台补，补贴记成一笔“国补立减”
+  let subsidy: { code: string; picks: SubsidyPick[] } | null = null;
+  if (input.subsidy) {
+    if (customerId === null) throw new SalesError("用国补要先选客户（实名在平台做，系统按客户算每人每类一台）");
+    const candidates = Array.from(newDeviceCategory.entries()).map(([index, categoryId]) => ({ key: index, categoryId, baseFen: lineBaseFen(lines[index]!.lineTotalFen, subtotalFen, totalFen) }));
+    try {
+      subsidy = await prepareSubsidyTx(tx, { customerId, code: input.subsidy.qualificationCode, candidates, today: bizDate });
+    } catch (error) {
+      if (error instanceof SubsidyError) throw new SalesError(error.message);
+      throw error;
+    }
+  }
+  const subsidyFen = subsidy ? subsidy.picks.reduce((s, p) => s + p.subsidyFen, 0) : 0;
+
+  // 收款：抵扣 + 国补 + 手工收款，合计必须正好等于应收
   const manual = Array.isArray(input.payments)
     ? input.payments
     : input.paymentMethod
-      ? [{ method: input.paymentMethod, amountFen: totalFen - (tradeIn?.appraisedFen ?? 0) }]
+      ? [{ method: input.paymentMethod, amountFen: totalFen - (tradeIn?.appraisedFen ?? 0) - subsidyFen }]
       : [];
   let payments;
   try {
-    payments = buildSalePayments(totalFen, tradeIn?.appraisedFen ?? 0, manual);
+    payments = buildSalePayments(totalFen, tradeIn?.appraisedFen ?? 0, manual, subsidyFen);
   } catch (error) {
     if (error instanceof PaymentError) throw new SalesError(error.message);
     throw error;
@@ -194,7 +214,11 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
       tradeInOrderId: tradeIn?.id ?? null,
       payments: {
         create: payments.map((p) =>
-          p.method === "TRADE_IN" && tradeIn ? { method: p.method, amountFen: p.amountFen, tradeInOrderId: tradeIn.id, reference: tradeIn.orderNo } : { method: p.method, amountFen: p.amountFen },
+          p.method === "TRADE_IN" && tradeIn
+            ? { method: p.method, amountFen: p.amountFen, tradeInOrderId: tradeIn.id, reference: tradeIn.orderNo }
+            : p.method === "SUBSIDY" && subsidy
+              ? { method: p.method, amountFen: p.amountFen, reference: subsidy.code }
+              : { method: p.method, amountFen: p.amountFen },
         ),
       },
     },
@@ -225,7 +249,18 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     });
   }
 
-  await writeAudit({ userId: user.id, action: "sale.create", entity: "sales_order", entityId: order.id, detail: { orderNo, totalFen, lines: lines.length, services: serviceOf.size, tradeIn: tradeIn?.orderNo ?? null, payments: payments.map((p) => p.method), priceChanges: lines.filter((l) => l.unitPriceFen !== l.listPriceFen).map((l) => ({ skuId: l.skuId, deviceId: l.deviceId, listPriceFen: l.listPriceFen, unitPriceFen: l.unitPriceFen })) } }, tx);
+  if (subsidy) {
+    await createClaimsTx(tx, {
+      storeId: data.storeId,
+      salesOrderId: order.id,
+      customerId: customerId!,
+      bizDate,
+      code: subsidy.code,
+      lines: subsidy.picks.map((p) => ({ salesOrderItemId: itemIds[p.key]!, deviceId: lines[p.key]!.deviceId!, policyId: p.policyId, categoryId: p.categoryId, baseFen: p.baseFen, subsidyFen: p.subsidyFen })),
+    });
+  }
+
+  await writeAudit({ userId: user.id, action: "sale.create", entity: "sales_order", entityId: order.id, detail: { orderNo, totalFen, lines: lines.length, services: serviceOf.size, tradeIn: tradeIn?.orderNo ?? null, subsidyFen, payments: payments.map((p) => p.method), priceChanges: lines.filter((l) => l.unitPriceFen !== l.listPriceFen).map((l) => ({ skuId: l.skuId, deviceId: l.deviceId, listPriceFen: l.listPriceFen, unitPriceFen: l.unitPriceFen })) } }, tx);
   return { id: order.id, orderNo };
 }
 
@@ -274,6 +309,7 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
     await tx.payment.updateMany({ where: { salesOrderId: orderId, tradeInOrderId: order.tradeInOrderId }, data: { tradeInOrderId: null } });
   }
   await voidEntitlementsTx(tx, { salesOrderId: orderId }); // 单作废了，单上的碎屏险、延保跟着失效
+  await cancelClaimsTx(tx, { salesOrderId: orderId }); // 国补单撤销（口径第 15 节）
   await tx.salesOrder.update({ where: { id: orderId }, data: { status: "VOIDED", voidedById: user.id, voidedAt: new Date(), voidReason, tradeInOrderId: null } });
   await writeAudit({ userId: user.id, action: "sale.void", entity: "sales_order", entityId: orderId, detail: { reason: voidReason } }, tx);
 }
@@ -328,6 +364,7 @@ export async function getSalesOrder(user: CurrentUser, id: number) {
       items: { include: { sku: { select: { name: true, isService: true } }, device: { select: { code: true } }, entitlement: { select: { id: true, status: true, startedOn: true, expiresOn: true, deviceReturnedAt: true, device: { select: { code: true } } } } } },
       payments: { orderBy: { id: "asc" } },
       tradeInOrder: { select: { id: true, orderNo: true, modelName: true, deviceCode: true, appraisedFen: true } },
+      subsidyClaims: { orderBy: { id: "asc" }, select: { id: true, claimNo: true, status: true, subsidyFen: true, basePriceFen: true, rejectReason: true, device: { select: { code: true } } } },
       returnOrders: {
         orderBy: { id: "asc" },
         include: { handledBy: { select: { name: true } }, payments: true, items: { include: { sku: { select: { name: true } }, device: { select: { code: true } } } } },

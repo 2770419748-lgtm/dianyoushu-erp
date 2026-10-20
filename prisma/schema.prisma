@@ -247,8 +247,23 @@ enum PaymentMethod {
   INSTALLMENT // 分期
   TRADE_IN    // 以旧换新抵扣
   OTHER       // 其他
+  SUBSIDY     // 国补立减（口径第 15 节，系统按政策算，不能手选）
 
   @@map("payment_method")
+}
+
+/// 国补单状态（口径第 15 节）
+enum SubsidyClaimStatus {
+  PENDING    // 待提交：开单时生成，要补资料
+  SUBMITTED  // 审核中：已提交平台审核
+  APPROVED   // 待到账：平台审核通过
+  SETTLED    // 已到账
+  REJECTED   // 被驳回
+  CANCELLED  // 已撤销：没到账时作废、退货
+  RETURN_DUE // 需退回：已到账后退货
+  RETURNED   // 已退回给平台
+
+  @@map("subsidy_claim_status")
 }
 
 /// 库存流水的单据类型
@@ -317,6 +332,7 @@ model Store {
   entitlements    ServiceEntitlement[]
   repairOrders    RepairOrder[]
   carrierBusiness CarrierBusiness[]
+  subsidyClaims   SubsidyClaim[]
   wecomBindCodes  WecomBindCode[]
   kpiTargets      KpiTarget[]
 
@@ -384,7 +400,9 @@ model Category {
   sortOrder Int      @default(0) @map("sort_order")
   isActive  Boolean  @default(true) @map("is_active")
 
-  models ProductModel[]
+  models          ProductModel[]
+  subsidyPolicies SubsidyPolicy[]
+  subsidyClaims   SubsidyClaim[]
 
   @@map("categories")
 }
@@ -505,6 +523,7 @@ model Device {
   returnItems    ReturnOrderItem[]
   entitlements   ServiceEntitlement[]
   repairOrders   RepairOrder[]
+  subsidyClaims  SubsidyClaim[]
 
   @@index([storeId, status])
   @@index([skuId])
@@ -751,6 +770,7 @@ model Customer {
   entitlements  ServiceEntitlement[]
   repairOrders  RepairOrder[]
   carrierBusiness CarrierBusiness[]
+  subsidyClaims SubsidyClaim[]
   wecomFollows  WecomFollow[]
   wecomTags     WecomCustomerTag[]
   wecomBindCodes WecomBindCode[]
@@ -793,6 +813,7 @@ model SalesOrder {
   wecomBindCodes WecomBindCode[]
   repairOrders RepairOrder[]
   carrierBusiness CarrierBusiness[]
+  subsidyClaims SubsidyClaim[]
 
   @@index([storeId, bizDate])
   @@index([salespersonId, bizDate])
@@ -817,8 +838,9 @@ model SalesOrderItem {
   sku    Sku        @relation(fields: [skuId], references: [id])
   device Device?    @relation(fields: [deviceId], references: [id])
 
-  returnItems ReturnOrderItem[]
-  entitlement ServiceEntitlement?
+  returnItems  ReturnOrderItem[]
+  entitlement  ServiceEntitlement?
+  subsidyClaim SubsidyClaim?
 
   @@index([orderId])
   @@index([deviceId])
@@ -1201,6 +1223,69 @@ model CarrierSettlementLine {
 
   @@index([settlementId])
   @@map("carrier_settlement_lines")
+}
+
+/// 国补政策（口径第 15 节）：按品类一条，总部维护
+model SubsidyPolicy {
+  id          Int      @id @default(autoincrement())
+  categoryId  Int      @unique @map("category_id")
+  rateBp      Int      @map("rate_bp") // 补贴比例，万分之几：1500 = 15%（数据库 CHECK 1～10000）
+  capFen      Int      @map("cap_fen") // 单件封顶
+  priceCapFen Int      @map("price_cap_fen") // 成交价超过这个数不补
+  startsOn    DateTime @map("starts_on") @db.Date
+  endsOn      DateTime @map("ends_on") @db.Date // 含这一天
+  isActive    Boolean  @default(true) @map("is_active")
+  note        String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  category Category      @relation(fields: [categoryId], references: [id])
+  claims   SubsidyClaim[]
+
+  @@map("subsidy_policies")
+}
+
+/// 国补单：每台补贴的机器一张，开单时生成；收款里那笔“国补立减”等于这张单所有国补单的补贴合计
+model SubsidyClaim {
+  id                Int                @id @default(autoincrement())
+  claimNo           String             @unique @map("claim_no") // GB + yyyyMMdd + 4 位
+  storeId           Int                @map("store_id")
+  salesOrderId      Int                @map("sales_order_id")
+  salesOrderItemId  Int                @unique @map("sales_order_item_id")
+  customerId        Int                @map("customer_id")
+  deviceId          Int                @map("device_id")
+  policyId          Int                @map("policy_id")
+  categoryId        Int                @map("category_id")
+  bizDate           DateTime           @map("biz_date") @db.Date // 开单营业日（每人每类一台按它落在哪条政策期内算）
+  basePriceFen      Int                @map("base_price_fen") // 分摊整单优惠后的成交价
+  subsidyFen        Int                @map("subsidy_fen") // 数据库 CHECK 0 < subsidy <= base
+  qualificationCode String             @map("qualification_code") // 顾客的补贴资格码（平台核销码）
+  invoiceNo         String?            @map("invoice_no")
+  status            SubsidyClaimStatus @default(PENDING)
+  submittedAt       DateTime?          @map("submitted_at")
+  reviewedAt        DateTime?          @map("reviewed_at")
+  rejectReason      String?            @map("reject_reason")
+  settledAt         DateTime?          @map("settled_at")
+  settledFen        Int?               @map("settled_fen")
+  cancelledAt       DateTime?          @map("cancelled_at")
+  returnedAt        DateTime?          @map("returned_at")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  store          Store          @relation(fields: [storeId], references: [id])
+  salesOrder     SalesOrder     @relation(fields: [salesOrderId], references: [id])
+  salesOrderItem SalesOrderItem @relation(fields: [salesOrderItemId], references: [id])
+  customer       Customer       @relation(fields: [customerId], references: [id])
+  device         Device         @relation(fields: [deviceId], references: [id])
+  policy         SubsidyPolicy  @relation(fields: [policyId], references: [id])
+  category       Category       @relation(fields: [categoryId], references: [id])
+
+  @@index([storeId, bizDate])
+  @@index([customerId, categoryId])
+  @@index([salesOrderId])
+  @@index([status])
+  @@index([qualificationCode])
+  @@map("subsidy_claims")
 }
 
 /// 企业微信跟进关系：员工 × 外部联系人（口径第 12 节）。客户可以先有跟进关系、后绑定档案（customerId 为空 = 还没绑定）

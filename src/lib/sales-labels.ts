@@ -10,6 +10,7 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   INSTALLMENT: "分期",
   TRADE_IN: "以旧换新抵扣",
   OTHER: "其他",
+  SUBSIDY: "国补立减",
 };
 
 /** 开单时能直接选的收款方式（以旧换新抵扣要关联回收单，第 7 周做） */

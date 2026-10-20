@@ -6,6 +6,7 @@ import { App, Button, Card, Descriptions, Input, Popconfirm, Space, Table, Tag, 
 import type { TableColumnsType } from "antd";
 import { formatDate, formatDateTime, formatFen } from "@/lib/format";
 import { PAYMENT_METHOD_LABELS, SALES_STATUS_COLORS, SALES_STATUS_LABELS } from "@/lib/sales-labels";
+import { SUBSIDY_STATUS_COLORS, SUBSIDY_STATUS_LABELS } from "@/lib/subsidy";
 import type { SalesOrderDetail } from "@/server/sales/sales-service";
 import { voidSalesOrderAction } from "../actions";
 
@@ -145,7 +146,15 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
           <Typography.Paragraph key={p.id} style={{ marginBottom: 4 }}>
             {PAYMENT_METHOD_LABELS[p.method]}：{formatFen(p.amountFen)} 元
             {p.method === "TRADE_IN" ? <Typography.Text type="secondary">（回收单 {p.reference ?? order.tradeInOrder?.orderNo ?? ""}）</Typography.Text> : null}
+            {p.method === "SUBSIDY" ? <Typography.Text type="secondary">（资格码 {p.reference ?? ""}，平台出的钱，门店先垫）</Typography.Text> : null}
             {order.status === "VOIDED" ? <Tag style={{ marginLeft: 8 }}>已作废</Tag> : null}
+          </Typography.Paragraph>
+        ))}
+        {order.subsidyClaims.map((c) => (
+          <Typography.Paragraph key={c.id} type="secondary" style={{ marginBottom: 4 }}>
+            国补单 <Link href={`/subsidy?q=${c.claimNo}`}>{c.claimNo}</Link>：机器 {c.device.code}，成交价 {formatFen(c.basePriceFen)} 元，补 {formatFen(c.subsidyFen)} 元{" "}
+            <Tag color={SUBSIDY_STATUS_COLORS[c.status]}>{SUBSIDY_STATUS_LABELS[c.status]}</Tag>
+            {c.rejectReason ? `（${c.rejectReason}）` : ""}
           </Typography.Paragraph>
         ))}
         {order.tradeInOrder ? (

@@ -65,6 +65,11 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "carrier.void": "作废运营商业务",
   "carrier.sync_simulated": "模拟同步运营商状态",
   "carrier.settlement.import": "导入运营商结算单",
+  "subsidy.policy.save": "改国补政策",
+  "subsidy.claim.submit": "国补单提交审核",
+  "subsidy.claim.resubmit": "国补单改了重新提交",
+  "subsidy.import": "导入国补平台结果",
+  "subsidy.claim.returned": "国补已退回平台",
   "entitlement.reminder_scan": "生成到期提醒",
   "entitlement.reminder_contacted": "到期提醒已联系",
   "wecom.bind": "客户绑定企业微信",
@@ -98,6 +103,8 @@ export const AUDIT_ENTITY_LABELS: Record<string, string> = {
   carrier_business: "运营商业务单",
   carrier_rule: "运营商佣金政策",
   carrier_settlement: "运营商结算单",
+  subsidy_policy: "国补政策",
+  subsidy_claim: "国补单",
 };
 
 export function auditActionLabel(action: string): string {

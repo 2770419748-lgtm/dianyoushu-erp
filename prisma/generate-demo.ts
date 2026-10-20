@@ -7,6 +7,7 @@ import { describeIntegrity, integrityOk, runIntegrityChecks } from "./integrity-
 import { daysUntil, entitlementPeriod } from "../src/lib/entitlement";
 import { payerOptions, repairChargeFen, type FaultCategoryKey, type RepairPayerKey } from "../src/lib/repair";
 import { monthRange, reconcileStatement, type CarrierBizTypeKey, type CarrierKey, type StatementLine } from "../src/lib/carrier";
+import { lineBaseFen, subsidyFenOf, type SubsidyStatusKey } from "../src/lib/subsidy";
 
 // 模拟经营数据 v1（第 9 周）：10 家店、3 个月（截至昨天）的采购到货、销售、以旧换新、回收机转良品再卖、作废、退货、日结。
 // 规则和真实业务一致：库存每次变动都有流水、配件余额 = 流水合计、日结系统数 = 当天收款汇总。
@@ -174,7 +175,35 @@ const out = {
   wecomFollows: [] as Row[],
   wecomTags: [] as Row[],
   wecomCustomerTags: [] as Row[],
+  subsidyPolicies: [] as Row[],
+  subsidyClaims: [] as SubsidyRec[],
 };
+interface SubsidyRec {
+  id: number;
+  claimNo: string;
+  storeId: number;
+  salesOrderId: number;
+  salesOrderItemId: number;
+  customerId: number;
+  deviceId: number;
+  policyId: number;
+  categoryId: number;
+  bizDate: Date;
+  basePriceFen: number;
+  subsidyFen: number;
+  qualificationCode: string;
+  invoiceNo: string | null;
+  status: SubsidyStatusKey;
+  submittedAt: Date | null;
+  reviewedAt: Date | null;
+  rejectReason: string | null;
+  settledAt: Date | null;
+  settledFen: number | null;
+  cancelledAt: Date | null;
+  returnedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 interface RepairRec {
   id: number;
   orderNo: string;
@@ -309,6 +338,17 @@ async function main() {
   if (!genericSku) throw new Error("缺少“回收机（其他机型）”SKU，先跑 pnpm db:seed");
 
   const deviceSkus = skus.filter((s) => s.model.category.kind === "DEVICE" && s.guidePriceFen > 0);
+  // 国补政策（口径第 15 节）：手机、平板，成交价的 15%，单件最多 500 元，6000 元以内；演示期间所在年份整年有效
+  const policyByCategory = new Map<number, { id: number; rateBp: number; capFen: number; priceCapFen: number; startsOn: Date; endsOn: Date }>();
+  for (const name of ["手机", "平板"]) {
+    const categoryId = deviceSkus.find((x) => x.model.category.name === name)?.model.categoryId;
+    if (!categoryId) continue;
+    const policy = { id: out.subsidyPolicies.length + 1, rateBp: 1500, capFen: 50000, priceCapFen: 600000, startsOn: new Date(Date.UTC(bizDateOf(-DAYS).getUTCFullYear(), 0, 1)), endsOn: new Date(Date.UTC(bizDateOf(0).getUTCFullYear(), 11, 31)) };
+    policyByCategory.set(categoryId, policy);
+    out.subsidyPolicies.push({ ...policy, categoryId, isActive: true, note: "数码产品购新补贴（演示）", createdAt: at(policy.startsOn, 9, 0), updatedAt: at(policy.startsOn, 9, 0) });
+  }
+  const subsidyUsed = new Map<number, Set<number>>(); // 客户 → 用过国补的品类（每人每类一台）
+  let subsidyCodeSeq = 0;
   const accessorySkus = skus.filter((s) => s.model.category.kind === "ACCESSORY" && !s.isService);
   // 服务类商品（碎屏险、延保）：买新机的约两成加一份，不进库存，单上必须有客户
   const serviceSkus = skus.filter((s) => s.isService && s.serviceMonths);
@@ -395,7 +435,7 @@ async function main() {
       for (const c of oldCloses.values()) {
         const t = at(c.bizDate, 22, between(0, 30));
         out.closes.push({ id: c.closeId, closeNo: docNo("DC", c.bizDate), storeId: store.id, bizDate: c.bizDate, status: "CONFIRMED", confirmedById: manager.id, confirmedAt: t, note: null, createdAt: t, updatedAt: t });
-        for (const method of ["CASH", "WECHAT", "ALIPAY", "CARD", "INSTALLMENT", "OTHER", "TRADE_IN"] as PaymentMethod[]) {
+        for (const method of ["CASH", "WECHAT", "ALIPAY", "CARD", "INSTALLMENT", "OTHER", "TRADE_IN", "SUBSIDY"] as PaymentMethod[]) {
           const fen = method === "WECHAT" ? c.wechatFen : 0;
           out.closeLines.push({ id: ++ids.closeLine, dailyCloseId: c.closeId, method, systemFen: fen, actualFen: fen, diffFen: 0 });
         }
@@ -472,10 +512,12 @@ async function main() {
         const svcItem = svc ? items.find((i) => i.id === svc.salesOrderItemId) : undefined;
         const t = at(bizDate, between(10, 12), between(0, 59));
         const salePays = out.payments.filter((p) => p.salesOrderId === sale.id && p.amountFen > 0);
-        const cashPaid = salePays.filter((p) => p.method !== "TRADE_IN").reduce((s, p) => s + p.amountFen, 0);
+        const cashPaid = salePays.filter((p) => p.method !== "TRADE_IN" && p.method !== "SUBSIDY").reduce((s, p) => s + p.amountFen, 0);
         const lineFen = Math.round((item.lineTotalFen * 1) / item.qty) + (svcItem ? svcItem.lineTotalFen : 0);
-        const refundFen = Math.min(cashPaid, Math.round((lineFen * sale.totalFen) / sale.subtotalFen));
-        const method = salePays.find((p) => p.method !== "TRADE_IN")?.method ?? "CASH";
+        const subsidyClaim = out.subsidyClaims.find((c) => c.salesOrderItemId === item.id);
+        const refundFen = Math.min(cashPaid, Math.max(0, Math.round((lineFen * sale.totalFen) / sale.subtotalFen) - (subsidyClaim?.subsidyFen ?? 0)));
+        if (subsidyClaim) cancelClaim(subsidyClaim, t);
+        const method = salePays.find((p) => p.method !== "TRADE_IN" && p.method !== "SUBSIDY")?.method ?? "CASH";
         const no = docNo("RT", bizDate);
         const retId = ++ids.ret;
         out.returns.push({ id: retId, orderNo: no, storeId: store.id, salesOrderId: sale.id, customerId: sale.customerId, handledById: manager.id, bizDate, refundFen, reason: pick(["质量问题", "客户不想要了", "颜色不喜欢", "七天无理由"]), dailyCloseId: null, createdAt: t });
@@ -555,7 +597,8 @@ async function main() {
         const subtotalFen = items.reduce((s, i) => s + i.lineTotalFen, 0);
         const discountFen = plan.deviceSku && chance(0.3) ? Math.min(between(5, 30) * 1000, Math.floor(subtotalFen * 0.08 / 1000) * 1000) : 0;
         const totalFen = subtotalFen - discountFen;
-        const customerId = customerFor(plan.tradeIn || service !== null);
+        const wantSubsidy = !!newDeviceItem?.deviceId && !!plan.deviceSku && policyByCategory.has(plan.deviceSku.model.categoryId) && chance(0.3);
+        const customerId = customerFor(plan.tradeIn || service !== null || wantSubsidy);
 
         // 以旧换新：先收旧机（开单前 5 到 15 分钟）
         if (plan.tradeIn && customerId) {
@@ -579,7 +622,24 @@ async function main() {
         // 收款：抵扣 + 一到两种方式，合计 = 应收
         const pays: PaymentRec[] = [];
         if (tradeInId) pays.push({ id: ++ids.payment, salesOrderId: saleId, returnOrderId: null, method: "TRADE_IN", amountFen: tradeInFen, tradeInOrderId: tradeInId, reference: out.tradeIns[tradeInId - 1]!.orderNo as string, createdAt: plan.time });
-        let rest = totalFen - tradeInFen;
+        // 国补：这台新机按分摊整单优惠后的成交价算，6000 元以内补 15%、最多 500 元；客户这一类用过就不补
+        let claim: SubsidyRec | null = null;
+        if (wantSubsidy && customerId && newDeviceItem?.deviceId && plan.deviceSku) {
+          const categoryId = plan.deviceSku.model.categoryId;
+          const policy = policyByCategory.get(categoryId)!;
+          const baseFen = lineBaseFen(newDeviceItem.lineTotalFen, subtotalFen, totalFen);
+          if (baseFen <= policy.priceCapFen && !subsidyUsed.get(customerId)?.has(categoryId) && bizDate >= policy.startsOn) {
+            const fen = subsidyFenOf(baseFen, policy);
+            const seq = ++subsidyCodeSeq;
+            const code = `Q${ymd(bizDate)}${String(seq).padStart(5, "0")}${(seq % 9) + 1}`;
+            claim = { id: out.subsidyClaims.length + 1, claimNo: docNo("GB", bizDate), storeId: store.id, salesOrderId: saleId, salesOrderItemId: newDeviceItem.id, customerId, deviceId: newDeviceItem.deviceId, policyId: policy.id, categoryId, bizDate, basePriceFen: baseFen, subsidyFen: fen, qualificationCode: code, invoiceNo: null, status: "PENDING", submittedAt: null, reviewedAt: null, rejectReason: null, settledAt: null, settledFen: null, cancelledAt: null, returnedAt: null, createdAt: plan.time, updatedAt: plan.time };
+            subsidyUsed.set(customerId, new Set([...(subsidyUsed.get(customerId) ?? []), categoryId]));
+            pays.push({ id: ++ids.payment, salesOrderId: saleId, returnOrderId: null, method: "SUBSIDY", amountFen: fen, tradeInOrderId: null, reference: code, createdAt: plan.time });
+            advanceClaim(claim, -day);
+            out.subsidyClaims.push(claim);
+          }
+        }
+        let rest = totalFen - tradeInFen - (claim?.subsidyFen ?? 0);
         const primary = weighted(METHOD_WEIGHTS.filter(([m]) => m !== "INSTALLMENT" || rest >= 300000), ([, w]) => w)[0];
         if (rest > 100000 && chance(0.2)) {
           const second: PaymentMethod = primary === "CASH" ? "WECHAT" : "CASH";
@@ -607,6 +667,7 @@ async function main() {
           sale.voidedAt = t;
           sale.voidReason = pick(["客户反悔", "开错单", "价格录错"]);
           sale.updatedAt = t;
+          if (claim) cancelClaim(claim, t);
           if (entitlement) {
             entitlement.status = "VOIDED";
             entitlement.voidedAt = t;
@@ -678,7 +739,7 @@ async function main() {
       const t = at(bizDate, 22, between(0, 30));
       const diffCash = chance(0.06) ? (chance(0.5) ? 1 : -1) * between(1, 50) * 100 : 0;
       out.closes.push({ id: closeId, closeNo: docNo("DC", bizDate), storeId: store.id, bizDate, status: "CONFIRMED", confirmedById: manager.id, confirmedAt: t, note: diffCash ? `现金${diffCash > 0 ? "长款" : "短款"} ${Math.abs(diffCash) / 100} 元，已登记` : null, createdAt: t, updatedAt: t });
-      for (const method of ["CASH", "WECHAT", "ALIPAY", "CARD", "INSTALLMENT", "OTHER", "TRADE_IN"] as PaymentMethod[]) {
+      for (const method of ["CASH", "WECHAT", "ALIPAY", "CARD", "INSTALLMENT", "OTHER", "TRADE_IN", "SUBSIDY"] as PaymentMethod[]) {
         const systemFen = dayPayments.filter((p) => p.method === method).reduce((s, p) => s + p.amountFen, 0);
         const actualFen = method === "CASH" ? systemFen + diffCash : systemFen;
         out.closeLines.push({ id: ++ids.closeLine, dailyCloseId: closeId, method, systemFen, actualFen, diffFen: actualFen - systemFen });
@@ -1204,6 +1265,61 @@ function buildCarrierDemo(storeIds: number[], users: { id: number; role: string;
   }
 }
 
+/** 国补单按开单后过了几天推进：两三天内多半还没提交；一两周在审核；一个月以上基本都到账了，少数被驳回 */
+const SUBSIDY_REJECT_REASONS = ["发票抬头和顾客实名不一致", "串号照片看不清", "成交价和发票金额对不上"];
+function advanceClaim(c: SubsidyRec, age: number) {
+  const now = new Date();
+  const cap = (d: Date) => new Date(Math.min(d.getTime(), now.getTime() - 3600000));
+  const r = rnd();
+  const target: SubsidyStatusKey =
+    age <= 3 ? (r < 0.7 ? "PENDING" : "SUBMITTED")
+    : age <= 14 ? (r < 0.05 ? "PENDING" : r < 0.55 ? "SUBMITTED" : r < 0.95 ? "APPROVED" : "REJECTED")
+    : age <= 40 ? (r < 0.03 ? "SUBMITTED" : r < 0.33 ? "APPROVED" : r < 0.95 ? "SETTLED" : "REJECTED")
+    : r < 0.01 ? "APPROVED" : r < 0.95 ? "SETTLED" : "REJECTED";
+  if (target === "PENDING") return;
+  c.invoiceNo = `FP${ymd(c.bizDate)}${String(c.id).padStart(6, "0")}`;
+  c.submittedAt = cap(new Date(c.createdAt.getTime() + between(2, 40) * 3600000));
+  c.status = "SUBMITTED";
+  c.updatedAt = c.submittedAt;
+  if (target === "SUBMITTED") return;
+  c.reviewedAt = cap(new Date(c.submittedAt.getTime() + between(2, 7) * DAY_MS));
+  c.updatedAt = c.reviewedAt;
+  if (target === "REJECTED") {
+    c.status = "REJECTED";
+    c.rejectReason = pick(SUBSIDY_REJECT_REASONS);
+    return;
+  }
+  c.status = "APPROVED";
+  if (target === "APPROVED") return;
+  c.settledAt = cap(new Date(c.reviewedAt.getTime() + between(4, 12) * DAY_MS));
+  c.settledFen = c.subsidyFen;
+  c.status = "SETTLED";
+  c.updatedAt = c.settledAt;
+}
+
+/** 作废、退货时的国补单：到账在这之前的要退回平台，没到账的撤销（这之后才会发生的提交、审核、到账都不算） */
+function cancelClaim(c: SubsidyRec, t: Date) {
+  if (c.settledAt && c.settledAt < t) {
+    c.status = "RETURN_DUE";
+    c.cancelledAt = t;
+    c.updatedAt = t;
+    return;
+  }
+  if (c.submittedAt && c.submittedAt > t) {
+    c.submittedAt = null;
+    c.invoiceNo = null;
+  }
+  if (c.reviewedAt && c.reviewedAt > t) {
+    c.reviewedAt = null;
+    c.rejectReason = null;
+  }
+  c.settledAt = null;
+  c.settledFen = null;
+  c.status = "CANCELLED";
+  c.cancelledAt = t;
+  c.updatedAt = t;
+}
+
 async function insert<T extends Row>(label: string, rows: T[], fn: (chunk: T[]) => Promise<unknown>) {
   for (let i = 0; i < rows.length; i += 2000) await fn(rows.slice(i, i + 2000));
   console.log(`  ${label}：${rows.length}`);
@@ -1227,6 +1343,8 @@ async function write() {
   await insert("服务权益", out.entitlements as unknown as Row[], (c) => prisma.serviceEntitlement.createMany({ data: c as never }));
   await insert("维修单", out.repairs as unknown as Row[], (c) => prisma.repairOrder.createMany({ data: c as never }));
   await insert("收款", out.payments as unknown as Row[], (c) => prisma.payment.createMany({ data: c as never }));
+  await insert("国补政策", out.subsidyPolicies, (c) => prisma.subsidyPolicy.createMany({ data: c as never }));
+  await insert("国补单", out.subsidyClaims as unknown as Row[], (c) => prisma.subsidyClaim.createMany({ data: c as never }));
   await insert("运营商佣金政策", carrierOut.rules, (c) => prisma.carrierCommissionRule.createMany({ data: c as never }));
   await insert("运营商结算单", carrierOut.settlements, (c) => prisma.carrierSettlement.createMany({ data: c as never }));
   await insert("运营商业务", carrierOut.business as unknown as Row[], (c) => prisma.carrierBusiness.createMany({ data: c as never }));
@@ -1244,7 +1362,7 @@ async function write() {
     await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   // 自己指定了 id，自增序列要跟上，后面正常开单才不会撞号
-  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines"];
+  const tables = ["customers", "purchase_orders", "purchase_order_items", "goods_receipts", "goods_receipt_items", "trade_in_orders", "devices", "daily_closes", "daily_close_lines", "sales_orders", "sales_order_items", "return_orders", "return_order_items", "payments", "accessory_stocks", "stock_ledgers", "kpi_targets", "service_entitlements", "entitlement_reminders", "wecom_follows", "wecom_tags", "repair_orders", "carrier_commission_rules", "carrier_settlements", "carrier_business", "carrier_settlement_lines", "subsidy_policies", "subsidy_claims"];
   for (const t of tables) {
     await prisma.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST(COALESCE((SELECT MAX(id) FROM "${t}"), 0), 1), (SELECT COUNT(*) > 0 FROM "${t}"))`);
   }
@@ -1255,7 +1373,7 @@ async function verify() {
   const result = await runIntegrityChecks(prisma);
   const sales = out.sales.filter((s) => s.status === "COMPLETED");
   console.log(
-    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${carrierOut.business.length} 笔运营商业务（${carrierOut.settlements.length} 张往月结算单）、${out.wecomFollows.length} 条企业微信好友关系。`,
+    `模拟数据完成：${sales.length} 张有效销售单（作废 ${out.sales.length - sales.length}）、${out.tradeIns.length} 张回收单、${out.returns.length} 张退货单、${out.devices.length} 台机器、${out.closes.length} 次日结、${out.entitlements.length} 份碎屏险和延保、${out.repairs.length} 张维修单、${out.subsidyClaims.length} 张国补单、${carrierOut.business.length} 笔运营商业务（${carrierOut.settlements.length} 张往月结算单）、${out.wecomFollows.length} 条企业微信好友关系。`,
   );
   console.log(`自检：${describeIntegrity(result)}`);
   if (!integrityOk(result)) process.exitCode = 1;

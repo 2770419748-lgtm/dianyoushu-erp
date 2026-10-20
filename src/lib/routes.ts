@@ -25,6 +25,8 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/carrier/stats": "运营商业务统计",
   "/carrier/settlements": "运营商结算对账",
   "/carrier/rules": "运营商佣金政策",
+  "/subsidy": "国补",
+  "/subsidy/policies": "国补政策",
   "/wecom": "企微对接",
   "/sales": "销售单",
   "/sales/new": "开单",

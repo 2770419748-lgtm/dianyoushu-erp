@@ -2,15 +2,15 @@ import type { PaymentMethod } from "@/generated/prisma/enums";
 
 // 日结对账的纯函数（口径第 5 节"日结"），不查库，方便单元测试。
 
-export const DAILY_CLOSE_METHODS: PaymentMethod[] = ["CASH", "WECHAT", "ALIPAY", "CARD", "INSTALLMENT", "OTHER", "TRADE_IN"];
+export const DAILY_CLOSE_METHODS: PaymentMethod[] = ["CASH", "WECHAT", "ALIPAY", "CARD", "INSTALLMENT", "OTHER", "TRADE_IN", "SUBSIDY"];
 
-/** 不用店长手点的方式：以旧换新抵扣不是钱，实收自动等于系统数 */
-export const AUTO_MATCH_METHODS: PaymentMethod[] = ["TRADE_IN"];
+/** 不用店长手点的方式：以旧换新抵扣、国补立减都不是门店当天收到的钱，实收自动等于系统数 */
+export const AUTO_MATCH_METHODS: PaymentMethod[] = ["TRADE_IN", "SUBSIDY"];
 
 export type MethodAmounts = Record<PaymentMethod, number>;
 
 export function emptyAmounts(): MethodAmounts {
-  return { CASH: 0, WECHAT: 0, ALIPAY: 0, CARD: 0, INSTALLMENT: 0, OTHER: 0, TRADE_IN: 0 };
+  return { CASH: 0, WECHAT: 0, ALIPAY: 0, CARD: 0, INSTALLMENT: 0, OTHER: 0, TRADE_IN: 0, SUBSIDY: 0 };
 }
 
 /** 按支付方式汇总：收款正、退款负 */

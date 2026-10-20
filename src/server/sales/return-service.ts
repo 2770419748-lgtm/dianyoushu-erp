@@ -10,6 +10,7 @@ import { DeviceStateError } from "@/server/stock/device-state";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
 import { voidEntitlementsTx } from "@/server/entitlement/entitlement-service";
+import { cancelClaimsTx } from "@/server/subsidy/subsidy-service";
 import { maxRefundableFen, MANUAL_PAYMENT_METHODS, returnRefundCapFen } from "./payments";
 import { lockRow } from "@/server/db-lock";
 import { DAY_CLOSED_MESSAGE, isDayClosed, lockStoreDay } from "@/server/dailyclose/guard";
@@ -35,7 +36,7 @@ export async function getReturnContext(user: CurrentUser, salesOrderId: number) 
     where: { id: salesOrderId },
     include: {
       store: { select: { id: true, code: true, name: true, regionId: true } },
-      items: { orderBy: { id: "asc" }, include: { sku: { select: { name: true } }, device: { select: { code: true } }, entitlement: { select: { deviceId: true, status: true } } } },
+      items: { orderBy: { id: "asc" }, include: { sku: { select: { name: true } }, device: { select: { code: true } }, entitlement: { select: { deviceId: true, status: true } }, subsidyClaim: { select: { subsidyFen: true } } } },
       payments: true,
       returnOrders: { select: { refundFen: true } },
     },
@@ -59,9 +60,11 @@ export async function getReturnContext(user: CurrentUser, salesOrderId: number) 
       deviceId: i.deviceId,
       // 服务行（碎屏险、延保）保的是本单哪台机器：退这台机器时提示一起退服务
       serviceForDeviceId: i.entitlement?.status === "ACTIVE" ? i.entitlement.deviceId : null,
+      subsidyFen: i.subsidyClaim?.subsidyFen ?? 0, // 这台机器的国补：平台出的，退货不退给顾客
     })),
-    refundMethods: Array.from(new Set(salePayments.map((p) => p.method).filter((m) => m !== "TRADE_IN"))),
+    refundMethods: Array.from(new Set(salePayments.map((p) => p.method).filter((m) => m !== "TRADE_IN" && m !== "SUBSIDY"))),
     tradeInFen: salePayments.filter((p) => p.method === "TRADE_IN").reduce((s, p) => s + p.amountFen, 0),
+    subsidyFen: salePayments.filter((p) => p.method === "SUBSIDY").reduce((s, p) => s + p.amountFen, 0),
     refundedFen: refunded,
     maxRefundFen: maxRefundableFen(salePayments, refunded),
   };
@@ -83,7 +86,7 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
   await lockRow(tx, "sales_orders", salesOrderId);
   const order = await tx.salesOrder.findUnique({
     where: { id: salesOrderId },
-    include: { store: true, items: { include: { sku: { select: { isService: true } }, entitlement: { select: { status: true } } } }, payments: true, returnOrders: { select: { refundFen: true } } },
+    include: { store: true, items: { include: { sku: { select: { isService: true } }, entitlement: { select: { status: true } }, subsidyClaim: { select: { subsidyFen: true } } } }, payments: true, returnOrders: { select: { refundFen: true } } },
   });
   if (!order) throw new ReturnError("原销售单不存在");
   assertStoreAccess(user, order.store);
@@ -110,14 +113,15 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
   const salePayments = order.payments.filter((p) => p.salesOrderId === order.id && p.amountFen > 0);
   const refunded = order.returnOrders.reduce((s, r) => s + r.refundFen, 0);
   const maxFen = returnRefundCapFen(
-    plans.map((p) => ({ lineTotalFen: p.item.lineTotalFen, qty: p.item.qty, returnQty: p.qty })),
+    plans.map((p) => ({ lineTotalFen: p.item.lineTotalFen, qty: p.item.qty, returnQty: p.qty, subsidyFen: p.item.subsidyClaim?.subsidyFen ?? 0 })),
     order,
     salePayments,
     refunded,
   );
   if (refundFen > maxFen) {
     const paidLeft = maxRefundableFen(salePayments, refunded);
-    throw new ReturnError(`这次退回的商品最多退 ${(maxFen / 100).toFixed(2)} 元${maxFen === paidLeft ? "（以旧换新抵扣部分不退）" : "（按退回的商品成交额算）"}`);
+    const hasSubsidy = plans.some((p) => p.item.subsidyClaim);
+    throw new ReturnError(`这次退回的商品最多退 ${(maxFen / 100).toFixed(2)} 元${maxFen === paidLeft ? "（以旧换新抵扣、国补立减部分不退）" : hasSubsidy ? "（按退回的商品成交额减去国补算）" : "（按退回的商品成交额算）"}`);
   }
   const refundMethod = input.refundMethod as PaymentMethod;
   if (refundFen > 0) {
@@ -174,6 +178,9 @@ export async function createReturnTx(tx: Tx, user: CurrentUser, input: ReturnInp
       if (plan.item.sku.isService) await voidEntitlementsTx(tx, { salesOrderItemIds: [plan.item.id] });
     }
     // 退了机器、保它的服务没退：服务照常有效，但记上“机器已退回”。机器回库后可能再卖给别人，不能一台机器挂两个客户的保障
+    // 退了补贴的机器：国补单没到账的撤销，已到账的标“需退回”（口径第 15 节）
+    const subsidizedItems = plans.filter((p) => p.item.subsidyClaim).map((p) => p.item.id);
+    if (subsidizedItems.length > 0) await cancelClaimsTx(tx, { salesOrderItemIds: subsidizedItems });
     const returnedDevices = plans.map((p) => p.item.deviceId).filter((id): id is number => id !== null);
     if (returnedDevices.length > 0) {
       await tx.serviceEntitlement.updateMany({ where: { salesOrderId: order.id, deviceId: { in: returnedDevices }, status: "ACTIVE", deviceReturnedAt: null }, data: { deviceReturnedAt: new Date() } });

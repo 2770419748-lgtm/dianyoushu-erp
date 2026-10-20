@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { App, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import type { PaymentMethod } from "@/generated/prisma/enums";
 import { ScanButton } from "@/components/scan-button";
@@ -12,7 +12,7 @@ import type { SellableAccessory, SellableDevice, SellableService } from "@/serve
 import type { AvailableTradeIn } from "@/server/tradein/trade-in-service";
 import { createCustomerAction, searchCustomersAction } from "../../customers/actions";
 import { TradeInForm, type CreatedTradeIn, type TradeInSkuOption } from "../../trade-ins/trade-in-form";
-import { createSalesOrderAction, lookupForSaleAction, searchSellableDevicesAction } from "../actions";
+import { createSalesOrderAction, lookupForSaleAction, previewSubsidyAction, searchSellableDevicesAction } from "../actions";
 
 interface Line {
   key: string;
@@ -48,6 +48,8 @@ interface CustomerPick {
   phoneMasked: string;
 }
 
+type SubsidyPreview = { code: string; subsidyFen: number; picks: { deviceId: number; categoryName: string; baseFen: number; subsidyFen: number }[]; notes: string[] };
+
 // 开单：选客户 → 选机器/加配件/加服务 → 改价优惠 → 以旧换新抵扣（可选）→ 多种收款拆分 → 提交（一个事务扣库存）。
 // 服务（碎屏险、延保）不扣库存，记在客户名下，所以要先选客户；一行一份，选保本单哪台机器。
 export function SaleForm({
@@ -57,6 +59,8 @@ export function SaleForm({
   services,
   availableTradeIns,
   tradeInSkuOptions,
+  subsidyHint,
+  demo,
 }: {
   stores: { id: number; label: string }[];
   storeId: number;
@@ -64,6 +68,8 @@ export function SaleForm({
   services: SellableService[];
   availableTradeIns: AvailableTradeIn[];
   tradeInSkuOptions: TradeInSkuOption[];
+  subsidyHint: string | null; // 有在用的国补政策时的说明；null 就不显示国补
+  demo: boolean;
 }) {
   const router = useRouter();
   const { message } = App.useApp();
@@ -90,12 +96,22 @@ export function SaleForm({
   const [tradeInOptions, setTradeInOptions] = useState<TradeInPick[]>(availableTradeIns);
   const [tradeInModalOpen, setTradeInModalOpen] = useState(false);
 
+  // 国补（口径第 15 节）：勾上、填资格码、点“核对国补”，服务端算补哪台、补多少；单子改了要重新核对
+  const [useSubsidy, setUseSubsidy] = useState(false);
+  const [subsidyCode, setSubsidyCode] = useState("");
+  const [subsidy, setSubsidy] = useState<{ signature: string; preview: SubsidyPreview } | null>(null);
+  const [subsidyError, setSubsidyError] = useState<string | null>(null);
+  const [checkingSubsidy, setCheckingSubsidy] = useState(false);
+
   const subtotalFen = useMemo(() => lines.reduce((s, l) => s + l.unitPriceFen * l.qty, 0), [lines]);
   const typedDiscountFen = yuanToFen(discountYuan) || 0;
   const discountFen = Math.min(typedDiscountFen, subtotalFen); // 超过合计按合计算，下面会提示
   const totalFen = subtotalFen - discountFen;
   const tradeInFen = tradeIn?.appraisedFen ?? 0;
-  const needFen = totalFen - tradeInFen; // 抵扣之后还要客户付的
+  const subsidySignature = JSON.stringify([customer?.id ?? null, subsidyCode.trim().toUpperCase(), lines.map((l) => [l.key, l.unitPriceFen, l.qty]), discountFen]);
+  const subsidyValid = useSubsidy && subsidy !== null && subsidy.signature === subsidySignature;
+  const subsidyFen = subsidyValid ? subsidy.preview.subsidyFen : 0;
+  const needFen = totalFen - tradeInFen - subsidyFen; // 抵扣、国补之后还要客户付的
   // 只有一行收款且没填金额时，默认收剩下的全部
   const paymentFen = (row: PaymentRow) => (row.amountYuan === null ? (payments.length === 1 ? Math.max(needFen, 0) : 0) : yuanToFen(row.amountYuan) || 0);
   const paidFen = payments.reduce((s, p) => s + paymentFen(p), 0);
@@ -106,6 +122,31 @@ export function SaleForm({
     setTradeInOptions([pick, ...tradeInOptions]);
     setTradeIn(pick);
     setTradeInModalOpen(false);
+  }
+
+  async function checkSubsidy() {
+    if (!customer) return void message.warning("用国补要先选客户");
+    setCheckingSubsidy(true);
+    setSubsidyError(null);
+    try {
+      const signature = subsidySignature;
+      const result = await previewSubsidyAction({
+        storeId,
+        customerId: customer.id,
+        code: subsidyCode,
+        devices: lines.filter((l) => l.kind === "device").map((l) => ({ deviceId: l.deviceId, unitPriceFen: l.unitPriceFen })),
+        subtotalFen,
+        totalFen,
+      });
+      if (!result.ok) {
+        setSubsidy(null);
+        setSubsidyError(result.error);
+        return;
+      }
+      setSubsidy({ signature, preview: result.preview });
+    } finally {
+      setCheckingSubsidy(false);
+    }
   }
 
   function updatePayment(key: number, patch: Partial<PaymentRow>) {
@@ -204,6 +245,7 @@ export function SaleForm({
   function submit() {
     if (lines.length === 0) return message.warning("还没加商品");
     if (lines.some((l) => l.kind === "service") && !customer && !tradeIn) return message.warning("单里有碎屏险、延保这类服务，要先选客户（服务记在客户名下，到期要提醒）");
+    if (useSubsidy && !subsidyValid) return message.warning("用国补要先点“核对国补”，单子改过也要重新核对");
     startTransition(async () => {
       const result = await createSalesOrderAction({
         storeId,
@@ -217,6 +259,7 @@ export function SaleForm({
         ),
         discountFen,
         tradeInOrderId: tradeIn?.id,
+        subsidy: useSubsidy ? { qualificationCode: subsidyCode } : null,
         payments: payments.map((p) => ({ method: p.method, amountFen: paymentFen(p) })),
         note,
       });
@@ -362,6 +405,39 @@ export function SaleForm({
                 </Typography.Text>
               ) : null}
             </Card>
+            {subsidyHint ? (
+              <Card size="small" title={<Checkbox checked={useSubsidy} onChange={(e) => { setUseSubsidy(e.target.checked); setSubsidyError(null); }}>这单用国补</Checkbox>}>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: useSubsidy ? 8 : 0 }}>
+                  {subsidyHint}。每人每类一台，一个资格码补一台；要先选客户。
+                </Typography.Paragraph>
+                {useSubsidy ? (
+                  <Space orientation="vertical" style={{ width: "100%" }}>
+                    <Space wrap>
+                      <Input placeholder="顾客的补贴资格码" value={subsidyCode} maxLength={32} style={{ width: 220 }} onChange={(e) => setSubsidyCode(e.target.value)} />
+                      {demo ? (
+                        <Button size="small" onClick={() => setSubsidyCode(`GB${Date.now().toString().slice(-10)}${Math.floor(Math.random() * 90 + 10)}`)}>
+                          模拟领取资格码
+                        </Button>
+                      ) : null}
+                      <Button loading={checkingSubsidy} onClick={() => void checkSubsidy()} disabled={!subsidyCode.trim()}>
+                        核对国补
+                      </Button>
+                    </Space>
+                    {subsidyError ? <Alert type="error" showIcon title={subsidyError} /> : null}
+                    {subsidy && !subsidyValid ? <Alert type="warning" showIcon title="单子改过了，重新点“核对国补”" /> : null}
+                    {subsidyValid
+                      ? subsidy.preview.picks.map((p) => (
+                          <Typography.Text key={p.deviceId} type="success">
+                            {p.categoryName} {lines.find((l) => l.deviceId === p.deviceId)?.code}：成交价 {formatFen(p.baseFen)} 元，国补立减 {formatFen(p.subsidyFen)} 元
+                          </Typography.Text>
+                        ))
+                      : null}
+                    {subsidyValid ? subsidy.preview.notes.map((n) => <Typography.Text key={n} type="secondary">{n}</Typography.Text>) : null}
+                    {demo ? <Typography.Text type="secondary">演示：资格码尾号 0000 的当作资格已过期，用来看失败的样子。</Typography.Text> : null}
+                  </Space>
+                ) : null}
+              </Card>
+            ) : null}
             <Card size="small" title={`收款（还要付 ${formatFen(Math.max(needFen, 0))} 元）`}>
               <Space orientation="vertical" style={{ width: "100%" }}>
                 {payments.map((p) => (
@@ -407,7 +483,7 @@ export function SaleForm({
               </Space>
             </Card>
             <Input placeholder="备注" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} />
-            <Button type="primary" size="large" block loading={pending} onClick={submit} disabled={lines.length === 0 || gapFen !== 0 || tradeInFen > totalFen}>
+            <Button type="primary" size="large" block loading={pending} onClick={submit} disabled={lines.length === 0 || gapFen !== 0 || tradeInFen + subsidyFen > totalFen || (useSubsidy && !subsidyValid)}>
               提交开单
             </Button>
             <Typography.Text type="secondary">提交后机器变已售、配件减数量，都在库存流水里有记录；作废要店长。</Typography.Text>

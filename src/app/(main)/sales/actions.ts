@@ -6,6 +6,7 @@ import { PermissionError } from "@/server/auth/scope";
 import * as sales from "@/server/sales/sales-service";
 import { createReturn, ReturnError, type ReturnInput } from "@/server/sales/return-service";
 import { lookupForSale, type SaleLookup } from "@/server/sales/lookup";
+import { previewSubsidy, SubsidyError } from "@/server/subsidy/subsidy-service";
 
 export type SalesActionResult = { ok: true; id?: number; orderNo?: string } | { ok: false; error: string };
 
@@ -35,6 +36,18 @@ export async function voidSalesOrderAction(id: number, reason: string) {
 }
 
 /** 开单页搜本店可卖的机器 */
+/** 开单页“核对国补”：算补哪台、补多少，核验资格码；不写库 */
+export async function previewSubsidyAction(input: Parameters<typeof previewSubsidy>[1]): Promise<{ ok: true; preview: Awaited<ReturnType<typeof previewSubsidy>> } | { ok: false; error: string }> {
+  const user = await requireUser();
+  try {
+    return { ok: true, preview: await previewSubsidy(user, input) };
+  } catch (error) {
+    if (error instanceof SubsidyError || error instanceof PermissionError) return { ok: false, error: error.message };
+    console.error(error);
+    return { ok: false, error: "核对国补失败，请稍后再试" };
+  }
+}
+
 export async function searchSellableDevicesAction(storeId: number, q: string) {
   const user = await requireUser();
   try {

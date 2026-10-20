@@ -141,6 +141,11 @@ export function canManageCarrier(role: Role): boolean {
   return role === "HQ";
 }
 
+/** 谁能维护国补政策、导入平台审核结果、标记已退回（口径第 15 节）：总部；开单用国补、提交审核同开单权限 */
+export function canManageSubsidy(role: Role): boolean {
+  return role === "HQ";
+}
+
 /** 谁能作废运营商业务单：店长（本店）、总部 */
 export function canVoidCarrier(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
@@ -189,6 +194,7 @@ const MENU_STAFF: MenuEntry[] = [
   { key: "entitlements", label: "到期名单", href: "/entitlements" },
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
+  { key: "subsidy", label: "国补", href: "/subsidy" },
   { key: "sales-list", label: "我的订单", href: "/sales" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "stocktakes", label: "盘点", href: "/stocktakes" },
@@ -218,6 +224,7 @@ const MENU_REGIONAL: MenuEntry[] = [
   { key: "entitlements", label: "到期名单", href: "/entitlements" },
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
+  { key: "subsidy", label: "国补", href: "/subsidy" },
   ROADMAP,
 ];
 
@@ -236,6 +243,7 @@ const MENU_HQ: MenuEntry[] = [
   { key: "entitlements", label: "到期名单", href: "/entitlements" },
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
+  { key: "subsidy", label: "国补", href: "/subsidy" },
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },

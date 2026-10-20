@@ -9,7 +9,7 @@ import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
-import { buildCloseLines, checkClose, DAILY_CLOSE_METHODS, emptyAmounts, orderMismatchFen, summarizeByMethod, type MethodAmounts } from "./summary";
+import { AUTO_MATCH_METHODS, buildCloseLines, checkClose, DAILY_CLOSE_METHODS, emptyAmounts, orderMismatchFen, summarizeByMethod, type MethodAmounts } from "./summary";
 
 // 收银日结（口径第 5 节）：按门店、按营业日、按支付方式汇总收款（退款记负），和订单逐笔比对；
 // 店长录实收，差异标红；确认后当日销售单、退货单锁定（不能作废），当天也不能再开单退货；总部可以撤销日结。
@@ -285,7 +285,7 @@ export async function cashierReport(user: CurrentUser, query: CashierReportQuery
         bizDate: r.bizDate.toISOString().slice(0, 10),
         amounts: r.amounts,
         totalFen: DAILY_CLOSE_METHODS.reduce((s, m) => s + r.amounts[m], 0),
-        cashFen: DAILY_CLOSE_METHODS.filter((m) => m !== "TRADE_IN").reduce((s, m) => s + r.amounts[m], 0),
+        cashFen: DAILY_CLOSE_METHODS.filter((m) => !AUTO_MATCH_METHODS.includes(m)).reduce((s, m) => s + r.amounts[m], 0),
         closeStatus: close?.status ?? null,
         hasDiff: close ? close.lines.some((l) => (l.diffFen ?? 0) !== 0) : false,
       };

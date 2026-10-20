@@ -1,6 +1,7 @@
 "use client";
 
-import { Card, Col, Row, Space, Tag, Typography } from "antd";
+import { Card, Col, Row, Space, Table, Tag, Typography } from "antd";
+import type { TableColumnsType } from "antd";
 
 interface Item {
   name: string;
@@ -8,37 +9,49 @@ interface Item {
   hook: string; // 以后从哪儿接进来
 }
 
-// 内容对应方案文档 4.3、9.3。新想法只往这里加，不进开发清单。
+type Stage = "done" | "next" | "todo";
+
+interface RouteItem {
+  order: number;
+  name: string;
+  stage: Stage;
+  what: string; // 做了什么 / 要做什么
+}
+
+// v1.0 之后的路线（方案文档第 16 节），按顺序一项一项做；做完一项就把 stage 改成 done，下一项改成 next。
+const ROUTE: RouteItem[] = [
+  { order: 1, name: "售后维修", stage: "done", what: "接件扫码带出购买记录和保修、碎屏险、延保；报价时校验谁来付；修好取机结算进日结；客户的机器不动库存。" },
+  { order: 2, name: "运营商业务", stage: "done", what: "号卡、合约机、宽带登记和确认开通；总部配佣金政策；按月导入运营商结算单对账，标出金额不符、没登记、漏给和返销。" },
+  { order: 3, name: "国补", stage: "done", what: "总部配政策；开单填资格码立减、校验每人每类一台；国补单从提交审核到到账全程跟踪；退货作废自动撤销。" },
+  { order: 4, name: "发票", stage: "next", what: "开票申请、发票记录挂到销售单；国补单的发票号自动带出。税控和电子发票接口先做模拟。" },
+  { order: 5, name: "审批", stage: "todo", what: "调拨、退款、报损、改价等审批流，规则总部可配，接现有角色权限；只做 ERP 内审批。" },
+  { order: 6, name: "企业微信剩下的", stage: "todo", what: "聊天侧边栏、微信客服自动答复、离职继承，都先做成模拟演示。" },
+  { order: 7, name: "AI 智能提醒", stage: "todo", what: "数字由程序算，模型只负责排先后、写“今日待办”；没有模型时用模板兜底。" },
+  { order: 8, name: "人事、财务、OA", stage: "todo", what: "从头自建、不接钉钉飞书：员工档案、排班考勤、提成和工资条、费用报销、门店收支和利润表、公告。" },
+];
+
+const STAGE: Record<Stage, { label: string; color: string }> = {
+  done: { label: "已做", color: "green" },
+  next: { label: "下一项", color: "blue" },
+  todo: { label: "待做", color: "default" },
+};
+
+// 知道、但还没排进路线的（方案文档 4.3、9.3、16.2 末尾）。新想法只往这里加，不进开发清单。
 const LATER: Item[] = [
-  {
-    name: "人事：考勤、排班、工资、绩效",
-    why: "和进销存主链路无关，规则每家公司都不一样；工资是敏感数据，演示版不碰。",
-    hook: "先接排班，能和看板的员工业绩排名对上。",
-  },
   {
     name: "售后：备用机、外送厂家、维修配件进销存",
     why: "接件、报价、维修、取机结算的主线已经做了；这几项各是一条独立链路，维修配件费现在手填。",
     hook: "屏幕、电池建成小件，维修时从库存出库；外送加一个状态和运单号。",
   },
   {
-    name: "发票与财务核算",
-    why: "应收应付、总账要按会计口径做，演示版只做到收银对账。",
-    hook: "支付明细和日结已按支付方式汇总，可以直接作为记账来源。",
-  },
-  {
-    name: "审批流 / OA",
-    why: "演示版用角色权限代替审批，比如作废单据要店长、日结要店长确认。",
-    hook: "在作废、调拨、改价这几处加“待审批”状态即可。",
-  },
-  {
-    name: "国补",
-    why: "补贴政策按地区和时间变，还要对接政府平台，演示里跑不了真流程。",
-    hook: "收款方式里加一种“国补”，日结按方式对账的逻辑不用改。",
-  },
-  {
     name: "运营商系统接口、号码库存、话费代收",
     why: "登记、开通、佣金政策和按月对账已经做了；运营商渠道系统不对门店开放接口，现在靠店员确认和导入结算单，演示里用模拟器。",
     hook: "对账是一个纯函数（结算单行 → 业务单），拿到接口数据喂给同一个函数就行；白卡、靓号按小件管数量。",
+  },
+  {
+    name: "国补：对接各省平台、上传资料、地方补贴",
+    why: "门店这一侧（算补贴、校验、跟踪到账）已经做了；各省平台不对门店系统开放，审核和到账现在靠导入平台结果，演示里用模拟器。",
+    hook: "平台结果按核销码落到国补单上已经是一个函数，接口拿到结果直接调；地方叠加补贴在政策上多一层。",
   },
   {
     name: "物流对接",
@@ -48,7 +61,7 @@ const LATER: Item[] = [
   {
     name: "会员营销：积分、券、短信",
     why: "要有真实客户和真实消费才有意义，演示数据做出来是摆设。",
-    hook: "客户档案和购买记录已经有了。",
+    hook: "客户档案、购买记录和企业微信好友关系已经有了。",
   },
   {
     name: "线上渠道库存同步（京东到家、抖店）",
@@ -69,26 +82,35 @@ const LATER: Item[] = [
 
 const GAPS = [
   "没做高并发和高可用，一台机器跑。",
-  "财务只做了收银对账，没有发票、应收应付、总账。",
+  "财务只做了收银对账，发票、应收应付、总账还在路线上。",
   "权限做到角色和门店级，没做到字段级。",
-  "没对接扫码枪以外的外接硬件。",
+  "运营商、国补、企业微信这些外部系统，演示里是模拟的，真接要公司的账号和资质。",
   "没做数据迁移工具。",
   "没经过真实门店的压力和安全测试。",
 ];
 
 export function RoadmapView() {
+  const columns: TableColumnsType<RouteItem> = [
+    { title: "顺序", dataIndex: "order", width: 60, align: "center" },
+    { title: "项", dataIndex: "name", width: 140, render: (v: string, r) => <Typography.Text strong={r.stage !== "todo"}>{v}</Typography.Text> },
+    { title: "状态", dataIndex: "stage", width: 90, render: (s: Stage) => <Tag color={STAGE[s].color}>{STAGE[s].label}</Tag> },
+    { title: "做了什么 / 要做什么", dataIndex: "what" },
+  ];
   return (
     <Space orientation="vertical" size="large" style={{ width: "100%", maxWidth: 1100 }}>
-      <Card title="后续规划：知道，但这一版故意不做">
+      <Card title="路线图：v1.0 之后按顺序一项一项做">
         <Typography.Paragraph type="secondary">
-          演示版先做手机门店每天离不开的主链路：进货、串号库存、调拨盘点、开单收银、回收、日结、看板，再补了服务权益、企业微信（模拟）、售后维修、运营商业务。下面这些都清楚它们在真实 ERP 里的位置，也想好了以后从哪儿接进来。
+          演示版先做了手机门店每天离不开的主链路：进货、串号库存、调拨盘点、开单收银、回收、日结、看板，再补了服务权益和企业微信（模拟）。之后按下面的顺序逐项做，每做完一项都是能演示的状态；外部系统先做模拟，人事、财务、OA 从头自建。
         </Typography.Paragraph>
+        <Table rowKey="order" size="small" columns={columns} dataSource={ROUTE} pagination={false} scroll={{ x: true }} />
+      </Card>
+      <Card title="知道，但还没排进路线">
         <Row gutter={[12, 12]}>
           {LATER.map((item) => (
             <Col key={item.name} xs={24} md={12} xl={8}>
               <Card size="small" title={item.name} style={{ height: "100%" }}>
                 <Typography.Paragraph style={{ marginBottom: 8 }}>
-                  <Tag>为什么不做</Tag>
+                  <Tag>为什么还没做</Tag>
                   {item.why}
                 </Typography.Paragraph>
                 <Typography.Paragraph style={{ marginBottom: 0 }}>
