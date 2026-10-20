@@ -80,18 +80,25 @@ export async function createOrderBindCode(user: CurrentUser, salesOrderId: numbe
   const client = options.client ?? getWecomClient();
   const code = newBindCode();
   const way = await client.createOrderContactWay({ userid: order.salesperson.wecomUserid, state: code, remark: `销售单 ${order.orderNo}` });
-  const row = await db.wecomBindCode.create({
-    data: {
-      code,
-      customerId: order.customer.id,
-      salesOrderId,
-      storeId: order.storeId,
-      userId: order.salespersonId,
-      configId: way.configId,
-      qrCodeUrl: way.qrCodeUrl,
-      expiresAt: new Date(now.getTime() + BIND_CODE_DAYS * 24 * 3600 * 1000),
-    },
-  });
+  let row;
+  try {
+    row = await db.wecomBindCode.create({
+      data: {
+        code,
+        customerId: order.customer.id,
+        salesOrderId,
+        storeId: order.storeId,
+        userId: order.salespersonId,
+        configId: way.configId,
+        qrCodeUrl: way.qrCodeUrl,
+        expiresAt: new Date(now.getTime() + BIND_CODE_DAYS * 24 * 3600 * 1000),
+      },
+    });
+  } catch (error) {
+    // 企业微信那边的活码已经建了、库里没记上：补删一次，不然库里没有它，每日清理也找不到
+    await client.deleteContactWay(way.configId).catch(() => undefined);
+    throw error;
+  }
   await writeAudit({ userId: user.id, action: "wecom.contact_way.create", entity: "sales_order", entityId: salesOrderId, detail: { code, mode: client.mode } }, asTx(db));
   return row;
 }

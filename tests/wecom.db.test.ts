@@ -202,6 +202,14 @@ describe("企业微信回调（连本机库，事务回滚）", () => {
       expect((await tx.customer.findUniqueOrThrow({ where: { id: customerId } })).wecomExternalUserid).toMatch(/^wmSim/);
       expect(await tx.wecomEvent.count({ where: { simulated: true } })).toBeGreaterThanOrEqual(1);
       await expect(simulateScanBindCode(fixture!.user, code.code, { db: tx, client })).rejects.toThrow(/用过/);
+
+      // 同店店员拿到别人单上的码也不能模拟扫（店员只能动自己开的单）
+      const other = await orderWithCode(tx, 5, client);
+      const staffRow = await tx.user.findFirst({ where: { role: "STAFF", storeId: fixture!.storeId, isActive: true }, select: { id: true, username: true, name: true, role: true, storeId: true, regionId: true, isActive: true } });
+      if (staffRow) {
+        const staff = { ...staffRow, store: { id: fixture!.storeId, name: "", regionId: (await tx.store.findUniqueOrThrow({ where: { id: fixture!.storeId } })).regionId }, region: null } as unknown as CurrentUser;
+        await expect(simulateScanBindCode(staff, other.code.code, { db: tx, client })).rejects.toThrow(/自己开的单/);
+      }
     });
   });
 });

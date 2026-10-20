@@ -46,9 +46,11 @@ export async function simulateScanBindCode(user: CurrentUser, code: string, opti
   if (!canSell(user.role)) throw new WecomContactError("你的角色不能操作");
   const db = options.db ?? prisma;
   const now = options.now ?? new Date();
-  const row = await db.wecomBindCode.findUnique({ where: { code }, include: { store: { select: { id: true, regionId: true } }, user: { select: { wecomUserid: true } } } });
+  const row = await db.wecomBindCode.findUnique({ where: { code }, include: { store: { select: { id: true, regionId: true } }, user: { select: { id: true, wecomUserid: true } } } });
   if (!row) throw new WecomContactError("二维码不存在");
   assertStoreAccess(user, row.store);
+  // 和生成二维码时一样：店员只能动自己开的单（接待人 = 开单人），同店同事拿到码也不行
+  if (user.role === "STAFF" && row.user.id !== user.id) throw new WecomContactError("店员只能给自己开的单模拟扫码");
   if (row.usedAt) throw new WecomContactError("这个二维码已经用过了");
   if (row.expiresAt <= now) throw new WecomContactError("这个二维码过期了，重新生成一个");
   if (!row.user.wecomUserid) throw new WecomContactError("开单人没有企业微信账号");
