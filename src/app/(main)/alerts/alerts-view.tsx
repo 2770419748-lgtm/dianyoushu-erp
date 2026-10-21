@@ -102,6 +102,32 @@ export function AlertsView({ data }: { data: AlertsPage }) {
           </Space>
         )}
       </Card>
+      {data.llm ? (
+        <Card title="大模型">
+          <Space orientation="vertical" style={{ width: "100%" }}>
+            <Typography.Text>
+              现在的写法：{data.llm.mode === "real" ? `真模型（${data.llm.model}），每天最多调 ${data.llm.dailyLimit} 次` : data.llm.mode === "simulated" ? "模拟模型（演示站没配大模型，按清单排序加固定建议）" : "只发模板版（没开大模型）"}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              今天调了 {data.llm.calls} 次，失败 {data.llm.failed} 次，用了输入 {data.llm.promptTokens} / 输出 {data.llm.completionTokens} 个 token。只记成没成和 token，不存提示和回答的全文。
+            </Typography.Text>
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={data.llm.recent}
+              locale={{ emptyText: "还没调过" }}
+              columns={[
+                { title: "时间", dataIndex: "createdAt", render: (v: Date) => formatDateTime(v) },
+                { title: "模型", dataIndex: "model" },
+                { title: "结果", render: (_, r) => (r.ok ? <Tag color="green">成功</Tag> : <Tag color="red">{r.error ?? "失败"}</Tag>) },
+                { title: "token（入/出）", render: (_, r) => `${r.promptTokens} / ${r.completionTokens}` },
+                { title: "耗时", dataIndex: "latencyMs", render: (v: number) => `${v} 毫秒` },
+              ]}
+            />
+          </Space>
+        </Card>
+      ) : null}
       {digest ? (
         <Card title="命中的规则（程序算的数字）">
           <Table rowKey="id" size="small" columns={columns} dataSource={items} pagination={false} scroll={{ x: true }} />

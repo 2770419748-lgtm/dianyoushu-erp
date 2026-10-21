@@ -1732,6 +1732,22 @@ model Notification {
   @@map("notifications")
 }
 
+/// 调用大模型的记录（口径第 18 节）：每天的调用上限按它数；记用了多少 token，好估花了多少钱。不存提示和回答的全文
+model LlmCall {
+  id               Int      @id @default(autoincrement())
+  purpose          String // 做什么用：alerts 今日待办
+  model            String // 模型名；模拟模型记 simulated
+  ok               Boolean
+  promptTokens     Int      @default(0) @map("prompt_tokens")
+  completionTokens Int      @default(0) @map("completion_tokens")
+  latencyMs        Int      @map("latency_ms")
+  error            String?
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("llm_calls")
+}
+
 /// 企业微信客户继承（口径第 12 节第三步）：一个客户的一条跟进关系一条；同一条跟进关系同时只能有一个没办完的（部分唯一索引）
 model WecomTransfer {
   id              Int                 @id @default(autoincrement())

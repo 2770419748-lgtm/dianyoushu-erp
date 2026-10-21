@@ -38,6 +38,11 @@ describe("checkProductionEnv", () => {
     expect(checkProductionEnv(full)).toEqual([]);
     expect(checkProductionEnv({ ...full, WECOM_CALLBACK_AES_KEY: "too-short" })[0]).toContain("43 位");
     expect(checkProductionEnv({ ...full, WECOM_AGENT_ID: "abc" })[0]).toContain("数字");
+    // 大模型（口径第 18 节）：打开了要地址、密钥、模型名，地址要 https
+    expect(checkProductionEnv({ ...base, LLM_ENABLED: "1" })[0]).toContain("LLM_BASE_URL、LLM_API_KEY、LLM_MODEL");
+    expect(checkProductionEnv({ ...base, LLM_ENABLED: "1", LLM_BASE_URL: "http://api.example.com", LLM_API_KEY: "k", LLM_MODEL: "m" })[0]).toContain("https");
+    expect(checkProductionEnv({ ...base, LLM_ENABLED: "1", LLM_BASE_URL: "https://api.deepseek.com", LLM_API_KEY: "k", LLM_MODEL: "deepseek-chat" })).toEqual([]);
+    expect(checkProductionEnv({ ...base, ALERT_PUSH_ENABLED: "yes" })[0]).toContain("ALERT_PUSH_ENABLED");
     expect(checkProductionEnv({ ...base, WECOM_ENABLED: "true" })[0]).toContain("只能是 0 或 1");
   });
 });

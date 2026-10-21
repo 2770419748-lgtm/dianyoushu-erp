@@ -1,39 +1,24 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
-import { type AlertDraft, type AlertScopeKey, renderTemplateDigest, scopeKeyOf } from "@/lib/alerts";
+import { type AlertScopeKey, scopeKeyOf } from "@/lib/alerts";
 import { formatDate } from "@/lib/format";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
 import { writeAudit } from "@/server/audit";
 import type { Db } from "@/server/db-tx";
 import { type PushResult, pushToWecomGroup } from "./push";
+import { type DigestOutput, type DigestWriter, getDigestWriter } from "./digest-writer";
 import { collectAlerts } from "./rules";
+import { llmConfig } from "@/server/llm/config";
+
+export { templateWriter, modelWriter } from "./digest-writer";
+export type { DigestInput, DigestOutput, DigestWriter } from "./digest-writer";
 
 // 智能提醒（口径第 18 节）：跑规则 → 存命中的提醒 → 每个范围（门店、区域、总部）写一份今日待办 → 发系统内消息、推门店群。
-// 今日待办由 writer 写：这一步先只有模板版；接模型（第二期）时换成“模型写、程序校验、不行就模板”的 writer。
+// 今日待办由 writer 写（digest-writer.ts）：模型写、程序校验，不行就改发模板版。
 
 export class AlertError extends Error {}
-
-export interface DigestInput {
-  scope: AlertScopeKey;
-  title: string;
-  items: AlertDraft[];
-}
-
-export interface DigestOutput {
-  content: string;
-  source: "MODEL" | "SIMULATED" | "TEMPLATE";
-  fallbackReason: string | null;
-}
-
-export type DigestWriter = (input: DigestInput) => Promise<DigestOutput>;
-
-export const templateWriter: DigestWriter = async (input) => ({ content: renderTemplateDigest(input.title, input.items), source: "TEMPLATE", fallbackReason: null });
-
-export function getDigestWriter(): DigestWriter {
-  return templateWriter;
-}
 
 function bizDateOf(now: Date): Date {
   return new Date(formatDate(now));
@@ -177,6 +162,27 @@ export async function getAlertsPage(user: CurrentUser, query: { date?: string; d
     items,
     canRun: user.role === "STORE_MANAGER" || user.role === "HQ",
     selected: query.digestId && digests.some((d) => d.id === query.digestId) ? query.digestId : (digests[0]?.id ?? null),
+    llm: user.role === "HQ" ? await llmUsage() : null,
+  };
+}
+
+/** 总部看：现在用的哪种写法、今天调了几次模型、用了多少 token、最近的调用（只记成没成和 token，不存提示和回答） */
+async function llmUsage() {
+  const cfg = llmConfig();
+  const since = new Date(new Date(formatDate(new Date())).getTime() - 8 * 3600 * 1000);
+  const [today, recent] = await Promise.all([
+    prisma.llmCall.groupBy({ by: ["ok"], where: { createdAt: { gte: since } }, _count: { _all: true }, _sum: { promptTokens: true, completionTokens: true } }),
+    prisma.llmCall.findMany({ orderBy: { id: "desc" }, take: 10, select: { id: true, model: true, ok: true, promptTokens: true, completionTokens: true, latencyMs: true, error: true, createdAt: true } }),
+  ]);
+  return {
+    mode: cfg.mode,
+    model: cfg.mode === "real" ? cfg.model : cfg.mode === "simulated" ? "模拟模型" : null,
+    dailyLimit: cfg.dailyLimit,
+    calls: today.reduce((n, r) => n + r._count._all, 0),
+    failed: today.find((r) => !r.ok)?._count._all ?? 0,
+    promptTokens: today.reduce((n, r) => n + (r._sum.promptTokens ?? 0), 0),
+    completionTokens: today.reduce((n, r) => n + (r._sum.completionTokens ?? 0), 0),
+    recent,
   };
 }
 

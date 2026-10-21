@@ -3,6 +3,7 @@
 
 import { isValidAesKey } from "./wecom/crypto";
 import { WECOM_REQUIRED_ENV } from "./wecom/config";
+import { LLM_REQUIRED_ENV } from "./llm/config";
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
 
@@ -32,6 +33,14 @@ export function checkProductionEnv(env: Record<string, string | undefined>): str
     if (env.WECOM_CALLBACK_AES_KEY && !isValidAesKey(env.WECOM_CALLBACK_AES_KEY)) problems.push("WECOM_CALLBACK_AES_KEY 格式不对：应该是企业微信后台给的 43 位 EncodingAESKey");
     if (env.WECOM_AGENT_ID && !/^\d+$/.test(env.WECOM_AGENT_ID)) problems.push("WECOM_AGENT_ID 应该是数字（企业微信后台自建应用的 AgentId）");
   }
+  // 大模型（智能提醒，口径第 18 节）：打开了就要地址、密钥、模型名；地址要 https（密钥不能明文走网络）
+  if (env.LLM_ENABLED !== undefined && env.LLM_ENABLED !== "" && env.LLM_ENABLED !== "0" && env.LLM_ENABLED !== "1") problems.push(`LLM_ENABLED 只能是 0 或 1，现在是 "${env.LLM_ENABLED}"`);
+  if (env.LLM_ENABLED === "1") {
+    const missing = LLM_REQUIRED_ENV.filter((key) => !env[key]);
+    if (missing.length > 0) problems.push(`开了大模型（LLM_ENABLED=1），但没有设置 ${missing.join("、")}`);
+    if (env.LLM_BASE_URL && !env.LLM_BASE_URL.startsWith("https://")) problems.push("LLM_BASE_URL 要用 https 地址（比如 https://api.deepseek.com）");
+  }
+  if (env.ALERT_PUSH_ENABLED !== undefined && env.ALERT_PUSH_ENABLED !== "" && env.ALERT_PUSH_ENABLED !== "0" && env.ALERT_PUSH_ENABLED !== "1") problems.push(`ALERT_PUSH_ENABLED 只能是 0 或 1，现在是 "${env.ALERT_PUSH_ENABLED}"`);
   return problems;
 }
 
@@ -40,6 +49,7 @@ export function checkProductionWarnings(env: Record<string, string | undefined>)
   const warnings: string[] = [];
   if (env.DEMO_MODE === "1") warnings.push("DEMO_MODE=1：这是演示站（演示账号受保护、可以每日重置数据）。真给门店用要改成 0。");
   if (env.DEMO_MODE === "1" && env.WECOM_ENABLED !== "1") warnings.push("企业微信是模拟模式：页面上的加好友、欢迎语都是模拟的，不连企业微信。");
+  if (env.DEMO_MODE === "1" && env.LLM_ENABLED !== "1") warnings.push("智能提醒用的是模拟模型：今日待办是程序排序加固定建议写的，不连大模型。");
   return warnings;
 }
 
