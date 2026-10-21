@@ -46,6 +46,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/hr/payroll": "工资条",
   "/finance": "财务",
   "/finance/expenses": "费用报销",
+  "/finance/pnl": "门店利润表",
   "/sales": "销售单",
   "/sales/new": "开单",
   "/trade-ins": "回收单",

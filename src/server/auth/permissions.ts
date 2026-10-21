@@ -236,6 +236,7 @@ const ATTENDANCE: MenuEntry = { key: "attendance", label: "考勤打卡", href: 
 const LEAVES: MenuEntry = { key: "leaves", label: "请假", href: "/hr/leaves" };
 const EXPENSES: MenuEntry = { key: "expenses", label: "费用报销", href: "/finance/expenses" };
 const PAYROLL: MenuEntry = { key: "payroll", label: "工资条", href: "/hr/payroll" };
+const PNL: MenuEntry = { key: "pnl", label: "门店利润表", href: "/finance/pnl" };
 
 const MENU_STAFF: MenuEntry[] = [
   { key: "m-sale", label: "手机开单", href: "/m/sale" },
@@ -273,6 +274,7 @@ const MENU_STORE_MANAGER: MenuEntry[] = [
   { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "prices", label: "门店售价", href: "/products/prices" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
+  PNL,
   EMPLOYEES,
   SCHEDULES,
   ROADMAP,
@@ -292,6 +294,7 @@ const MENU_REGIONAL: MenuEntry[] = [
   { key: "stock", label: "库存", href: "/stock" },
   { key: "m-stock", label: "手机查库存", href: "/m/stock" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
+  PNL,
   { key: "entitlements", label: "到期名单", href: "/entitlements" },
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
@@ -330,6 +333,7 @@ const MENU_HQ: MenuEntry[] = [
   { key: "trade-ins", label: "回收", href: "/trade-ins" },
   { key: "daily-close", label: "日结", href: "/daily-close" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
+  PNL,
   { key: "kpi", label: "KPI 目标", href: "/kpi" },
   { key: "logs", label: "操作日志", href: "/logs" },
   ROADMAP,

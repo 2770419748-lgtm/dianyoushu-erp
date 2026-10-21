@@ -1442,6 +1442,27 @@ async function writeExpenseDemo(users: { id: number; username: string; role: str
     if (key.startsWith("SP") || key.startsWith("BX")) await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   console.log(`费用报销：${seeds.length} 张（已付款 ${paid} 张）`);
+  await writeFixedExpenseDemo(stores.map((x) => x.id), hqId);
+}
+
+/** 门店固定支出演示数据（口径第 19 节）：上个月每家店都录了房租、水电、物业、其他；这个月只有一半的店录了（另一半利润表标“数据不全”） */
+async function writeFixedExpenseDemo(storeIds: number[], hqId: number) {
+  const todayKey = formatDate(new Date());
+  const [ty, tm] = todayKey.split("-").map(Number) as [number, number];
+  const prevMonth = new Date(Date.UTC(ty, tm - 2, 1)).toISOString().slice(0, 7);
+  const thisMonth = todayKey.slice(0, 7);
+  const rows: { storeId: number; month: string; category: "RENT" | "UTILITIES" | "PROPERTY" | "OTHER"; amountFen: number; note: string | null; updatedById: number }[] = [];
+  storeIds.forEach((storeId, i) => {
+    const rent = between(150, 300) * 10000; // 1.5～3 万
+    for (const month of [prevMonth, ...(i % 2 === 0 ? [thisMonth] : [])]) {
+      rows.push({ storeId, month, category: "RENT", amountFen: rent, note: "商场铺位月租", updatedById: hqId });
+      rows.push({ storeId, month, category: "UTILITIES", amountFen: between(150, 300) * 1000, note: null, updatedById: hqId });
+      rows.push({ storeId, month, category: "PROPERTY", amountFen: between(80, 150) * 1000, note: null, updatedById: hqId });
+      rows.push({ storeId, month, category: "OTHER", amountFen: between(20, 80) * 1000, note: "宽带、保洁", updatedById: hqId });
+    }
+  });
+  await prisma.storeFixedExpense.createMany({ data: rows });
+  console.log(`门店固定支出：${rows.length} 条（上个月全录了，这个月录了一半的店）`);
 }
 
 const accessoryRows: { storeId: number; skuId: number; qty: number }[] = [];

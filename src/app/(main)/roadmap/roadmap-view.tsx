@@ -27,7 +27,7 @@ const ROUTE: RouteItem[] = [
   { order: 5, name: "审批", stage: "done", what: "开单让利、低于成本卖、大额退款、作废、大额调拨、盘亏，总部按场景配规则（默认全关）；批了系统按当时的数据把事做掉，做不成写明原因。" },
   { order: 6, name: "企业微信剩下的", stage: "done", what: "聊天侧边栏（自己的登录票、只看自己的好友、按完整手机号认领）、微信客服规则答复和转人工、在职转接和离职继承，真接口写好，演示用模拟走真实回调。" },
   { order: 7, name: "AI 智能提醒", stage: "done", what: "数字由程序算，模型只负责排先后、写“今日待办”；没有模型时用模板兜底。" },
-  { order: 8, name: "人事、财务、OA", stage: "next", what: "从头自建、不接钉钉飞书。已做：员工档案、公告、排班、打卡考勤、请假（审批扩成两级、可以不挂门店）、费用报销、提成和工资条；在做：门店收支和利润表。" },
+  { order: 8, name: "人事、财务、OA", stage: "done", what: "从头自建、不接钉钉飞书：员工档案、公告、排班、打卡考勤、请假（审批扩成两级、可以不挂门店）、费用报销、提成和工资条、门店收支和利润表。" },
 ];
 
 const STAGE: Record<Stage, { label: string; color: string }> = {
@@ -105,7 +105,7 @@ export function RoadmapView() {
     <Space orientation="vertical" size="large" style={{ width: "100%", maxWidth: 1100 }}>
       <Card title="路线图：v1.0 之后按顺序一项一项做">
         <Typography.Paragraph type="secondary">
-          演示版先做了手机门店每天离不开的主链路：进货、串号库存、调拨盘点、开单收银、回收、日结、看板，再补了服务权益和企业微信（模拟）。之后按下面的顺序逐项做，每做完一项都是能演示的状态；外部系统先做模拟，人事、财务、OA 从头自建。
+          演示版先做了手机门店每天离不开的主链路：进货、串号库存、调拨盘点、开单收银、回收、日结、看板，再补了服务权益和企业微信（模拟）。之后按下面的顺序逐项做，每做完一项都是能演示的状态；外部系统先做模拟，人事、财务、OA 从头自建。2026-10-21 八项都做完了，后面的想法放在下面“知道，但还没排进路线”。
         </Typography.Paragraph>
         <Table rowKey="order" size="small" columns={columns} dataSource={ROUTE} pagination={false} scroll={{ x: true }} />
       </Card>

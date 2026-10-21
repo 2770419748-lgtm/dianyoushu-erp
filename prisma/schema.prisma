@@ -435,6 +435,16 @@ enum PayrollStatus {
   @@map("payroll_status")
 }
 
+/// 门店固定支出的类别（口径第 19 节）
+enum FixedExpenseCategory {
+  RENT      // 房租
+  UTILITIES // 水电
+  PROPERTY  // 物业
+  OTHER     // 其他（网费、保洁……）
+
+  @@map("fixed_expense_category")
+}
+
 enum ApprovalStatus {
   PENDING   // 待审批
   EXECUTED  // 已通过（已经做掉）
@@ -571,6 +581,7 @@ model Store {
   leaveRequests   LeaveRequest[]
   expenseClaims   ExpenseClaim[]
   payrollSlips    PayrollSlip[]
+  fixedExpenses   StoreFixedExpense[]
 
   @@index([regionId])
   @@map("stores")
@@ -1865,6 +1876,25 @@ model PayrollSlip {
   @@unique([runId, userId])
   @@index([userId])
   @@map("payroll_slips")
+}
+
+/// 门店固定支出（口径第 19 节）：房租、水电、物业等，店长（本店）或总部每月录；一店一月一类一条。一条都没录的月份利润表标“数据不全”
+model StoreFixedExpense {
+  id          Int                  @id @default(autoincrement())
+  storeId     Int                  @map("store_id")
+  month       String // YYYY-MM
+  category    FixedExpenseCategory
+  amountFen   Int                  @map("amount_fen")
+  note        String?
+  updatedById Int                  @map("updated_by_id")
+  createdAt   DateTime             @default(now()) @map("created_at")
+  updatedAt   DateTime             @updatedAt @map("updated_at")
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, month, category])
+  @@index([month])
+  @@map("store_fixed_expenses")
 }
 
 /// 排班（口径第 19 节）：一个人一天一条
