@@ -81,14 +81,14 @@ function ManageView({ data }: { data: Manage }) {
         }
       >
         <Typography.Paragraph type="secondary">
-          应发 = 基本工资（入职、离职当月按在职天数折算）+ 提成 − 缺勤扣款（缺勤一天扣 基本工资 ÷ 当月 {data.daysInMonth} 天）+ 其他奖惩。提成按员工档案里选的方案：销售额（按开单人，扣掉退货）× 比例 + 每台主机 + 每份碎屏险延保。社保、个税财务另算。缺勤只算在职那几天（入职日到离职日），这个月一天都不在职的不生成。草稿能改奖惩、重算；月份过完（下月 1 号起）才能发布，发布后员工能看自己的，数字锁定，要改只能整月作废重算（奖惩会带到新草稿）。
+          应发 = 基本工资（入职、离职当月按在职天数折算）+ 提成 − 缺勤扣款（缺勤一天扣 基本工资 ÷ 当月 {data.daysInMonth} 天）+ 其他奖惩。提成按员工档案里选的方案：销售额（按开单人，扣掉退货）× 比例 + 每台主机 + 每份碎屏险延保。社保、个税财务另算。缺勤只算在职那几天（入职日到离职日），这个月一天都不在职的不生成。草稿能改奖惩、重算；月份过完（下月 1 号起）才能发布，发布时按最新数据再算一遍（生成以后作废的单、补的卡都算进去，奖惩照留），发布后员工能看自己的，数字锁定，要改只能整月作废重算（奖惩会带到新草稿）。
         </Typography.Paragraph>
         {data.staleLeave.length ? (
           <Alert
             type="warning"
             showIcon
             style={{ marginBottom: 12 }}
-            title={`${data.staleLeave.map((u) => `${u.name}（${u.leaveDate}）`).join("、")} 账号在用，员工档案里却有离职日期`}
+            title={`${data.staleLeave.map((u) => `${u.name}（${u.leaveDate}）`).join("、")} 账号在用，员工档案里的离职日期却已经过了`}
             description="工资按离职日期折算，离职日期在这个月以前的不生成工资条。如果是重新回来上班，到员工档案把离职日期清掉再重新算。"
           />
         ) : null}
@@ -113,7 +113,7 @@ function ManageView({ data }: { data: Manage }) {
               下月 1 号起才能发布
             </Button>
           ) : run?.status === "DRAFT" ? (
-            <Popconfirm title={`发布 ${data.month} 的工资条？发布后数字锁定，员工能看自己的。`} onConfirm={() => act(() => publishPayrollAction(run.id))}>
+            <Popconfirm title={`发布 ${data.month} 的工资条？发布前按最新数据再算一遍（奖惩照留），发布后数字锁定，员工能看自己的。`} onConfirm={() => act(() => publishPayrollAction(run.id))}>
               <Button type="primary" loading={pending}>
                 发布
               </Button>

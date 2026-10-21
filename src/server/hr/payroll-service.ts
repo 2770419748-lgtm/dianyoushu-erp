@@ -121,9 +121,79 @@ async function employeesOf(db: Db, month: string, sellers: number[]) {
   });
 }
 
+type Kept = Map<number, { adjustmentFen: number; adjustmentNote: string | null }>;
+
+/**
+ * 按现在的数据把这个月的工资条重新算一遍，写进这份工资（生成、重算、发布前都走这里）；kept 是要保留的奖惩（按人）。
+ * 缺勤天数、分店天数只算在职那几天（入职日到离职日）；这个月一天都不在职的（比如上个月走的人只剩退货冲回）不生成。
+ * 调用前要先拿到这个月的咨询锁和这份工资的行锁。
+ */
+async function fillRun(tx: Prisma.TransactionClient, runId: number, month: string, now: Date, kept: Kept) {
+  await tx.payrollSlip.deleteMany({ where: { runId } });
+  const sales = await salesByPerson(tx, month);
+  const monthEnd = monthDates(month).at(-1)!;
+  const todayKey = bjDateKey(now);
+  const keyOf = (d: Date | null | undefined) => (d ? dateKeyOf(d) : null);
+  const everyone = await employeesOf(tx, month, [...sales.keys()]);
+  // 账号在用、离职日期却已经过了（这个月或以前）：底薪按离职日期折算了（更早的连工资条都不生成），多半是重新启用时忘了清，提醒核对。
+  // 提前录了以后的离职日期（比如月底走）是正常的，不提醒
+  const stale = everyone.filter((p) => p.isActive && p.profile?.leaveDate && dateKeyOf(p.profile.leaveDate) <= monthEnd && dateKeyOf(p.profile.leaveDate) < todayKey).map((p) => p.name);
+  // 这个月一天都不在职的不发（上个月走的人这个月只有退货冲回、下个月才来的人）
+  const people = everyone.filter((p) => employedDaysOf(month, keyOf(p.profile?.hireDate), keyOf(p.profile?.leaveDate)) > 0);
+  const windows = new Map(
+    people.map((p) => {
+      const hire = keyOf(p.profile?.hireDate);
+      const leave = keyOf(p.profile?.leaveDate);
+      return [p.id, { from: hire && hire > `${month}-01` ? hire : `${month}-01`, to: leave && leave < monthEnd ? leave : monthEnd }];
+    }),
+  );
+  const attendance = await monthSummaries(tx, people.map((p) => p.id), month, now, windows);
+  const slips = people.map((p) => {
+    const s = sales.get(p.id) ?? { salesFen: 0, deviceQty: 0, serviceQty: 0 };
+    const a = attendance.get(p.id);
+    const adj = kept.get(p.id) ?? { adjustmentFen: 0, adjustmentNote: null };
+    const plan = p.profile?.commissionPlan ?? null;
+    const n = computeSlip({
+      month,
+      baseSalaryFen: p.profile?.baseSalaryFen ?? 0,
+      hireDate: keyOf(p.profile?.hireDate),
+      leaveDate: keyOf(p.profile?.leaveDate),
+      absentDays: a?.summary.absent ?? 0,
+      ...s,
+      plan,
+      adjustmentFen: adj.adjustmentFen,
+    });
+    return {
+      runId,
+      userId: p.id,
+      storeId: p.storeId,
+      planName: plan?.name ?? null,
+      baseSalaryFen: p.profile?.baseSalaryFen ?? 0,
+      absentDays: a?.summary.absent ?? 0,
+      ...s,
+      ...n,
+      adjustmentFen: adj.adjustmentFen,
+      adjustmentNote: adj.adjustmentNote,
+      storeDays: Object.fromEntries(a?.storeDays ?? []) as Prisma.InputJsonValue,
+    };
+  });
+  if (slips.length > 0) await tx.payrollSlip.createMany({ data: slips });
+  const grossFen = slips.reduce((sum, x) => sum + x.grossFen, 0);
+  await tx.payrollRun.update({ where: { id: runId }, data: { slipCount: slips.length, grossFen } });
+  // 奖惩真正落到工资条上的人数（带过来的奖惩，这次不在名单里的人不算）
+  const keptUsed = people.filter((p) => (kept.get(p.id)?.adjustmentFen ?? 0) !== 0).length;
+  return { slipCount: slips.length, grossFen, stale, keptUsed };
+}
+
+/** 这份工资现在每个人的奖惩（重算、发布前重算时照留） */
+async function keptOf(tx: Prisma.TransactionClient, runId: number, onlyNonZero = false): Promise<Kept> {
+  const rows = await tx.payrollSlip.findMany({ where: { runId, ...(onlyNonZero ? { adjustmentFen: { not: 0 } } : {}) }, select: { userId: true, adjustmentFen: true, adjustmentNote: true } });
+  return new Map(rows.map((r) => [r.userId, r]));
+}
+
 /**
  * 生成这个月的工资条（草稿）：已经有草稿就重算（奖惩保留），已经发布了要先整月作废；作废以后重新生成，带上最近那份作废工资里的奖惩。
- * 只能生成这个月和以前的。缺勤天数、分店天数只算在职那几天（入职日到离职日）；这个月一天都不在职的（比如上个月走的人只剩退货冲回）不生成。
+ * 只能生成这个月和以前的。怎么算见 fillRun。
  */
 export async function generatePayroll(user: CurrentUser, month: unknown, opts: { db?: Db; now?: Date } = {}) {
   assertHq(user);
@@ -140,72 +210,25 @@ export async function generatePayroll(user: CurrentUser, month: unknown, opts: {
       if (open.status === "PUBLISHED") throw new PayrollError(`${month} 的工资已经发布了，要改先整月作废再重新生成`);
       if (open.status === "VOIDED") open = null;
     }
-    const kept = new Map<number, { adjustmentFen: number; adjustmentNote: string | null }>();
-    let carried = 0; // 从作废的那份带过来几笔奖惩
+    let kept: Kept = new Map();
+    let fromVoided = false;
     if (open) {
-      for (const s of await tx.payrollSlip.findMany({ where: { runId: open.id }, select: { userId: true, adjustmentFen: true, adjustmentNote: true } })) kept.set(s.userId, s);
-      await tx.payrollSlip.deleteMany({ where: { runId: open.id } });
+      kept = await keptOf(tx, open.id);
     } else {
       // 整月作废是改已发布工资的唯一办法：重新生成时把最近那份作废工资里的奖惩带过来（要改再在草稿里改）
       const lastVoided = await tx.payrollRun.findFirst({ where: { month, status: "VOIDED" }, orderBy: { id: "desc" }, select: { id: true } });
       if (lastVoided) {
-        for (const s of await tx.payrollSlip.findMany({ where: { runId: lastVoided.id, adjustmentFen: { not: 0 } }, select: { userId: true, adjustmentFen: true, adjustmentNote: true } })) kept.set(s.userId, s);
-        carried = kept.size;
+        kept = await keptOf(tx, lastVoided.id, true);
+        fromVoided = true;
       }
     }
-    const sales = await salesByPerson(tx, month);
-    const monthEnd = monthDates(month).at(-1)!;
-    const keyOf = (d: Date | null | undefined) => (d ? dateKeyOf(d) : null);
-    const everyone = await employeesOf(tx, month, [...sales.keys()]);
-    // 账号在用、档案里却有这个月或以前的离职日期：底薪按离职日期折算了（更早的连工资条都不生成），多半是重新启用时忘了清，提醒核对
-    const stale = everyone.filter((p) => p.isActive && p.profile?.leaveDate && dateKeyOf(p.profile.leaveDate) <= monthEnd).map((p) => p.name);
-    // 这个月一天都不在职的不发（上个月走的人这个月只有退货冲回、下个月才来的人）
-    const people = everyone.filter((p) => employedDaysOf(month, keyOf(p.profile?.hireDate), keyOf(p.profile?.leaveDate)) > 0);
-    const windows = new Map(
-      people.map((p) => {
-        const hire = keyOf(p.profile?.hireDate);
-        const leave = keyOf(p.profile?.leaveDate);
-        return [p.id, { from: hire && hire > `${month}-01` ? hire : `${month}-01`, to: leave && leave < monthEnd ? leave : monthEnd }];
-      }),
-    );
-    const attendance = await monthSummaries(tx, people.map((p) => p.id), month, now, windows);
     const run = open
       ? await tx.payrollRun.update({ where: { id: open.id }, data: { generatedById: user.id, generatedAt: now } })
       : await tx.payrollRun.create({ data: { month, generatedById: user.id, generatedAt: now } });
-    const slips = people.map((p) => {
-      const s = sales.get(p.id) ?? { salesFen: 0, deviceQty: 0, serviceQty: 0 };
-      const a = attendance.get(p.id);
-      const adj = kept.get(p.id) ?? { adjustmentFen: 0, adjustmentNote: null };
-      const plan = p.profile?.commissionPlan ?? null;
-      const n = computeSlip({
-        month,
-        baseSalaryFen: p.profile?.baseSalaryFen ?? 0,
-        hireDate: p.profile?.hireDate ? dateKeyOf(p.profile.hireDate) : null,
-        leaveDate: p.profile?.leaveDate ? dateKeyOf(p.profile.leaveDate) : null,
-        absentDays: a?.summary.absent ?? 0,
-        ...s,
-        plan,
-        adjustmentFen: adj.adjustmentFen,
-      });
-      return {
-        runId: run.id,
-        userId: p.id,
-        storeId: p.storeId,
-        planName: plan?.name ?? null,
-        baseSalaryFen: p.profile?.baseSalaryFen ?? 0,
-        absentDays: a?.summary.absent ?? 0,
-        ...s,
-        ...n,
-        adjustmentFen: adj.adjustmentFen,
-        adjustmentNote: adj.adjustmentNote,
-        storeDays: Object.fromEntries(a?.storeDays ?? []) as Prisma.InputJsonValue,
-      };
-    });
-    if (slips.length > 0) await tx.payrollSlip.createMany({ data: slips });
-    const grossFen = slips.reduce((sum, x) => sum + x.grossFen, 0);
-    await tx.payrollRun.update({ where: { id: run.id }, data: { slipCount: slips.length, grossFen } });
-    await writeAudit({ userId: user.id, action: open ? "payroll.regenerate" : "payroll.generate", entity: "payroll_run", entityId: run.id, detail: { month, slips: slips.length, grossFen, carried, stale } }, tx);
-    return { runId: run.id, slipCount: slips.length, grossFen, carried, stale };
+    const r = await fillRun(tx, run.id, month, now, kept);
+    const carried = fromVoided ? r.keptUsed : 0; // 从作废的那份带过来几笔奖惩
+    await writeAudit({ userId: user.id, action: open ? "payroll.regenerate" : "payroll.generate", entity: "payroll_run", entityId: run.id, detail: { month, slips: r.slipCount, grossFen: r.grossFen, carried, stale: r.stale } }, tx);
+    return { runId: run.id, slipCount: r.slipCount, grossFen: r.grossFen, carried, stale: r.stale };
   });
 }
 
@@ -232,19 +255,28 @@ export async function setAdjustment(user: CurrentUser, slipId: number, input: { 
   });
 }
 
-/** 发布：数字锁定，给每个人发一条消息（小铃铛）让他看自己的工资条。月份过完了（下月 1 号起）才能发布：没过完的提成、考勤还会变 */
+/**
+ * 发布：数字锁定，给每个人发一条消息（小铃铛）让他看自己的工资条。月份过完了（下月 1 号起）才能发布：没过完的提成、考勤还会变。
+ * 发布前在同一个事务里按现在的数据再算一遍（奖惩照留）：生成草稿以后作废的单、补的卡、改的排班和底薪都算进去，发出去的就是最新的数。
+ */
 export async function publishPayroll(user: CurrentUser, runId: number, db: Db = prisma, now = new Date()) {
   assertHq(user);
   return withTx(db, async (tx) => {
-    if (!(await lockRow(tx, "payroll_runs", runId))) throw new PayrollError("工资不存在");
+    const head = await tx.payrollRun.findUnique({ where: { id: runId }, select: { month: true } });
+    if (!head) throw new PayrollError("工资不存在");
+    // 和生成一样先拿月份锁再锁这份工资（同样的先后不会互相等死），发布前的重算不会和同时点的“重新算”交错
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PAYROLL_LOCK_NS}::int, hashtext(${head.month}::text))`;
+    await lockRow(tx, "payroll_runs", runId);
     const run = await tx.payrollRun.findUniqueOrThrow({ where: { id: runId } });
     if (run.status !== "DRAFT") throw new PayrollError(run.status === "PUBLISHED" ? "已经发布过了" : "作废了的不能发布");
     if (run.month >= bjDateKey(now).slice(0, 7)) throw new PayrollError(`${run.month} 还没过完，下月 1 号起才能发布（提成、考勤还会变）`);
-    if (run.slipCount === 0) throw new PayrollError("没有工资条，不用发布");
+    const r = await fillRun(tx, runId, run.month, now, await keptOf(tx, runId));
+    if (r.slipCount === 0) throw new PayrollError("没有工资条，不用发布");
     await tx.payrollRun.update({ where: { id: runId }, data: { status: "PUBLISHED", publishedById: user.id, publishedAt: new Date() } });
     const slips = await tx.payrollSlip.findMany({ where: { runId }, select: { userId: true } });
     await tx.notification.createMany({ data: slips.map((s) => ({ userId: s.userId, title: `工资条：${run.month}`, body: `${run.month} 的工资条发布了，点开看自己的明细`, link: `/hr/payroll?month=${run.month}` })) });
-    await writeAudit({ userId: user.id, action: "payroll.publish", entity: "payroll_run", entityId: runId, detail: { month: run.month, slips: run.slipCount, grossFen: run.grossFen } }, tx);
+    await writeAudit({ userId: user.id, action: "payroll.publish", entity: "payroll_run", entityId: runId, detail: { month: run.month, slips: r.slipCount, grossFen: r.grossFen, draftGrossFen: run.grossFen, draftSlips: run.slipCount } }, tx);
+    return { slipCount: r.slipCount, grossFen: r.grossFen, changedFen: r.grossFen - run.grossFen, slipsChanged: r.slipCount !== run.slipCount };
   });
 }
 
@@ -267,7 +299,8 @@ export async function voidPayroll(user: CurrentUser, runId: number, reason: unkn
 
 /** 总部：选一个月看工资（草稿、已发布、作废记录）和提成方案；其他人：自己已发布的工资条 */
 export async function getPayrollPage(user: CurrentUser, query: { month?: string }, now = new Date(), db: Db = prisma) {
-  const thisMonth = bjDateKey(now).slice(0, 7);
+  const thisDay = bjDateKey(now);
+  const thisMonth = thisDay.slice(0, 7);
   const [y, m] = thisMonth.split("-").map(Number) as [number, number];
   const lastMonth = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
   const month = isMonthKey(query.month) && query.month <= thisMonth ? query.month : lastMonth;
@@ -278,8 +311,8 @@ export async function getPayrollPage(user: CurrentUser, query: { month?: string 
   }
   const runs = await db.payrollRun.findMany({ where: { month }, orderBy: { id: "desc" }, include: { slips: { include: slipInclude, orderBy: [{ storeId: "asc" }, { userId: "asc" }] } } });
   const current = runs.find((r) => r.status !== "VOIDED") ?? null;
-  // 账号在用、档案里却有这个月或以前的离职日期：工资会按离职日期折算甚至不生成，页面上一直提醒到改好为止
-  const staleLeave = await db.user.findMany({ where: { isActive: true, profile: { leaveDate: { lte: monthRange(month).lte } } }, select: { id: true, name: true, profile: { select: { leaveDate: true } } }, orderBy: { id: "asc" } });
+  // 账号在用、离职日期却已经过了（这个月或以前）：工资会按离职日期折算甚至不生成，页面上一直提醒到改好为止；提前录了以后离职日期的不算
+  const staleLeave = await db.user.findMany({ where: { isActive: true, profile: { leaveDate: { lte: monthRange(month).lte, lt: dateFromKey(thisDay) } } }, select: { id: true, name: true, profile: { select: { leaveDate: true } } }, orderBy: { id: "asc" } });
   return {
     manage: true as const,
     month,

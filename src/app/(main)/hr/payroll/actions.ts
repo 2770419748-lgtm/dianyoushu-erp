@@ -27,7 +27,7 @@ export async function generatePayrollAction(month: string) {
     const r = await generatePayroll(user, month);
     const extra = [
       r.carried ? `带上了上一份作废工资里的 ${r.carried} 笔奖惩` : null,
-      r.stale.length ? `${r.stale.slice(0, 5).join("、")}${r.stale.length > 5 ? " 等" : ""}账号在用、档案里却有离职日期（底薪按离职日期折算，离职日期在这个月以前的没生成工资条），到员工档案核对` : null,
+      r.stale.length ? `${r.stale.slice(0, 5).join("、")}${r.stale.length > 5 ? " 等" : ""}账号在用、离职日期却已经过了（底薪按离职日期折算，离职日期在这个月以前的没生成工资条），到员工档案核对` : null,
     ].filter(Boolean);
     return `已生成 ${r.slipCount} 张工资条，应发合计 ${formatFen(r.grossFen)} 元（草稿，核对完再发布）${extra.length ? `；${extra.join("；")}` : ""}`;
   });
@@ -44,8 +44,9 @@ export async function adjustAction(slipId: number, adjustmentFen: number, note: 
 export async function publishPayrollAction(runId: number) {
   const user = await requireUser();
   return run(async () => {
-    await publishPayroll(user, runId);
-    return "已发布，员工能在“工资条”里看自己的了";
+    const r = await publishPayroll(user, runId);
+    const changed = r.changedFen !== 0 || r.slipsChanged ? `；发布前按最新数据重算了一遍（奖惩照留），现在 ${r.slipCount} 张、应发合计 ${formatFen(r.grossFen)} 元，比草稿${r.changedFen >= 0 ? "多" : "少"} ${formatFen(Math.abs(r.changedFen))} 元` : "";
+    return `已发布，员工能在“工资条”里看自己的了${changed}`;
   });
 }
 

@@ -132,23 +132,31 @@ describe("工资条（连本机库，事务回滚）", () => {
     await inRolledBackTx(async (tx) => {
       await tx.payrollRun.updateMany({ where: { month: prev, status: { not: "VOIDED" } }, data: { status: "VOIDED", voidedAt: new Date(), voidReason: "测试前清掉演示数据" } });
       const { staff, manager } = await setup(tx);
+      const order3 = await tx.salesOrder.create({ data: { orderNo: "SO-PAYTEST-3", storeId: b.a.id, salespersonId: staff.id, bizDate: dateFromKey(day(7)), subtotalFen: 20000, totalFen: 20000 } });
       const r = await generatePayroll(b.hq, prev, { db: tx });
       const before = await getPayrollPage(staff, { month: prev }, new Date(), tx);
       expect(before.manage).toBe(false);
       if (!before.manage) expect(before.mine).toHaveLength(0); // 草稿员工看不到
       const draftSlip = await tx.payrollSlip.findFirstOrThrow({ where: { runId: r.runId, userId: staff.id } });
       await setAdjustment(b.hq, draftSlip.id, { adjustmentFen: -5000, note: "迟到罚款" }, tx);
+      const mgrSlip = await tx.payrollSlip.findFirstOrThrow({ where: { runId: r.runId, userId: manager.id } });
+      await setAdjustment(b.hq, mgrSlip.id, { adjustmentFen: 3000, note: "带新人" }, tx);
       // 月份还没过完不能发布（提成、考勤还会变）
       await expect(publishPayroll(b.hq, r.runId, tx, new Date(`${day(28)}T04:00:00Z`))).rejects.toThrow("还没过完");
-      await publishPayroll(b.hq, r.runId, tx);
+      // 草稿生成以后又作废了一张单（草稿期间不拦），没点重算直接发布：发布前自动重算，作废单的提成不发出去，奖惩照留
+      const order2 = await tx.salesOrder.findFirstOrThrow({ where: { orderNo: "SO-PAYTEST-2" } });
+      await voidSalesOrderTx(tx, b.hq, order2.id, "开错单");
+      const pub = await publishPayroll(b.hq, r.runId, tx);
+      expect(pub.changedFen).toBe(-(100 + 1500)); // 1% × 100 元 + 一份碎屏险 15 元
+      expect(await tx.payrollSlip.findFirstOrThrow({ where: { runId: r.runId, userId: staff.id } })).toMatchObject({ salesFen: 300000 + 20000 - 50000, serviceQty: 0, adjustmentFen: -5000, adjustmentNote: "迟到罚款" });
+      expect((await runIntegrityChecks(tx as never)).hr).toBe(0);
       await expect(publishPayroll(b.hq, r.runId, tx)).rejects.toThrow("已经发布");
       const slip = await tx.payrollSlip.findFirstOrThrow({ where: { runId: r.runId, userId: staff.id } });
       await expect(setAdjustment(b.hq, slip.id, { adjustmentFen: 100, note: "x" }, tx)).rejects.toThrow("发布了的工资不能改");
       await expect(generatePayroll(b.hq, prev, { db: tx })).rejects.toThrow("已经发布");
       expect(await tx.notification.count({ where: { userId: staff.id, title: `工资条：${prev}` } })).toBe(1);
       // 工资发布了，那个月的销售单不能再作废（会改掉已经发了的提成），要退走退货
-      const order2 = await tx.salesOrder.findFirstOrThrow({ where: { orderNo: "SO-PAYTEST-2" } });
-      await expect(voidSalesOrderTx(tx, b.hq, order2.id, "开错单")).rejects.toThrow("工资已经发布了");
+      await expect(voidSalesOrderTx(tx, b.hq, order3.id, "开错单")).rejects.toThrow("工资已经发布了");
 
       const mine = await getPayrollPage(staff, { month: prev }, new Date(), tx);
       if (mine.manage) throw new Error("店员不该是管理视图");
@@ -167,10 +175,13 @@ describe("工资条（连本机库，事务回滚）", () => {
       await voidPayroll(b.hq, r.runId, "基本工资录错了", tx);
       expect(await tx.notification.count({ where: { userId: staff.id, title: `工资条：${prev}` } })).toBe(0);
       expect((await payrollCostByStore(tx, prev)).published).toBe(false);
+      // 店长的入职日期改到下个月以后，这次不在名单里：他的奖惩不算进“带过来几笔”
+      await tx.employeeProfile.create({ data: { userId: manager.id, baseSalaryFen: 500000, hireDate: dateFromKey(`${today.slice(0, 7)}-01`) } });
       const r2 = await generatePayroll(b.hq, prev, { db: tx });
       expect(r2.runId).not.toBe(r.runId);
       // 作废后重新生成，带上作废那份里的奖惩
-      expect(r2.carried).toBe(r.carried + 1); // r 自己也带了演示数据那份作废工资里的奖惩
+      expect(r2.carried).toBe(r.carried + 1); // 只多店员那一笔；r 自己也带了演示数据那份作废工资里的奖惩
+      expect(await tx.payrollSlip.count({ where: { runId: r2.runId, userId: manager.id } })).toBe(0);
       expect(await tx.payrollSlip.findFirstOrThrow({ where: { runId: r2.runId, userId: staff.id } })).toMatchObject({ adjustmentFen: -5000, adjustmentNote: "迟到罚款" });
     });
   });
@@ -202,6 +213,10 @@ describe("工资条（连本机库，事务回滚）", () => {
       // 先填了离职日期、人还在用，离职日期以后的班还排着：不算缺勤、不算上班天数
       for (let n = 21; n <= 25; n++) await tx.shiftSchedule.create({ data: { storeId: b.a.id, userId: stale.id, date: dateFromKey(day(n)), shift: "MORNING", updatedById: manager.id } });
       const stale2 = await mk("paytest_t2", "工资测试早已离职", true, { leaveDate: beforePrev });
+      // 提前录了这个月月底的离职日期：正常，不提醒
+      const thisMonth = today.slice(0, 7);
+      const monthLast = new Date(Date.UTC(ty, tm, 0)).toISOString().slice(0, 10);
+      const leaving = await mk("paytest_l", "工资测试月底离职", true, { leaveDate: monthLast });
 
       const r = await generatePayroll(b.hq, prev, { db: tx });
       const days = new Date(Date.UTC(ty, tm - 1, 0)).getUTCDate();
@@ -216,6 +231,10 @@ describe("工资条（连本机库，事务回滚）", () => {
       const page = await getPayrollPage(b.hq, { month: prev }, new Date(), tx);
       if (!page.manage) throw new Error("总部应该是管理视图");
       expect(page.staleLeave.map((u) => u.id)).toEqual(expect.arrayContaining([stale.id, stale2.id]));
+      const thisPage = await getPayrollPage(b.hq, { month: thisMonth }, new Date(), tx);
+      if (!thisPage.manage) throw new Error("总部应该是管理视图");
+      expect(thisPage.staleLeave.map((u) => u.id)).not.toContain(leaving.id);
+      expect(thisPage.staleLeave.map((u) => u.id)).toContain(stale.id);
 
       // 方案停用后，挂在上面的人改档案（方案没变）照样能存；换成停用的方案不行
       await savePlan(b.hq, { id: planId, name: "测试店员方案", salesRateBp: 100, perDeviceFen: 2000, perServiceFen: 1500, isActive: false }, tx);
