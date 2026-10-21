@@ -50,7 +50,7 @@ export async function listEmployees(user: CurrentUser, query: { storeId?: number
     },
     orderBy: [{ storeId: "asc" }, { role: "desc" }, { id: "asc" }],
     take: 300,
-    select: { id: true, username: true, name: true, role: true, isActive: true, store: { select: { id: true, code: true, name: true } }, region: { select: { name: true } }, profile: true },
+    select: { id: true, username: true, name: true, role: true, isActive: true, store: { select: { id: true, code: true, name: true } }, region: { select: { name: true } }, profile: { include: { commissionPlan: { select: { name: true } } } } },
   });
   const showSalary = user.role === "HQ";
   return {
@@ -71,14 +71,17 @@ export async function listEmployees(user: CurrentUser, query: { storeId?: number
       phone: showSalary ? (u.profile?.phone ?? null) : null, // 总部编辑时要原值
       baseSalaryFen: showSalary ? (u.profile?.baseSalaryFen ?? 0) : null,
       note: showSalary ? (u.profile?.note ?? null) : null,
+      commissionPlanId: showSalary ? (u.profile?.commissionPlanId ?? null) : null, // 提成方案和工资一样只给总部看
+      planName: showSalary ? (u.profile?.commissionPlan?.name ?? null) : null,
     })),
+    plans: showSalary ? await prisma.commissionPlan.findMany({ where: { isActive: true }, orderBy: { id: "asc" }, select: { id: true, name: true } }) : [],
   };
 }
 
 export type EmployeeList = Awaited<ReturnType<typeof listEmployees>>;
 
 /** 总部改档案 */
-export async function saveEmployeeProfile(user: CurrentUser, userId: number, input: { hireDate?: unknown; position?: unknown; phone?: unknown; baseSalaryFen?: unknown; leaveDate?: unknown; note?: unknown }, db: Db = prisma) {
+export async function saveEmployeeProfile(user: CurrentUser, userId: number, input: { hireDate?: unknown; position?: unknown; phone?: unknown; baseSalaryFen?: unknown; leaveDate?: unknown; note?: unknown; commissionPlanId?: unknown }, db: Db = prisma) {
   if (!canEditEmployees(user.role)) throw new EmployeeError("员工档案只有总部能改");
   const target = await db.user.findUnique({ where: { id: userId }, select: { id: true } });
   if (!target) throw new EmployeeError("员工不存在");
@@ -90,10 +93,15 @@ export async function saveEmployeeProfile(user: CurrentUser, userId: number, inp
   const leaveDate = parseDate(input.leaveDate, "离职日期");
   if (hireDate && leaveDate && leaveDate < hireDate) throw new EmployeeError("离职日期不能早于入职日期");
   const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) || null : null);
-  const data = { hireDate, position: text(input.position, 20), phone: phone || null, baseSalaryFen: salary, leaveDate, note: text(input.note, 200) };
+  let commissionPlanId: number | null = null;
+  if (input.commissionPlanId !== undefined && input.commissionPlanId !== null && input.commissionPlanId !== "") {
+    commissionPlanId = Number(input.commissionPlanId);
+    if (!Number.isInteger(commissionPlanId) || !(await db.commissionPlan.findFirst({ where: { id: commissionPlanId, isActive: true }, select: { id: true } }))) throw new EmployeeError("提成方案不存在或已经停用");
+  }
+  const data = { hireDate, position: text(input.position, 20), phone: phone || null, baseSalaryFen: salary, leaveDate, note: text(input.note, 200), commissionPlanId };
   await db.employeeProfile.upsert({ where: { userId }, create: { userId, ...data }, update: data });
   // 日志不写电话和工资的具体值
-  await writeAudit({ userId: user.id, action: "employee.profile.save", entity: "user", entityId: userId, detail: { position: data.position, hireDate: data.hireDate, leaveDate: data.leaveDate } }, asTx(db));
+  await writeAudit({ userId: user.id, action: "employee.profile.save", entity: "user", entityId: userId, detail: { position: data.position, hireDate: data.hireDate, leaveDate: data.leaveDate, commissionPlanId } }, asTx(db));
 }
 
 /** “我的”页：自己的档案（工资给本人看） */

@@ -1154,7 +1154,11 @@ async function writeHrDemo(users: { id: number; username: string; role: string; 
       note: null,
     };
   });
-  await prisma.employeeProfile.createMany({ data: profiles });
+  // 提成方案（口径第 19 节）：店员、店长各一套，档案里选上；区域经理、总部不拿提成
+  const staffPlan = await prisma.commissionPlan.create({ data: { name: "店员方案", salesRateBp: 100, perDeviceFen: 2000, perServiceFen: 1500, note: "销售额 1%，每台主机 20 元，每份碎屏险延保 15 元" } });
+  const managerPlan = await prisma.commissionPlan.create({ data: { name: "店长方案", salesRateBp: 50, perDeviceFen: 1000, perServiceFen: 1000, note: "店长自己开的单按这个算" } });
+  const planOf = (role: string) => (role === "STAFF" ? staffPlan.id : role === "STORE_MANAGER" ? managerPlan.id : null);
+  await prisma.employeeProfile.createMany({ data: profiles.map((p) => ({ ...p, commissionPlanId: planOf(users.find((u) => u.id === p.userId)!.role) })) });
 
   const storeRegion = new Map(stores.map((s) => [s.id, s.regionId]));
   const active = users.filter((u) => u.isActive);

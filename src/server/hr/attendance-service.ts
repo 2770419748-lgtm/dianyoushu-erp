@@ -177,9 +177,19 @@ export async function userMonthSummary(db: Db, userId: number, month: string, no
 
 /** 一个人一个月每家店上了几天班（工资分摊到门店用：按那天在哪家店） */
 export async function userMonthStoreDays(db: Db, userId: number, month: string, now = new Date()): Promise<Map<number, number>> {
-  const days = (await monthDays(db, [userId], month, now)).get(userId) ?? [];
-  const out = new Map<number, number>();
-  for (const d of days) if (d.storeId !== null && d.shift && d.shift !== "OFF") out.set(d.storeId, (out.get(d.storeId) ?? 0) + 1);
+  return (await monthSummaries(db, [userId], month, now)).get(userId)?.storeDays ?? new Map();
+}
+
+/** 一批人一个月的考勤汇总（按人整月）和每家店上了几天班（排了上班的日子按那天的排班门店数），生成工资条一次查完 */
+export async function monthSummaries(db: Db, userIds: number[], month: string, now = new Date()) {
+  const all = await monthDays(db, userIds, month, now);
+  const out = new Map<number, { summary: ReturnType<typeof summarizeMonth>; storeDays: Map<number, number> }>();
+  for (const id of userIds) {
+    const days = all.get(id) ?? [];
+    const storeDays = new Map<number, number>();
+    for (const d of days) if (d.storeId !== null && d.shift && d.shift !== "OFF") storeDays.set(d.storeId, (storeDays.get(d.storeId) ?? 0) + 1);
+    out.set(id, { summary: summarizeMonth(days), storeDays });
+  }
   return out;
 }
 

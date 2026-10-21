@@ -235,6 +235,7 @@ const SCHEDULES: MenuEntry = { key: "schedules", label: "排班", href: "/hr/sch
 const ATTENDANCE: MenuEntry = { key: "attendance", label: "考勤打卡", href: "/hr/attendance" };
 const LEAVES: MenuEntry = { key: "leaves", label: "请假", href: "/hr/leaves" };
 const EXPENSES: MenuEntry = { key: "expenses", label: "费用报销", href: "/finance/expenses" };
+const PAYROLL: MenuEntry = { key: "payroll", label: "工资条", href: "/hr/payroll" };
 
 const MENU_STAFF: MenuEntry[] = [
   { key: "m-sale", label: "手机开单", href: "/m/sale" },
@@ -249,6 +250,7 @@ const MENU_STAFF: MenuEntry[] = [
   ATTENDANCE,
   LEAVES,
   EXPENSES,
+  PAYROLL,
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
   { key: "subsidy", label: "国补", href: "/subsidy" },
@@ -285,6 +287,7 @@ const MENU_REGIONAL: MenuEntry[] = [
   ATTENDANCE,
   LEAVES,
   EXPENSES,
+  PAYROLL,
   { key: "stores", label: "辖区门店", href: "/stores" },
   { key: "stock", label: "库存", href: "/stock" },
   { key: "m-stock", label: "手机查库存", href: "/m/stock" },
@@ -308,6 +311,7 @@ const MENU_HQ: MenuEntry[] = [
   ATTENDANCE,
   LEAVES,
   EXPENSES,
+  PAYROLL,
   { key: "products", label: "商品", href: "/products" },
   { key: "prices", label: "门店售价", href: "/products/prices" },
   { key: "purchase", label: "采购入库", href: "/purchase" },

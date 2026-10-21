@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { App, Button, Card, Checkbox, DatePicker, Form, Input, InputNumber, Modal, Space, Table, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { formatDate, formatFen, yuanToFen } from "@/lib/format";
@@ -13,7 +13,7 @@ import { saveEmployeeAction } from "./actions";
 // 员工档案：一行一个员工；总部能看工资、能改（点“编辑”）。店长、区域经理看到的工资一列是空的（服务端就没给）。
 
 type Row = EmployeeList["rows"][number];
-type FormValues = { hireDate?: dayjs.Dayjs | null; position?: string; phone?: string; baseSalaryYuan?: number | null; leaveDate?: dayjs.Dayjs | null; note?: string };
+type FormValues = { hireDate?: dayjs.Dayjs | null; position?: string; phone?: string; baseSalaryYuan?: number | null; leaveDate?: dayjs.Dayjs | null; note?: string; commissionPlanId?: number | null };
 
 export function EmployeesView({ data, q, includeInactive }: { data: EmployeeList; q: string; includeInactive: boolean }) {
   const router = useRouter();
@@ -39,6 +39,7 @@ export function EmployeesView({ data, q, includeInactive }: { data: EmployeeList
       baseSalaryYuan: row.baseSalaryFen !== null ? row.baseSalaryFen / 100 : null,
       leaveDate: row.leaveDate ? dayjs(row.leaveDate) : null,
       note: row.note ?? undefined,
+      commissionPlanId: row.commissionPlanId ?? undefined,
     });
   }
 
@@ -52,6 +53,7 @@ export function EmployeesView({ data, q, includeInactive }: { data: EmployeeList
         baseSalaryFen: values.baseSalaryYuan === null || values.baseSalaryYuan === undefined ? 0 : yuanToFen(values.baseSalaryYuan),
         leaveDate: values.leaveDate ? values.leaveDate.format("YYYY-MM-DD") : "",
         note: values.note ?? "",
+        commissionPlanId: values.commissionPlanId ?? null,
       });
       if (!r.ok) {
         message.error(r.error);
@@ -71,7 +73,12 @@ export function EmployeesView({ data, q, includeInactive }: { data: EmployeeList
     { title: "岗位", dataIndex: "position", render: (v: string | null) => v ?? "-" },
     { title: "入职日期", dataIndex: "hireDate", render: (v: Date | null) => (v ? formatDate(v) : "-") },
     { title: "电话", dataIndex: "phoneMasked", render: (v: string | null) => v ?? "-" },
-    ...(data.showSalary ? [{ title: "基本工资（元/月）", dataIndex: "baseSalaryFen", align: "right" as const, render: (v: number | null) => (v === null ? "-" : formatFen(v)) }] : []),
+    ...(data.showSalary
+      ? [
+          { title: "基本工资（元/月）", dataIndex: "baseSalaryFen", align: "right" as const, render: (v: number | null) => (v === null ? "-" : formatFen(v)) },
+          { title: "提成方案", dataIndex: "planName", render: (v: string | null) => v ?? "-" },
+        ]
+      : []),
     { title: "离职日期", dataIndex: "leaveDate", render: (v: Date | null) => (v ? formatDate(v) : "-") },
     ...(data.canEdit ? [{ title: "", render: (_: unknown, r: Row) => <Button size="small" onClick={() => edit(r)}>编辑</Button> }] : []),
   ];
@@ -99,6 +106,9 @@ export function EmployeesView({ data, q, includeInactive }: { data: EmployeeList
           </Form.Item>
           <Form.Item name="baseSalaryYuan" label="基本工资（元/月）">
             <InputNumber min={0} precision={2} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="commissionPlanId" label="提成方案">
+            <Select allowClear placeholder="不选就没有提成" options={data.plans.map((p) => ({ value: p.id, label: p.name }))} />
           </Form.Item>
           <Form.Item name="leaveDate" label="离职日期">
             <DatePicker style={{ width: "100%" }} />

@@ -426,6 +426,15 @@ enum ExpensePayMethod {
   @@map("expense_pay_method")
 }
 
+/// 一个月工资的状态：草稿（能改奖惩、重算）→ 已发布（数字锁定、员工能看自己的）；发布后要改只能整月作废重算
+enum PayrollStatus {
+  DRAFT     // 草稿
+  PUBLISHED // 已发布
+  VOIDED    // 已作废
+
+  @@map("payroll_status")
+}
+
 enum ApprovalStatus {
   PENDING   // 待审批
   EXECUTED  // 已通过（已经做掉）
@@ -561,6 +570,7 @@ model Store {
   punches         AttendancePunch[]
   leaveRequests   LeaveRequest[]
   expenseClaims   ExpenseClaim[]
+  payrollSlips    PayrollSlip[]
 
   @@index([regionId])
   @@map("stores")
@@ -624,6 +634,7 @@ model User {
   leaveRequests         LeaveRequest[]
   expenseClaims         ExpenseClaim[]     @relation("ExpenseUser")
   expensesPaid          ExpenseClaim[]     @relation("ExpensePaidBy")
+  payrollSlips          PayrollSlip[]
   noticesAuthored       Notice[]          @relation("NoticeAuthor")
   noticeReads           NoticeRead[]
 
@@ -1770,12 +1781,90 @@ model EmployeeProfile {
   phone         String? // 联系电话，列表里脱敏
   baseSalaryFen Int       @default(0) @map("base_salary_fen") // 基本工资（每月，分；数据库 CHECK 不为负）
   leaveDate     DateTime? @map("leave_date") @db.Date // 离职日期（停用时填）
+  commissionPlanId Int?   @map("commission_plan_id") // 提成方案（口径第 19 节，总部选）
   note          String?
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id])
+  user           User            @relation(fields: [userId], references: [id])
+  commissionPlan CommissionPlan? @relation(fields: [commissionPlanId], references: [id])
 
   @@map("employee_profiles")
+}
+
+/// 提成方案（口径第 19 节）：总部配，员工档案里选一个。销售额按开单人算、扣掉退货
+model CommissionPlan {
+  id            Int      @id @default(autoincrement())
+  name          String   @unique
+  salesRateBp   Int      @default(0) @map("sales_rate_bp") // 销售额提成比例：万分之几（100 = 1%）
+  perDeviceFen  Int      @default(0) @map("per_device_fen") // 每卖一台主机多少钱
+  perServiceFen Int      @default(0) @map("per_service_fen") // 每卖一份碎屏险、延保多少钱
+  isActive      Boolean  @default(true) @map("is_active")
+  note          String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  profiles EmployeeProfile[]
+
+  @@map("commission_plans")
+}
+
+/// 一个月的工资（口径第 19 节）：总部点“生成工资条”出草稿，改完奖惩发布；同一个月只能有一份没作废的（部分唯一索引）
+model PayrollRun {
+  id            Int           @id @default(autoincrement())
+  month         String // YYYY-MM
+  status        PayrollStatus @default(DRAFT)
+  slipCount     Int           @default(0) @map("slip_count")
+  grossFen      Int           @default(0) @map("gross_fen") // 应发合计
+  generatedById Int           @map("generated_by_id")
+  generatedAt   DateTime      @map("generated_at")
+  publishedById Int?          @map("published_by_id")
+  publishedAt   DateTime?     @map("published_at")
+  voidedById    Int?          @map("voided_by_id")
+  voidedAt      DateTime?     @map("voided_at")
+  voidReason    String?       @map("void_reason")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  slips PayrollSlip[]
+
+  @@index([month])
+  @@map("payroll_runs")
+}
+
+/// 工资条（口径第 19 节）：应发 = 基本工资（按在职天数折算）+ 提成 − 缺勤扣款 + 其他奖惩。社保个税财务另算
+model PayrollSlip {
+  id                   Int     @id @default(autoincrement())
+  runId                Int     @map("run_id")
+  userId               Int     @map("user_id")
+  storeId              Int?    @map("store_id") // 生成时他在哪家店（显示用；分到门店按 store_days）
+  planName             String? @map("plan_name") // 提成方案名（生成时的）
+  baseSalaryFen        Int     @map("base_salary_fen") // 档案里的基本工资（每月）
+  daysInMonth          Int     @map("days_in_month")
+  employedDays         Int     @map("employed_days") // 这个月在职几天（入职、离职当月折算）
+  baseFen              Int     @map("base_fen") // 折算后的基本工资
+  absentDays           Int     @map("absent_days")
+  absenceDeductionFen  Int     @map("absence_deduction_fen") // 缺勤一天扣 基本工资 ÷ 当月天数
+  salesFen             Int     @map("sales_fen") // 这个月开单的销售额（扣掉退货）
+  deviceQty            Int     @map("device_qty") // 卖了几台主机（扣掉退回的）
+  serviceQty           Int     @map("service_qty") // 卖了几份碎屏险、延保（扣掉退的）
+  salesCommissionFen   Int     @map("sales_commission_fen")
+  deviceCommissionFen  Int     @map("device_commission_fen")
+  serviceCommissionFen Int     @map("service_commission_fen")
+  commissionFen        Int     @map("commission_fen")
+  adjustmentFen        Int     @default(0) @map("adjustment_fen") // 其他奖惩（总部手填，写原因）
+  adjustmentNote       String? @map("adjustment_note")
+  grossFen             Int     @map("gross_fen") // 应发
+  storeDays            Json?   @map("store_days") // 每家店上了几天班（按那天在哪家店），门店收支按它分摊
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  run   PayrollRun @relation(fields: [runId], references: [id])
+  user  User       @relation(fields: [userId], references: [id])
+  store Store?     @relation(fields: [storeId], references: [id])
+
+  @@unique([runId, userId])
+  @@index([userId])
+  @@map("payroll_slips")
 }
 
 /// 排班（口径第 19 节）：一个人一天一条

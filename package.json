@@ -15,7 +15,7 @@
     "db:studio": "prisma studio",
     "test": "vitest run",
     "db:seed": "prisma db seed",
-    "db:reset": "tsx prisma/reset.ts && tsx prisma/seed.ts && tsx prisma/generate-demo.ts && tsx --conditions=react-server scripts/alerts.ts",
+    "db:reset": "tsx prisma/reset.ts && tsx prisma/seed.ts && tsx prisma/generate-demo.ts && tsx --conditions=react-server scripts/demo-payroll.ts && tsx --conditions=react-server scripts/alerts.ts",
     "test:e2e": "playwright test",
     "db:demo": "tsx prisma/generate-demo.ts",
     "db:backup": "node scripts/backup-db.mjs",

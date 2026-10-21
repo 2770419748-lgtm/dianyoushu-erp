@@ -5,7 +5,7 @@ import { requireUser } from "@/server/auth/current-user";
 import { EmployeeError, saveEmployeeProfile } from "@/server/hr/employee-service";
 
 // 员工档案：总部改。
-export async function saveEmployeeAction(userId: number, input: { hireDate?: string; position?: string; phone?: string; baseSalaryFen?: number; leaveDate?: string; note?: string }): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function saveEmployeeAction(userId: number, input: { hireDate?: string; position?: string; phone?: string; baseSalaryFen?: number; leaveDate?: string; note?: string; commissionPlanId?: number | null }): Promise<{ ok: true } | { ok: false; error: string }> {
   const user = await requireUser();
   try {
     await saveEmployeeProfile(user, userId, input);

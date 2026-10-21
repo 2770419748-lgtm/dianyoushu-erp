@@ -17,6 +17,7 @@ const LOCKABLE = {
   wecom_follows: Prisma.raw('"wecom_follows"'),
   leave_requests: Prisma.raw('"leave_requests"'),
   expense_claims: Prisma.raw('"expense_claims"'),
+  payroll_runs: Prisma.raw('"payroll_runs"'),
 } as const;
 
 export type LockableTable = keyof typeof LOCKABLE;
