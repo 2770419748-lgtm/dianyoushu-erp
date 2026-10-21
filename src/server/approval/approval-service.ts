@@ -4,7 +4,7 @@ import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ApprovalStatus } from "@/generated/prisma/enums";
-import { APPROVAL_RULE_KINDS, canDecide, type ApprovalActionKey, type ApprovalRuleKindKey, type ApproverRoleKey } from "@/lib/approval";
+import { APPROVAL_RULE_KINDS, canDecide, nextApprovalStep, OA_ACTIONS, type ApprovalActionKey, type ApprovalRuleKindKey, type ApprovalStepEntry, type ApproverRoleKey } from "@/lib/approval";
 import { isValidFen } from "@/lib/limits";
 import { canManageApprovalRules } from "@/server/auth/permissions";
 import { assertStoreAccess, PermissionError, storeScopeWhere } from "@/server/auth/scope";
@@ -16,27 +16,18 @@ import { type Db, withTx } from "@/server/db-tx";
 import { DeviceStateError } from "@/server/stock/device-state";
 import { nextDocNo } from "@/server/stock/doc-no";
 import { StockError } from "@/server/stock/stock-service";
-import { createReturnTx, ReturnError, type ReturnInput } from "@/server/sales/return-service";
-import { createSalesOrderTx, SalesError, voidSalesOrderTx, type SalesOrderInput } from "@/server/sales/sales-service";
-import { confirmStocktakeTx, StocktakeError } from "@/server/stocktake/stocktake-service";
-import { createTransferTx, TransferError, type TransferInput } from "@/server/transfer/transfer-service";
-import { SubsidyError } from "@/server/subsidy/subsidy-service";
 import { ApprovalRequiredError } from "./approval-check";
+import { executorFor, type ApprovalExecutor, type ApprovalPayload, type ClosedStatus } from "./executors";
+
+export type { ApprovalPayload } from "./executors";
 
 // 审批单（口径第 17 节）：触发了规则的事先存成审批单；审批人通过时，系统以发起人的身份、按当时的数据把这件事做掉（同一个事务里改审批单状态）；
 // 做不成（机器卖了、库存不够、当天已日结……）就记“批了没做成”和原因，发起人重新发起。
+// 第 19 节扩了三处：每种事项通过、驳回后做什么在 executors.ts 登记；请假、报销这类 OA 事项可以不挂门店；可以两级审批（店长批完总部再批）。
 
 export class ApprovalError extends Error {}
 
 type Tx = Prisma.TransactionClient;
-
-/** 每种事的审批单里存的内容 */
-export type ApprovalPayload =
-  | { action: "SALE"; input: SalesOrderInput; details: string[] }
-  | { action: "RETURN"; input: ReturnInput; details: string[] }
-  | { action: "SALE_VOID"; orderId: number; reason: string; details: string[] }
-  | { action: "TRANSFER"; input: TransferInput; details: string[] }
-  | { action: "STOCKTAKE"; stocktakeId: number; details: string[] };
 
 const DEFAULT_APPROVER: Record<ApprovalRuleKindKey, ApproverRoleKey> = {
   SALE_DISCOUNT: "STORE_MANAGER",
@@ -129,6 +120,38 @@ export async function createApprovalRequest(user: CurrentUser, error: ApprovalRe
   }
 }
 
+/**
+ * OA 事项（请假、报销，口径第 19 节）提交就要批，不看第 17 节的规则：在调用方的事务里存一张审批单。
+ * chain 是依次要谁批（店长 → 总部，或者只有总部）；storeId 可以是空（总部员工的事项）。
+ */
+export async function createOaApprovalTx(
+  tx: Tx,
+  user: CurrentUser,
+  input: { action: "LEAVE" | "EXPENSE"; storeId: number | null; chain: ApproverRoleKey[]; summary: string; reason: string; amountFen: number; note?: string | null; payload: ApprovalPayload; dedupeKey: string },
+) {
+  if (input.chain.length === 0) throw new ApprovalError("没有审批人");
+  const requestNo = await nextDocNo(tx, "SP");
+  const created = await tx.approvalRequest.create({
+    data: {
+      requestNo,
+      action: input.action,
+      storeId: input.storeId,
+      requestedById: user.id,
+      approverRole: input.chain[0]!,
+      chain: input.chain,
+      step: 1,
+      summary: input.summary,
+      reasons: [{ kind: input.action, text: input.reason }],
+      amountFen: input.amountFen,
+      note: input.note ?? null,
+      payload: input.payload as Prisma.InputJsonValue,
+      dedupeKey: input.dedupeKey,
+    },
+  });
+  await writeAudit({ userId: user.id, action: "approval.request", entity: "approval_request", entityId: created.id, detail: { requestNo, action: input.action, chain: input.chain } }, tx);
+  return { id: created.id, requestNo, approverRole: input.chain[0]! };
+}
+
 // ---------- 审批 ----------
 
 /** 发起人现在的账号（审批通过时以他的身份执行；账号停用了就做不成） */
@@ -137,74 +160,86 @@ async function loadRequester(db: Tx, id: number): Promise<CurrentUser | null> {
   return u && u.isActive ? (u as unknown as CurrentUser) : null;
 }
 
-/** 按当时的数据把这件事做掉（带 approved: true，不再检查审批） */
-async function execute(tx: Tx, requester: CurrentUser, payload: ApprovalPayload): Promise<{ id: number; no: string | null }> {
-  switch (payload.action) {
-    case "SALE": {
-      const r = await createSalesOrderTx(tx, requester, payload.input, { approved: true });
-      return { id: r.id, no: r.orderNo };
-    }
-    case "RETURN": {
-      const r = await createReturnTx(tx, requester, payload.input, { approved: true });
-      return { id: r.id, no: r.orderNo };
-    }
-    case "SALE_VOID": {
-      await voidSalesOrderTx(tx, requester, payload.orderId, payload.reason, { approved: true });
-      const order = await tx.salesOrder.findUniqueOrThrow({ where: { id: payload.orderId }, select: { orderNo: true } });
-      return { id: payload.orderId, no: order.orderNo };
-    }
-    case "TRANSFER": {
-      const r = await createTransferTx(tx, requester, payload.input, { approved: true });
-      return { id: r.id, no: r.orderNo };
-    }
-    case "STOCKTAKE": {
-      const r = await confirmStocktakeTx(tx, requester, payload.stocktakeId, { approved: true });
-      return { id: r.id, no: r.stocktakeNo };
-    }
-  }
+/** 登记过的执行器；没登记的事项（数据有问题）当程序出错 */
+function executorOf(action: ApprovalActionKey): ApprovalExecutor {
+  const executor = executorFor(action);
+  if (!executor) throw new Error(`审批事项 ${action} 没有登记执行器`);
+  return executor;
 }
 
 /** 这件事做不成的业务原因（不是程序出错）：记到审批单上给发起人看；数据库约束兜底拦下的也算 */
-function businessMessage(error: unknown): string | null {
-  if (error instanceof SalesError || error instanceof ReturnError || error instanceof TransferError || error instanceof StocktakeError || error instanceof SubsidyError) return error.message;
+function businessMessage(executor: ApprovalExecutor, error: unknown): string | null {
+  if (executor.businessErrors.some((E) => error instanceof E)) return (error as Error).message;
   if (error instanceof StockError || error instanceof DeviceStateError || error instanceof PermissionError) return error.message;
   if (isUniqueViolation(error) || isCheckViolation(error)) return "数据刚被别人改过（比如同一台机器、同一个码刚被用了），按现在的情况重新发起";
   return null;
 }
 
+/** 前面几级的审批记录 */
+function stepLogOf(value: unknown): ApprovalStepEntry[] {
+  return Array.isArray(value) ? (value as ApprovalStepEntry[]) : [];
+}
+
+/** 能不能看这张审批单：挂门店的按门店范围（店员只看自己发起的）；不挂门店的（总部员工的请假、报销）只有发起人和总部 */
+function assertCanView(user: CurrentUser, request: { requestedById: number; store: { id: number; regionId: number } | null }) {
+  if (request.requestedById === user.id) return;
+  const store = request.store;
+  if (store) wrapAccess(() => assertStoreAccess(user, store));
+  else if (user.role !== "HQ") throw new ApprovalError("没有权限看这张审批单");
+  if (user.role === "STAFF") throw new ApprovalError("店员只能看自己发起的审批单");
+}
+
 async function loadForDecision(db: Tx, user: CurrentUser, id: number) {
   if (!(await lockRow(db, "approval_requests", id))) throw new ApprovalError("审批单不存在");
   const request = await db.approvalRequest.findUniqueOrThrow({ where: { id }, include: { store: { select: { id: true, regionId: true } } } });
-  wrapAccess(() => assertStoreAccess(user, request.store));
+  const store = request.store;
+  if (store) wrapAccess(() => assertStoreAccess(user, store));
+  else if (user.role !== "HQ") throw new ApprovalError("这张要总部批");
   if (request.status !== "PENDING") throw new ApprovalError("这张审批单已经处理过了");
-  if (!canDecide(request.approverRole as ApproverRoleKey, user.role, request.requestedById === user.id)) {
-    throw new ApprovalError(request.requestedById === user.id ? "不能批自己发起的" : request.approverRole === "HQ" ? "这张要总部批" : "这张要店长或总部批");
+  const log = stepLogOf(request.stepLog);
+  const decidedEarlier = log.some((e) => e.userId === user.id);
+  if (!canDecide(request.approverRole as ApproverRoleKey, user.role, request.requestedById === user.id, decidedEarlier)) {
+    throw new ApprovalError(request.requestedById === user.id ? "不能批自己发起的" : decidedEarlier ? "你已经批过前一级了，这一级要别人批" : request.approverRole === "HQ" ? "这张要总部批" : "这张要店长或总部批");
   }
-  return request;
+  return { ...request, log };
 }
 
 /**
  * 通过：在一个事务里锁住审批单，设一个保存点，以发起人身份按当时的数据把事做掉，记“已通过”和做出来的单号；
  * 做不成（业务原因）就回到保存点（做了一半的全撤掉），记“批了没做成”和原因。审批单本身的问题（不存在、处理过了、没权限）直接报错。
  */
-export async function approveRequest(user: CurrentUser, id: number, note?: unknown, db: Db = prisma): Promise<{ executed: true; resultId: number; resultNo: string | null } | { executed: false; error: string }> {
+export type ApproveResult = { executed: true; resultId: number; resultNo: string | null } | { executed: false; error: string } | { executed: false; forwardedTo: ApproverRoleKey };
+
+export async function approveRequest(user: CurrentUser, id: number, note?: unknown, db: Db = prisma): Promise<ApproveResult> {
   const decisionNote = text(note, 200) || null;
   return withTx(db, async (tx) => {
     const request = await loadForDecision(tx, user, id);
+    const executor = executorOf(request.action);
+    const payload = request.payload as unknown as ApprovalPayload;
+    // 两级审批：这一级不是最后一级，只记一笔、转给下一级（口径第 19 节）
+    const next = nextApprovalStep(request.chain as ApproverRoleKey[], request.step, user.role);
+    if (next) {
+      const entry: ApprovalStepEntry = { step: request.step, role: request.approverRole as ApproverRoleKey, userId: user.id, name: user.name, at: new Date().toISOString(), note: decisionNote };
+      await tx.approvalRequest.update({ where: { id }, data: { step: next.step, approverRole: next.role, stepLog: [...request.log, entry] as unknown as Prisma.InputJsonValue } });
+      await writeAudit({ userId: user.id, action: "approval.step", entity: "approval_request", entityId: id, detail: { requestNo: request.requestNo, step: request.step, next: next.role } }, tx);
+      return { executed: false as const, forwardedTo: next.role };
+    }
     const fail = async (message: string) => {
+      await executor.onClosed?.(tx, payload, "FAILED");
       await tx.approvalRequest.update({ where: { id }, data: { status: "FAILED", decidedById: user.id, decidedAt: new Date(), decisionNote, error: message } });
       await writeAudit({ userId: user.id, action: "approval.failed", entity: "approval_request", entityId: id, detail: { requestNo: request.requestNo, error: message } }, tx);
       return { executed: false as const, error: message };
     };
     const requester = await loadRequester(tx, request.requestedById);
-    if (!requester) return fail("发起人的账号已经停用，这件事做不成，请别人重新发起");
-    if ((requester.role === "STAFF" || requester.role === "STORE_MANAGER") && requester.storeId !== request.storeId) return fail("发起人已经调到别的店了，这件事做不成，请本店的人重新发起");
+    const oa = OA_ACTIONS.includes(request.action);
+    if (!requester) return fail(oa ? "发起人的账号已经停用，这张单不再生效" : "发起人的账号已经停用，这件事做不成，请别人重新发起");
+    if ((requester.role === "STAFF" || requester.role === "STORE_MANAGER") && requester.storeId !== request.storeId) return fail(oa ? "发起人已经调到别的店了，请他重新提交，由新门店审批" : "发起人已经调到别的店了，这件事做不成，请本店的人重新发起");
     await tx.$executeRaw`SAVEPOINT approval_execute`;
     let result: { id: number; no: string | null };
     try {
-      result = await execute(tx, requester, request.payload as unknown as ApprovalPayload);
+      result = await executor.execute(tx, requester, payload);
     } catch (error) {
-      const message = businessMessage(error);
+      const message = businessMessage(executor, error);
       if (message === null) throw error;
       await tx.$executeRaw`ROLLBACK TO SAVEPOINT approval_execute`;
       return fail(message);
@@ -216,12 +251,18 @@ export async function approveRequest(user: CurrentUser, id: number, note?: unkno
   });
 }
 
-/** 驳回：要写原因 */
+/** 驳回、撤回时登记的执行器要跟着改的（比如请假单标成驳回） */
+async function closeWith(tx: Tx, request: { action: ApprovalActionKey; payload: unknown }, status: ClosedStatus) {
+  await executorOf(request.action).onClosed?.(tx, request.payload as ApprovalPayload, status);
+}
+
+/** 驳回：要写原因；在哪一级驳回都算结束 */
 export async function rejectRequest(user: CurrentUser, id: number, note: unknown, db: Db = prisma) {
   const reason = text(note, 200);
   if (!reason) throw new ApprovalError("写一下驳回原因");
   await withTx(db, async (tx) => {
     const request = await loadForDecision(tx, user, id);
+    await closeWith(tx, request, "REJECTED");
     await tx.approvalRequest.update({ where: { id }, data: { status: "REJECTED", decidedById: user.id, decidedAt: new Date(), decisionNote: reason } });
     await writeAudit({ userId: user.id, action: "approval.reject", entity: "approval_request", entityId: id, detail: { requestNo: request.requestNo, reason } }, tx);
   });
@@ -234,6 +275,7 @@ export async function cancelRequest(user: CurrentUser, id: number, db: Db = pris
     const request = await tx.approvalRequest.findUniqueOrThrow({ where: { id } });
     if (request.requestedById !== user.id) throw new ApprovalError("只有发起人能撤回");
     if (request.status !== "PENDING") throw new ApprovalError("这张审批单已经处理过了");
+    await closeWith(tx, request, "CANCELLED");
     await tx.approvalRequest.update({ where: { id }, data: { status: "CANCELLED", decidedAt: new Date() } });
     await writeAudit({ userId: user.id, action: "approval.cancel", entity: "approval_request", entityId: id, detail: { requestNo: request.requestNo } }, tx);
   });
@@ -252,6 +294,7 @@ function todoWhere(user: CurrentUser): Prisma.ApprovalRequestWhereInput {
 }
 
 function viewWhere(user: CurrentUser, view: ApprovalView, status?: ApprovalStatus): Prisma.ApprovalRequestWhereInput {
+  // 全部：按门店范围；不挂门店的只有总部看得到（storeScopeWhere 对总部是空条件），别人只在“我发起的”里看到自己的
   const base = view === "todo" ? todoWhere(user) : view === "mine" ? { requestedById: user.id } : { AND: [storeScopeWhere(user), user.role === "STAFF" ? { requestedById: user.id } : {}] };
   return { AND: [base, status ? { status } : {}] };
 }
@@ -287,39 +330,32 @@ export async function todoCount(user: CurrentUser): Promise<number> {
   return prisma.approvalRequest.count({ where: todoWhere(user) });
 }
 
-/** 做出来的单据在哪儿看 */
+/** 做出来的单据在哪儿看（执行器登记的） */
 function resultHref(action: ApprovalActionKey, payload: ApprovalPayload, resultId: number | null): string | null {
   if (!resultId) return null;
-  switch (action) {
-    case "SALE":
-    case "SALE_VOID":
-      return `/sales/${resultId}`;
-    case "RETURN":
-      return payload.action === "RETURN" ? `/sales/${Number(payload.input.salesOrderId)}` : null;
-    case "TRANSFER":
-      return `/transfers/${resultId}`;
-    case "STOCKTAKE":
-      return `/stocktakes/${resultId}`;
-  }
+  return executorFor(action)?.resultHref(payload as never, resultId) ?? null;
 }
 
-export async function getApproval(user: CurrentUser, id: number) {
-  const request = await prisma.approvalRequest.findUnique({
+export async function getApproval(user: CurrentUser, id: number, db: Db = prisma) {
+  const request = await db.approvalRequest.findUnique({
     where: { id },
     include: { store: { select: { id: true, code: true, name: true, regionId: true } }, requestedBy: { select: { name: true } }, decidedBy: { select: { name: true } } },
   });
   if (!request) return null;
-  wrapAccess(() => assertStoreAccess(user, request.store));
-  if (user.role === "STAFF" && request.requestedById !== user.id) throw new ApprovalError("店员只能看自己发起的审批单");
+  assertCanView(user, request);
   const payload = request.payload as unknown as ApprovalPayload;
+  const stepLog = stepLogOf(request.stepLog);
+  const inScope = request.store ? true : user.role === "HQ";
   return {
     ...request,
     payload: undefined,
+    stepLog,
+    chain: request.chain as ApproverRoleKey[],
     details: payload.details ?? [],
     reasons: (request.reasons as { kind: string; text: string }[]) ?? [],
     resultHref: resultHref(request.action, payload, request.resultId),
     can: {
-      decide: request.status === "PENDING" && canDecide(request.approverRole as ApproverRoleKey, user.role, request.requestedById === user.id),
+      decide: request.status === "PENDING" && inScope && canDecide(request.approverRole as ApproverRoleKey, user.role, request.requestedById === user.id, stepLog.some((e) => e.userId === user.id)),
       cancel: request.status === "PENDING" && request.requestedById === user.id,
     },
   };

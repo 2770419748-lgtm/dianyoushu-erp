@@ -19,5 +19,5 @@ export default async function ApprovalPage({ params }: PageProps<"/approvals/[id
     throw error;
   }
   if (!detail) notFound();
-  return <ApprovalDetailView detail={detail} />;
+  return <ApprovalDetailView detail={detail} viewerRole={user.role} />;
 }

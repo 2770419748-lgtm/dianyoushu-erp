@@ -349,8 +349,48 @@ enum ApprovalAction {
   SALE_VOID // 作废销售单
   TRANSFER  // 调拨申请
   STOCKTAKE // 盘点确认
+  LEAVE     // 请假（口径第 19 节，OA 事项：提交就要批）
+  EXPENSE   // 费用报销（口径第 19 节，OA 事项）
 
   @@map("approval_action")
+}
+
+/// 班次（口径第 19 节）：早 9:00～17:00、中 11:00～19:00、晚 13:00～21:30、休息
+enum ShiftKind {
+  MORNING
+  MIDDLE
+  EVENING
+  OFF
+
+  @@map("shift_kind")
+}
+
+/// 打卡是上班还是下班
+enum PunchKind {
+  IN
+  OUT
+
+  @@map("punch_kind")
+}
+
+/// 请假类型
+enum LeaveKind {
+  PERSONAL     // 事假
+  SICK         // 病假
+  ANNUAL       // 年假
+  COMPENSATORY // 调休
+
+  @@map("leave_kind")
+}
+
+/// 请假、报销这类 OA 单据的状态（跟着审批单走）
+enum OaStatus {
+  PENDING   // 审批中
+  APPROVED  // 批了
+  REJECTED  // 驳回
+  CANCELLED // 撤回
+
+  @@map("oa_status")
 }
 
 enum ApprovalStatus {
@@ -484,6 +524,9 @@ model Store {
   approvals       ApprovalRequest[]
   wecomBindCodes  WecomBindCode[]
   kpiTargets      KpiTarget[]
+  shifts          ShiftSchedule[]
+  punches         AttendancePunch[]
+  leaveRequests   LeaveRequest[]
 
   @@index([regionId])
   @@map("stores")
@@ -541,6 +584,10 @@ model User {
   wecomTransfersCreated WecomTransfer[] @relation("WecomTransferCreatedBy")
   notifications         Notification[]
   profile               EmployeeProfile?
+  shifts                ShiftSchedule[]
+  punches               AttendancePunch[]  @relation("PunchUser")
+  punchesCreated        AttendancePunch[]  @relation("PunchCreatedBy")
+  leaveRequests         LeaveRequest[]
   noticesAuthored       Notice[]          @relation("NoticeAuthor")
   noticeReads           NoticeRead[]
 
@@ -1410,9 +1457,12 @@ model ApprovalRequest {
   id            Int            @id @default(autoincrement())
   requestNo     String         @unique @map("request_no") // SP + yyyyMMdd + 4 位
   action        ApprovalAction
-  storeId       Int            @map("store_id")
+  storeId       Int?           @map("store_id") // OA 事项可以不挂门店（总部员工的请假、报销）
   requestedById Int            @map("requested_by_id")
-  approverRole  Role           @map("approver_role")
+  approverRole  Role           @map("approver_role") // 现在这一级要谁批
+  chain         Role[]         @default([]) // 两级审批时依次要谁批（如 店长 → 总部）；空 = 只有一级
+  step          Int            @default(1) // 现在是第几级
+  stepLog       Json?          @map("step_log") // 前面几级谁批的、什么时候、意见
   status        ApprovalStatus @default(PENDING)
   summary       String // 给审批人看的摘要
   reasons       Json // 触发了哪几条规则、为什么
@@ -1429,9 +1479,9 @@ model ApprovalRequest {
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")
 
-  store       Store @relation(fields: [storeId], references: [id])
-  requestedBy User  @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
-  decidedBy   User? @relation("ApprovalDecidedBy", fields: [decidedById], references: [id])
+  store       Store? @relation(fields: [storeId], references: [id])
+  requestedBy User   @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  decidedBy   User?  @relation("ApprovalDecidedBy", fields: [decidedById], references: [id])
 
   @@index([status, approverRole])
   @@index([storeId, createdAt])
@@ -1690,6 +1740,69 @@ model EmployeeProfile {
   user User @relation(fields: [userId], references: [id])
 
   @@map("employee_profiles")
+}
+
+/// 排班（口径第 19 节）：一个人一天一条
+model ShiftSchedule {
+  id          Int       @id @default(autoincrement())
+  storeId     Int       @map("store_id")
+  userId      Int       @map("user_id")
+  date        DateTime  @db.Date
+  shift       ShiftKind
+  updatedById Int       @map("updated_by_id")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  user  User  @relation(fields: [userId], references: [id])
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@unique([userId, date])
+  @@index([storeId, date])
+  @@map("shift_schedules")
+}
+
+/// 打卡（口径第 19 节）：员工自己打，或者店长补录（写原因）
+model AttendancePunch {
+  id          Int       @id @default(autoincrement())
+  userId      Int       @map("user_id")
+  storeId     Int?      @map("store_id")
+  date        DateTime  @db.Date // 北京时间的日期
+  kind        PunchKind
+  at          DateTime // 打卡时间
+  manual      Boolean   @default(false) // 店长补录的
+  note        String? // 补录原因
+  createdById Int       @map("created_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user      User   @relation("PunchUser", fields: [userId], references: [id])
+  store     Store? @relation(fields: [storeId], references: [id])
+  createdBy User   @relation("PunchCreatedBy", fields: [createdById], references: [id])
+
+  @@index([userId, date])
+  @@index([storeId, date])
+  @@map("attendance_punches")
+}
+
+/// 请假（口径第 19 节）：员工发起，走审批（店长批，3 天以上再总部批）
+model LeaveRequest {
+  id                Int       @id @default(autoincrement())
+  userId            Int       @map("user_id")
+  storeId           Int?      @map("store_id")
+  kind              LeaveKind
+  startDate         DateTime  @map("start_date") @db.Date
+  endDate           DateTime  @map("end_date") @db.Date
+  days              Int // 请几天（含首尾，按自然日）
+  reason            String
+  status            OaStatus  @default(PENDING)
+  approvalRequestId Int?      @unique @map("approval_request_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user  User   @relation(fields: [userId], references: [id])
+  store Store? @relation(fields: [storeId], references: [id])
+
+  @@index([userId, startDate])
+  @@index([storeId, startDate])
+  @@map("leave_requests")
 }
 
 /// 公告（口径第 19 节）：总部发全部、区域、门店，店长发本店；发布时给范围内的人发系统内消息

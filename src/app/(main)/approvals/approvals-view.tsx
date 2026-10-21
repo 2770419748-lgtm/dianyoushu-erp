@@ -27,11 +27,11 @@ export function ApprovalsView({ data, status, canDecide, canInitiate = true }: {
     { title: "审批单号", dataIndex: "requestNo", render: (v: string, r) => <Link href={`/approvals/${r.id}`}>{v}</Link> },
     { title: "发起时间", dataIndex: "createdAt", render: (v: Date) => formatDateTime(v) },
     { title: "事项", dataIndex: "action", render: (v: ApprovalRow["action"]) => APPROVAL_ACTION_LABELS[v] },
-    { title: "门店", render: (_, r) => `${r.store.code} ${r.store.name}` },
+    { title: "门店", render: (_, r) => (r.store ? `${r.store.code} ${r.store.name}` : "总部") },
     { title: "发起人", render: (_, r) => r.requestedBy.name },
     { title: "摘要", dataIndex: "summary", render: (v: string) => <Typography.Text ellipsis={{ tooltip: v }} style={{ maxWidth: 360 }}>{v}</Typography.Text> },
-    { title: "关键金额（元）", dataIndex: "amountFen", align: "right", render: (v: number) => formatFen(v) },
-    { title: "谁批", dataIndex: "approverRole", render: (v: "STORE_MANAGER" | "HQ") => APPROVER_ROLE_LABELS[v] },
+    { title: "关键金额（元）", dataIndex: "amountFen", align: "right", render: (v: number, r) => (r.action === "LEAVE" ? "—" : formatFen(v)) },
+    { title: "谁批", dataIndex: "approverRole", render: (v: "STORE_MANAGER" | "HQ", r) => (r.chain.length > 1 ? `${APPROVER_ROLE_LABELS[v]}（第 ${r.step}/${r.chain.length} 级）` : APPROVER_ROLE_LABELS[v]) },
     {
       title: "状态",
       render: (_, r) => (
@@ -63,7 +63,7 @@ export function ApprovalsView({ data, status, canDecide, canInitiate = true }: {
       }
     >
       <Typography.Paragraph type="secondary">
-        开单让利太多、低于成本卖、大额退款、作废销售单、大额调拨、盘亏多，按总部配的审批规则先提交审批（规则默认都关着）；审批人通过后，系统按当时的数据把这件事做掉，做不成的（比如机器已经卖了）会写明原因。
+        开单让利太多、低于成本卖、大额退款、作废销售单、大额调拨、盘亏多，按总部配的审批规则先提交审批（规则默认都关着）；审批人通过后，系统按当时的数据把这件事做掉，做不成的（比如机器已经卖了）会写明原因。请假、报销提交就要批，金额大、天数多的店长批完再给总部批。
       </Typography.Paragraph>
       <Space wrap style={{ marginBottom: 12 }}>
         <Segmented<ApprovalView> value={data.view} options={views} onChange={(v) => navigate({ view: v, page: 1 })} />

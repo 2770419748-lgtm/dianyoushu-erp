@@ -9,6 +9,7 @@ import { payerOptions, repairChargeFen, type FaultCategoryKey, type RepairPayerK
 import { monthRange, reconcileStatement, type CarrierBizTypeKey, type CarrierKey, type StatementLine } from "../src/lib/carrier";
 import { lineBaseFen, subsidyFenOf, type SubsidyStatusKey } from "../src/lib/subsidy";
 import { KF_CLAIM_TEXT, KF_HUMAN_TEXT, KF_STORE_HOURS, KF_WARRANTY_TEXT } from "../src/lib/wecom-kf";
+import { bjMinuteOfDay, LEAVE_HQ_DAYS, LEAVE_KIND_LABELS, LEAVE_KINDS, leaveChain, SHIFT_TIMES, type LeaveKindKey, type ShiftKindKey, type WorkShiftKey } from "../src/lib/attendance";
 import { SIMULATED_KF_ID } from "../src/server/wecom/config";
 import { buildInvoiceLines, simulateInvoiceNumber, usccCheckChar, type InvoiceKindKey, type InvoiceStatusKey, type InvoiceTitleTypeKey } from "../src/lib/invoice";
 
@@ -1181,6 +1182,151 @@ async function writeHrDemo(users: { id: number; username: string; role: string; 
     });
   }
   console.log(`人事 OA：${profiles.length} 份员工档案、${notices.length} 条公告`);
+  await writeAttendanceDemo(users, hqId);
+}
+
+/**
+ * 排班、考勤、请假演示数据（口径第 19 节）：从上个月 1 号排到两周后，每人每周休一天、早中晚轮着上；
+ * 过去的日子按班打卡，大多数正常，少数迟到、早退、缺卡、缺勤，偶尔休息日加班、店长补卡；
+ * 请假：上个月、这个月批过一些（含一张店长批完总部再批的），演示账号的店里有一张等店长批、一张等总部批，还有一张驳回的。
+ * 演示店员（staff）今天排早班、还没打卡，留给现场演示打卡。
+ */
+async function writeAttendanceDemo(users: { id: number; username: string; role: string; storeId: number | null; isActive: boolean }[], hqId: number) {
+  const todayKey = formatDate(new Date());
+  const [ty, tm] = todayKey.split("-").map(Number) as [number, number];
+  const firstKey = new Date(Date.UTC(ty, tm - 2, 1)).toISOString().slice(0, 10);
+  const dayKey = (offset: number) => bizDateOf(offset).toISOString().slice(0, 10);
+  const startOffset = -Math.round((Date.parse(`${todayKey}T00:00:00Z`) - Date.parse(`${firstKey}T00:00:00Z`)) / DAY_MS);
+  const nowMinute = bjMinuteOfDay(new Date());
+  const staffByStore = new Map<number, typeof users>();
+  for (const u of users) {
+    if (!u.isActive || u.storeId === null || (u.role !== "STAFF" && u.role !== "STORE_MANAGER")) continue;
+    staffByStore.set(u.storeId, [...(staffByStore.get(u.storeId) ?? []), u]);
+  }
+  const managerOf = (storeId: number) => users.find((u) => u.role === "STORE_MANAGER" && u.storeId === storeId && u.isActive);
+  const demoStaff = users.find((u) => u.username === "staff")!;
+  const demoManager = users.find((u) => u.username === "manager")!;
+
+  // ---- 请假（先定下来，排了假的日子不打卡） ----
+  type LeaveSeed = { user: (typeof users)[number]; kind: LeaveKindKey; start: number; days: number; status: "APPROVED" | "PENDING" | "REJECTED"; step?: 1 | 2; reason: string; createdOffset: number };
+  const leaves: LeaveSeed[] = [];
+  const reasons: Record<LeaveKindKey, string[]> = { PERSONAL: ["家里有事", "回老家办证件", "孩子开家长会"], SICK: ["感冒发烧，去医院看了", "肠胃炎，医生让休息"], ANNUAL: ["休年假，出去旅游", "年假陪家人"], COMPENSATORY: ["国庆值班调休", "上月加班调休"] };
+  for (const [storeId, staff] of staffByStore) {
+    const plain = staff.filter((u) => u.role === "STAFF" && u.id !== demoStaff.id);
+    for (let i = 0; i < 2 && plain.length; i++) {
+      const user = pick(plain);
+      const kind = pick(LEAVE_KINDS);
+      const start = between(startOffset + 2, -3);
+      const days = between(1, 2);
+      if (leaves.some((l) => l.user.id === user.id && Math.abs(l.start - start) < 4)) continue;
+      leaves.push({ user, kind, start, days, status: "APPROVED", reason: pick(reasons[kind]), createdOffset: start - between(1, 5) });
+    }
+    if (storeId === demoStaff.storeId && plain.length >= 3) {
+      let annual = between(startOffset + 5, -12);
+      while (leaves.some((l) => l.user.id === plain[0]!.id && l.start <= annual + 2 && annual <= l.start + l.days - 1)) annual -= 3; // 别和随机的假重叠
+      leaves.push({ user: plain[0]!, kind: "ANNUAL", start: annual, days: 3, status: "APPROVED", step: 2, reason: "年假陪父母体检", createdOffset: annual - 4 });
+      leaves.push({ user: plain[1]!, kind: "PERSONAL", start: 3, days: 2, status: "PENDING", step: 1, reason: "老家亲戚结婚，回去两天", createdOffset: 0 });
+      leaves.push({ user: plain[2]!, kind: "ANNUAL", start: 8, days: 4, status: "PENDING", step: 2, reason: "休年假，提前安排好了交接", createdOffset: -1 });
+      leaves.push({ user: plain[0]!, kind: "PERSONAL", start: 1, days: 1, status: "REJECTED", reason: "想多休一天，连着休息日出去玩", createdOffset: -1 });
+    }
+  }
+  const otherManager = users.find((u) => u.role === "STORE_MANAGER" && u.isActive && u.storeId !== demoManager.storeId);
+  if (otherManager) leaves.push({ user: otherManager, kind: "SICK", start: 1, days: 1, status: "PENDING", reason: "牙疼要去拔牙", createdOffset: 0 });
+  const onLeave = new Set<string>();
+  for (const l of leaves) if (l.status === "APPROVED") for (let d = 0; d < l.days; d++) onLeave.add(`${l.user.id}|${l.start + d}`);
+
+  // ---- 排班和打卡 ----
+  const shifts: { storeId: number; userId: number; date: Date; shift: ShiftKindKey; updatedById: number }[] = [];
+  const punches: { userId: number; storeId: number; date: Date; kind: "IN" | "OUT"; at: Date; manual: boolean; note: string | null; createdById: number }[] = [];
+  const WORK: WorkShiftKey[] = ["MORNING", "MIDDLE", "EVENING"];
+  const punchAt = (offset: number, minute: number) => at(bizDateOf(offset), 0, Math.round(minute));
+  for (const [storeId, staff] of staffByStore) {
+    const manager = managerOf(storeId);
+    staff.forEach((u, i) => {
+      for (let offset = startOffset; offset <= 13; offset++) {
+        const date = bizDateOf(offset);
+        const dow = (date.getUTCDay() + 6) % 7;
+        const week = Math.floor((offset - startOffset) / 7);
+        let shift: ShiftKindKey = (dow + i * 3) % 7 === 6 ? "OFF" : WORK[(i + week) % 3]!;
+        if (u.id === demoStaff.id && offset === 0) shift = "MORNING"; // 演示店员今天上早班
+        shifts.push({ storeId, userId: u.id, date, shift, updatedById: manager?.id ?? hqId });
+        if (offset > 0 || onLeave.has(`${u.id}|${offset}`)) continue;
+        if (u.id === demoStaff.id && offset === 0) continue; // 留给现场打卡
+        if (shift === "OFF") {
+          if (offset < 0 && chance(0.03)) {
+            punches.push({ userId: u.id, storeId, date, kind: "IN", at: punchAt(offset, 600 + between(0, 20)), manual: false, note: null, createdById: u.id });
+            punches.push({ userId: u.id, storeId, date, kind: "OUT", at: punchAt(offset, 900 + between(0, 40)), manual: false, note: null, createdById: u.id });
+          }
+          continue;
+        }
+        const t = SHIFT_TIMES[shift];
+        const today = offset === 0;
+        if (today && nowMinute < t.start) continue;
+        const r = rnd();
+        if (r < 0.025) continue; // 缺勤
+        const late = r < 0.1;
+        const inMin = late ? t.start + between(6, 40) : t.start - between(0, 15) + between(0, 4);
+        const forgotIn = r >= 0.1 && r < 0.12;
+        const forgotOut = r >= 0.12 && r < 0.16;
+        const early = r >= 0.16 && r < 0.21;
+        const outMin = early ? t.end - between(10, 60) : t.end + between(0, 30);
+        if (!forgotIn) punches.push({ userId: u.id, storeId, date, kind: "IN", at: punchAt(offset, inMin), manual: false, note: null, createdById: u.id });
+        else if (manager && manager.id !== u.id && chance(0.5)) punches.push({ userId: u.id, storeId, date, kind: "IN", at: punchAt(offset, t.start - 5), manual: true, note: "到店忘了打卡，店长看监控核实后补录", createdById: manager.id });
+        if (today && nowMinute < t.end) continue;
+        if (!forgotOut) punches.push({ userId: u.id, storeId, date, kind: "OUT", at: punchAt(offset, outMin), manual: false, note: null, createdById: u.id });
+      }
+    });
+  }
+  for (let i = 0; i < shifts.length; i += 2000) await prisma.shiftSchedule.createMany({ data: shifts.slice(i, i + 2000) });
+  for (let i = 0; i < punches.length; i += 2000) await prisma.attendancePunch.createMany({ data: punches.slice(i, i + 2000) });
+
+  // ---- 请假单和审批单 ----
+  const dateOf = (offset: number) => bizDateOf(offset);
+  const names = new Map((await prisma.user.findMany({ select: { id: true, name: true } })).map((u) => [u.id, u.name]));
+  for (const l of leaves) {
+    const manager = managerOf(l.user.storeId!);
+    const chain: ("STORE_MANAGER" | "HQ")[] = leaveChain(l.user.role as "STAFF" | "STORE_MANAGER", true, l.days);
+    const createdAt = l.createdOffset === 0 ? new Date(Date.now() - between(20, 90) * 60000) : at(dateOf(l.createdOffset), between(10, 20), between(0, 59));
+    const startKey = dayKey(l.start);
+    const endKey = dayKey(l.start + l.days - 1);
+    const leave = await prisma.leaveRequest.create({
+      data: { userId: l.user.id, storeId: l.user.storeId, kind: l.kind, startDate: dateOf(l.start), endDate: dateOf(l.start + l.days - 1), days: l.days, reason: l.reason, status: l.status, createdAt, updatedAt: createdAt },
+    });
+    const twoLevel = chain.length > 1;
+    const step = l.status === "PENDING" ? (l.step ?? 1) : chain.length;
+    const decidedAt = new Date(createdAt.getTime() + between(1, 6) * 3600000);
+    // 两级的：店长那一级已经批了（已批的，或者等总部批的）
+    const stepLog = twoLevel && (l.status === "APPROVED" || step === 2) && manager ? [{ step: 1, role: "STORE_MANAGER", userId: manager.id, name: names.get(manager.id) ?? "", at: new Date(createdAt.getTime() + 3600000).toISOString(), note: null }] : undefined;
+    const finalDecider = chain[chain.length - 1] === "HQ" ? hqId : (manager?.id ?? hqId);
+    const label = LEAVE_KIND_LABELS[l.kind];
+    const userName = names.get(l.user.id) ?? "";
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        requestNo: docNo("SP", l.createdOffset === 0 ? bizDateOf(0) : dateOf(l.createdOffset)),
+        action: "LEAVE",
+        storeId: l.user.storeId,
+        requestedById: l.user.id,
+        approverRole: l.status === "PENDING" ? chain[step - 1]! : chain[chain.length - 1]!,
+        chain,
+        step,
+        stepLog: stepLog ?? undefined,
+        status: l.status === "APPROVED" ? "EXECUTED" : l.status,
+        summary: `${userName} ${label} ${startKey}～${endKey}，共 ${l.days} 天`,
+        reasons: [{ kind: "LEAVE", text: twoLevel ? `请假 ${l.days} 天（${LEAVE_HQ_DAYS} 天及以上），店长批完总部再批` : "请假要审批" }],
+        amountFen: 0,
+        payload: { action: "LEAVE", leaveId: leave.id, details: [`类型：${label}`, `日期：${startKey} ～ ${endKey}，共 ${l.days} 天`, `事由：${l.reason}`] },
+        dedupeKey: `LEAVE:${leave.id}`,
+        ...(l.status === "PENDING" ? {} : { decidedById: l.status === "REJECTED" ? (manager?.id ?? hqId) : finalDecider, decidedAt, decisionNote: l.status === "REJECTED" ? "周末人手紧，换个工作日再请" : null }),
+        ...(l.status === "APPROVED" ? { resultId: leave.id } : {}),
+        createdAt,
+      },
+    });
+    await prisma.leaveRequest.update({ where: { id: leave.id }, data: { approvalRequestId: approval.id } });
+  }
+  for (const [key, value] of docCounters) {
+    if (key.startsWith("SP")) await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
+  }
+  console.log(`排班考勤：${shifts.length} 格排班、${punches.length} 次打卡（补录 ${punches.filter((p) => p.manual).length} 次）、${leaves.length} 张请假单`);
 }
 
 const accessoryRows: { storeId: number; skuId: number; qty: number }[] = [];

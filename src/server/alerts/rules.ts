@@ -169,13 +169,14 @@ async function idleTradeIns(db: Db, stores: Map<number, StoreInfo>, now: Date): 
   );
 }
 
-/** 8. 待审批：要店长批的给门店，要总部批的给总部 */
+/** 8. 待审批：要店长批的给门店，要总部批的给总部（不挂门店的请假、报销也算总部的） */
 async function pendingApprovals(db: Db, stores: Map<number, StoreInfo>, now: Date, withHq: boolean): Promise<{ store: StoreAlert[]; hq: AlertDraft | null }> {
-  const rows = await db.approvalRequest.groupBy({ by: ["storeId", "approverRole"], where: { status: "PENDING", storeId: { in: [...stores.keys()] } }, _count: { _all: true }, _min: { createdAt: true } });
+  const inStores = { storeId: { in: [...stores.keys()] } };
+  const rows = await db.approvalRequest.groupBy({ by: ["storeId", "approverRole"], where: { status: "PENDING", ...(withHq ? { OR: [inStores, { storeId: null }] } : inStores) }, _count: { _all: true }, _min: { createdAt: true } });
   const store: StoreAlert[] = [];
   let hqCount = 0;
   for (const r of rows) {
-    if (r.approverRole === "HQ") {
+    if (r.approverRole === "HQ" || r.storeId === null) {
       hqCount += r._count._all;
       continue;
     }

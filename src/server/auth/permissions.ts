@@ -141,6 +141,16 @@ export function canPublishNotice(role: Role): boolean {
   return role === "HQ" || role === "STORE_MANAGER";
 }
 
+/** 谁能看门店排班和别人的考勤（口径第 19 节）：店长本店、区域经理辖区（只看）、总部；店员只看自己的 */
+export function canViewTeamAttendance(role: Role): boolean {
+  return role !== "STAFF";
+}
+
+/** 谁能排班、给员工补卡：店长（本店）、总部；区域经理只看 */
+export function canManageAttendance(role: Role): boolean {
+  return role === "STORE_MANAGER" || role === "HQ";
+}
+
 /** 谁能转接企业微信客户、安排离职继承（口径第 12 节第三步）：店长（本店员工的客户）、总部 */
 export function canTransferWecomCustomer(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
@@ -221,6 +231,9 @@ const ROADMAP: MenuEntry = { key: "roadmap", label: "后续规划", href: "/road
 const ALERTS: MenuEntry = { key: "alerts", label: "智能提醒", href: "/alerts" };
 const NOTICES: MenuEntry = { key: "notices", label: "公告", href: "/notices" };
 const EMPLOYEES: MenuEntry = { key: "employees", label: "员工档案", href: "/hr/employees" };
+const SCHEDULES: MenuEntry = { key: "schedules", label: "排班", href: "/hr/schedules" };
+const ATTENDANCE: MenuEntry = { key: "attendance", label: "考勤打卡", href: "/hr/attendance" };
+const LEAVES: MenuEntry = { key: "leaves", label: "请假", href: "/hr/leaves" };
 
 const MENU_STAFF: MenuEntry[] = [
   { key: "m-sale", label: "手机开单", href: "/m/sale" },
@@ -232,6 +245,8 @@ const MENU_STAFF: MenuEntry[] = [
   { key: "entitlements", label: "到期名单", href: "/entitlements" },
   ALERTS,
   NOTICES,
+  ATTENDANCE,
+  LEAVES,
   { key: "repairs", label: "售后维修", href: "/repairs" },
   { key: "carrier", label: "运营商业务", href: "/carrier" },
   { key: "subsidy", label: "国补", href: "/subsidy" },
@@ -255,6 +270,7 @@ const MENU_STORE_MANAGER: MenuEntry[] = [
   { key: "prices", label: "门店售价", href: "/products/prices" },
   { key: "reports", label: "收银日报", href: "/reports/cashier" },
   EMPLOYEES,
+  SCHEDULES,
   ROADMAP,
 ];
 
@@ -263,6 +279,9 @@ const MENU_REGIONAL: MenuEntry[] = [
   ALERTS,
   NOTICES,
   EMPLOYEES,
+  SCHEDULES,
+  ATTENDANCE,
+  LEAVES,
   { key: "stores", label: "辖区门店", href: "/stores" },
   { key: "stock", label: "库存", href: "/stock" },
   { key: "m-stock", label: "手机查库存", href: "/m/stock" },
@@ -282,6 +301,9 @@ const MENU_HQ: MenuEntry[] = [
   NOTICES,
   { key: "org", label: "组织管理", href: "/org" },
   EMPLOYEES,
+  SCHEDULES,
+  ATTENDANCE,
+  LEAVES,
   { key: "products", label: "商品", href: "/products" },
   { key: "prices", label: "门店售价", href: "/products/prices" },
   { key: "purchase", label: "采购入库", href: "/purchase" },

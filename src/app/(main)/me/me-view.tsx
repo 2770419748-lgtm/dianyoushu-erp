@@ -1,7 +1,9 @@
 "use client";
 
 import { useTransition } from "react";
-import { Alert, App, Button, Card, Descriptions, Form, Input, Space } from "antd";
+import Link from "next/link";
+import { Alert, App, Button, Card, Descriptions, Form, Input, Space, Tag, Typography } from "antd";
+import { dayLabel, LEAVE_KIND_LABELS, SHIFT_COLORS, SHIFT_LABELS, type LeaveKindKey, type ShiftKindKey } from "@/lib/attendance";
 import { formatDate, formatFen } from "@/lib/format";
 import { changePasswordAction } from "./actions";
 
@@ -13,7 +15,9 @@ interface Values {
 
 type Profile = { hireDate: Date | null; position: string | null; phone: string | null; baseSalaryFen: number; leaveDate: Date | null } | null;
 
-export function MeView({ info, isDemo, profile = null }: { info: { username: string; name: string; role: string; scope: string }; isDemo: boolean; profile?: Profile }) {
+type WeekDay = { date: string; shift: ShiftKindKey | null; leave: LeaveKindKey | null; isToday: boolean };
+
+export function MeView({ info, isDemo, profile = null, week = null }: { info: { username: string; name: string; role: string; scope: string }; isDemo: boolean; profile?: Profile; week?: WeekDay[] | null }) {
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [form] = Form.useForm<Values>();
@@ -46,6 +50,20 @@ export function MeView({ info, isDemo, profile = null }: { info: { username: str
           "总部还没给你建档案"
         )}
       </Card>
+      {week ? (
+        <Card title="我本周的班" extra={<Link href="/hr/attendance">去打卡</Link>}>
+          <Space wrap>
+            {week.map((d) => (
+              <Space key={d.date} orientation="vertical" size={0} style={{ minWidth: 64 }}>
+                <Typography.Text type={d.isToday ? undefined : "secondary"} strong={d.isToday}>
+                  {dayLabel(d.date)}
+                </Typography.Text>
+                {d.leave ? <Tag color="gold">{LEAVE_KIND_LABELS[d.leave]}</Tag> : d.shift ? <Tag color={SHIFT_COLORS[d.shift]}>{SHIFT_LABELS[d.shift]}</Tag> : <Typography.Text type="secondary">—</Typography.Text>}
+              </Space>
+            ))}
+          </Space>
+        </Card>
+      ) : null}
       <Card title="改密码">
         {isDemo ? (
           <Alert type="info" showIcon title="这是公共演示账号，不能改密码，免得后面来看演示的人登不进去。想试改密码，用总部账号在组织管理里新建一个员工再登录。" />

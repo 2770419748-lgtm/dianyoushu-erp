@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canDecide, decideApproval, type ApprovalRuleConfig } from "@/lib/approval";
+import { canDecide, decideApproval, nextApprovalStep, type ApprovalRuleConfig } from "@/lib/approval";
 
 // 审批规则怎么判断（口径第 17 节）。纯函数，不连库。
 
@@ -53,5 +53,21 @@ describe("谁能批", () => {
     expect(canDecide("STORE_MANAGER", "STAFF", false)).toBe(false);
     expect(canDecide("STORE_MANAGER", "REGIONAL_MANAGER", false)).toBe(false);
     expect(canDecide("HQ", "HQ", true)).toBe(false);
+  });
+});
+
+describe("两级审批（口径第 19 节）", () => {
+  it("店长批完转总部；总部批的就是最后一级；只有一级的批了就生效", () => {
+    expect(nextApprovalStep(["STORE_MANAGER", "HQ"], 1, "STORE_MANAGER")).toEqual({ step: 2, role: "HQ" });
+    expect(nextApprovalStep(["STORE_MANAGER", "HQ"], 1, "HQ")).toBeNull(); // 总部直接批了第一级，后面不用再批
+    expect(nextApprovalStep(["STORE_MANAGER", "HQ"], 2, "HQ")).toBeNull();
+    expect(nextApprovalStep(["STORE_MANAGER"], 1, "STORE_MANAGER")).toBeNull();
+    expect(nextApprovalStep(["HQ"], 1, "HQ")).toBeNull();
+    expect(nextApprovalStep([], 1, "STORE_MANAGER")).toBeNull(); // 第 17 节的审批单没有审批链
+  });
+
+  it("前一级批过的人不能再批后一级", () => {
+    expect(canDecide("HQ", "HQ", false, true)).toBe(false);
+    expect(canDecide("HQ", "HQ", false, false)).toBe(true);
   });
 });

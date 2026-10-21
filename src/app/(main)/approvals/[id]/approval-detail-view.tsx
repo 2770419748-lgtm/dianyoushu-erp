@@ -5,17 +5,20 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Alert, App, Button, Card, Descriptions, Input, Modal, Space, Tag, Typography } from "antd";
 import { SimpleList } from "@/components/simple-list";
-import { APPROVAL_ACTION_LABELS, APPROVAL_RULE_LABELS, APPROVAL_STATUS_COLORS, APPROVAL_STATUS_LABELS, APPROVER_ROLE_LABELS, type ApprovalRuleKindKey } from "@/lib/approval";
+import { APPROVAL_ACTION_LABELS, APPROVAL_RULE_LABELS, APPROVAL_STATUS_COLORS, APPROVAL_STATUS_LABELS, APPROVER_ROLE_LABELS, OA_ACTIONS, type ApprovalActionKey, type ApprovalRuleKindKey, type ApproverRoleKey } from "@/lib/approval";
 import { formatDateTime, formatFen } from "@/lib/format";
 import type { ApprovalDetail } from "@/server/approval/approval-service";
 import { approveAction, cancelApprovalAction, rejectAction, type ApprovalActionResult } from "../actions";
 
-export function ApprovalDetailView({ detail }: { detail: ApprovalDetail }) {
+export function ApprovalDetailView({ detail, viewerRole }: { detail: ApprovalDetail; viewerRole: string }) {
   const router = useRouter();
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [modal, setModal] = useState<"approve" | "reject" | null>(null);
   const [note, setNote] = useState("");
+  const twoLevel = detail.chain.length > 1;
+  // 店长批的是两级里的第一级：同意后还要总部批（总部批的就是最后一级）
+  const forwardsNext = twoLevel && detail.step < detail.chain.length && viewerRole !== "HQ";
 
   function act(fn: () => Promise<ApprovalActionResult>) {
     startTransition(async () => {
@@ -60,7 +63,7 @@ export function ApprovalDetailView({ detail }: { detail: ApprovalDetail }) {
         }
       >
         {detail.status === "EXECUTED" ? (
-          <Alert type="success" showIcon style={{ marginBottom: 12 }} title={`已通过，系统已经做掉了${detail.resultNo ? `：${detail.resultNo}` : ""}`} action={detail.resultHref ? <Link href={detail.resultHref}>去看</Link> : undefined} />
+          <Alert type="success" showIcon style={{ marginBottom: 12 }} title={OA_ACTIONS.includes(detail.action) ? "已通过，已经生效" : `已通过，系统已经做掉了${detail.resultNo ? `：${detail.resultNo}` : ""}`} action={detail.resultHref ? <Link href={detail.resultHref}>去看</Link> : undefined} />
         ) : null}
         {detail.status === "FAILED" ? <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={`批了，但这件事现在做不成：${detail.error ?? ""}`} description="情况变了（机器卖了、库存不够、当天已日结等），发起人按现在的情况重新做一遍；还要批会再生成一张审批单。" /> : null}
         {detail.status === "REJECTED" ? <Alert type="error" showIcon style={{ marginBottom: 12 }} title={`已驳回：${detail.decisionNote ?? ""}`} /> : null}
@@ -69,10 +72,15 @@ export function ApprovalDetailView({ detail }: { detail: ApprovalDetail }) {
           column={{ xs: 1, sm: 2, md: 3 }}
           items={[
             { key: "summary", label: "摘要", children: detail.summary, span: "filled" as const },
-            { key: "store", label: "门店", children: `${detail.store.code} ${detail.store.name}` },
+            { key: "store", label: "门店", children: detail.store ? `${detail.store.code} ${detail.store.name}` : "总部（不挂门店）" },
             { key: "requester", label: "发起", children: `${detail.requestedBy.name}，${formatDateTime(detail.createdAt)}` },
-            { key: "approver", label: "谁批", children: APPROVER_ROLE_LABELS[detail.approverRole as "STORE_MANAGER" | "HQ"] },
-            { key: "amount", label: "关键金额", children: `${formatFen(detail.amountFen)} 元` },
+            {
+              key: "approver",
+              label: "谁批",
+              children: twoLevel ? `${detail.chain.map((r) => APPROVER_ROLE_LABELS[r]).join(" → ")}${detail.status === "PENDING" ? `，现在第 ${detail.step} 级（${APPROVER_ROLE_LABELS[detail.approverRole as ApproverRoleKey]}）` : ""}` : APPROVER_ROLE_LABELS[detail.approverRole as ApproverRoleKey],
+            },
+            ...(detail.action === "LEAVE" ? [] : [{ key: "amount", label: "关键金额", children: `${formatFen(detail.amountFen)} 元` }]),
+            ...detail.stepLog.map((e) => ({ key: `step-${e.step}`, label: `第 ${e.step} 级（${APPROVER_ROLE_LABELS[e.role]}）`, children: `${e.name} 同意，${formatDateTime(e.at)}${e.note ? `，${e.note}` : ""}` })),
             ...(detail.note ? [{ key: "note", label: "发起人说明", children: detail.note }] : []),
             ...(detail.decidedBy ? [{ key: "decided", label: "处理", children: `${detail.decidedBy.name}，${detail.decidedAt ? formatDateTime(detail.decidedAt) : ""}${detail.decisionNote && detail.status !== "REJECTED" ? `，${detail.decisionNote}` : ""}` }] : []),
           ]}
@@ -84,7 +92,7 @@ export function ApprovalDetailView({ detail }: { detail: ApprovalDetail }) {
           rowKey={(r) => r.kind}
           render={(r) => (
             <Space>
-              <Tag>{APPROVAL_RULE_LABELS[r.kind as ApprovalRuleKindKey] ?? r.kind}</Tag>
+              <Tag>{APPROVAL_RULE_LABELS[r.kind as ApprovalRuleKindKey] ?? APPROVAL_ACTION_LABELS[r.kind as ApprovalActionKey] ?? r.kind}</Tag>
               {r.text}
             </Space>
           )}
@@ -96,7 +104,9 @@ export function ApprovalDetailView({ detail }: { detail: ApprovalDetail }) {
         </Card>
       ) : null}
       <Modal title={modal === "approve" ? "通过" : "驳回"} open={modal !== null} confirmLoading={pending} onCancel={() => setModal(null)} onOk={() => act(() => (modal === "approve" ? approveAction(detail.id, note) : rejectAction(detail.id, note)))} destroyOnHidden>
-        <Typography.Paragraph type="secondary">{modal === "approve" ? "通过后系统马上按现在的数据把这件事做掉（比如开单、退款），做不成会写明原因。" : "写一下驳回原因，发起人能看到。"}</Typography.Paragraph>
+        <Typography.Paragraph type="secondary">
+          {modal === "reject" ? "写一下驳回原因，发起人能看到。在哪一级驳回，这张单都结束了。" : forwardsNext ? "这一级同意后转给总部再批，总部批了才生效。" : "通过后系统马上按现在的数据把这件事做掉（比如开单、退款、请假生效），做不成会写明原因。"}
+        </Typography.Paragraph>
         <Input placeholder={modal === "approve" ? "说明（可不填）" : "驳回原因"} value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} />
       </Modal>
     </Space>

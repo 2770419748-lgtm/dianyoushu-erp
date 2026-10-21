@@ -1,7 +1,10 @@
 // 审批（口径第 17 节）：规则怎么判断、名称。纯函数，页面、服务层、演示数据生成共用，单元测试见 tests/approval.test.ts。
 
 export type ApprovalRuleKindKey = "SALE_DISCOUNT" | "SALE_BELOW_COST" | "RETURN_REFUND" | "SALE_VOID" | "TRANSFER" | "STOCKTAKE_LOSS";
-export type ApprovalActionKey = "SALE" | "RETURN" | "SALE_VOID" | "TRANSFER" | "STOCKTAKE";
+/** 前五种按第 17 节的规则判断要不要批；LEAVE、EXPENSE 是 OA 事项（口径第 19 节），提交就要批 */
+export type ApprovalActionKey = "SALE" | "RETURN" | "SALE_VOID" | "TRANSFER" | "STOCKTAKE" | "LEAVE" | "EXPENSE";
+export type RuleActionKey = Exclude<ApprovalActionKey, "LEAVE" | "EXPENSE">;
+export const OA_ACTIONS: ApprovalActionKey[] = ["LEAVE", "EXPENSE"];
 export type ApprovalStatusKey = "PENDING" | "EXECUTED" | "FAILED" | "REJECTED" | "CANCELLED";
 export type ApproverRoleKey = "STORE_MANAGER" | "HQ";
 export type RequesterRoleKey = "STAFF" | "STORE_MANAGER" | "REGIONAL_MANAGER" | "HQ";
@@ -27,7 +30,7 @@ export const APPROVAL_RULE_HINTS: Record<ApprovalRuleKindKey, string> = {
 };
 
 /** 每个场景对应审批单要做的事 */
-export const RULE_ACTION: Record<ApprovalRuleKindKey, ApprovalActionKey> = {
+export const RULE_ACTION: Record<ApprovalRuleKindKey, RuleActionKey> = {
   SALE_DISCOUNT: "SALE",
   SALE_BELOW_COST: "SALE",
   RETURN_REFUND: "RETURN",
@@ -36,7 +39,7 @@ export const RULE_ACTION: Record<ApprovalRuleKindKey, ApprovalActionKey> = {
   STOCKTAKE_LOSS: "STOCKTAKE",
 };
 
-export const APPROVAL_ACTION_LABELS: Record<ApprovalActionKey, string> = { SALE: "开单", RETURN: "退货", SALE_VOID: "作废销售单", TRANSFER: "调拨", STOCKTAKE: "盘点确认" };
+export const APPROVAL_ACTION_LABELS: Record<ApprovalActionKey, string> = { SALE: "开单", RETURN: "退货", SALE_VOID: "作废销售单", TRANSFER: "调拨", STOCKTAKE: "盘点确认", LEAVE: "请假", EXPENSE: "费用报销" };
 export const APPROVAL_STATUS_LABELS: Record<ApprovalStatusKey, string> = { PENDING: "待审批", EXECUTED: "已通过", FAILED: "批了没做成", REJECTED: "已驳回", CANCELLED: "已撤回" };
 export const APPROVAL_STATUS_COLORS: Record<ApprovalStatusKey, string> = { PENDING: "blue", EXECUTED: "green", FAILED: "orange", REJECTED: "red", CANCELLED: "default" };
 export const APPROVER_ROLE_LABELS: Record<ApproverRoleKey, string> = { STORE_MANAGER: "店长", HQ: "总部" };
@@ -127,9 +130,32 @@ export function decideApproval(rules: ApprovalRuleConfig[], facts: ApprovalFacts
   return { required: reasons.length > 0, approverRole, reasons, amountFen: keyAmount(facts) };
 }
 
-/** 这个人能不能批这张单（门店范围另外查）：店长批的店长和总部都能批，总部批的只有总部；不能批自己发起的 */
-export function canDecide(approverRole: ApproverRoleKey, deciderRole: RequesterRoleKey, isRequester: boolean): boolean {
-  if (isRequester) return false;
+/** 这个人能不能批这张单（门店范围另外查）：店长批的店长和总部都能批，总部批的只有总部；不能批自己发起的；前一级已经批过的人不能再批后一级 */
+export function canDecide(approverRole: ApproverRoleKey, deciderRole: RequesterRoleKey, isRequester: boolean, decidedEarlierStep = false): boolean {
+  if (isRequester || decidedEarlierStep) return false;
   if (deciderRole === "HQ") return true;
   return approverRole === "STORE_MANAGER" && deciderRole === "STORE_MANAGER";
+}
+
+/** 两级审批里前面几级的记录（存在审批单的 step_log） */
+export interface ApprovalStepEntry {
+  step: number;
+  role: ApproverRoleKey; // 这一级要谁批
+  userId: number;
+  name: string;
+  at: string; // ISO 时间
+  note: string | null;
+}
+
+/**
+ * 两级审批（口径第 19 节）：批完第 step 级之后还要不要往下走。chain 是依次要谁批（空 = 只有一级）。
+ * 往后找第一个比这次批的人级别高的一级（店长批完要总部再批；总部批的就是最后一级，后面的店长级当然也算过了）。
+ * 返回下一级的序号（从 1 数）和要谁批；没有了返回 null，说明这次就是最后一级、要生效。
+ */
+export function nextApprovalStep(chain: ApproverRoleKey[], step: number, deciderRole: RequesterRoleKey): { step: number; role: ApproverRoleKey } | null {
+  for (let i = step; i < chain.length; i++) {
+    const role = chain[i]!;
+    if (RANK[deciderRole] < RANK[role]) return { step: i + 1, role };
+  }
+  return null;
 }

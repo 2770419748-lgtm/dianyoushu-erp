@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { APPROVER_ROLE_LABELS } from "@/lib/approval";
 import { requireUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
 import { ApprovalError, approveRequest, cancelRequest, rejectRequest, saveRule } from "@/server/approval/approval-service";
@@ -15,6 +16,8 @@ function refresh() {
   revalidatePath("/transfers", "layout");
   revalidatePath("/stocktakes", "layout");
   revalidatePath("/stock", "layout");
+  revalidatePath("/hr", "layout");
+  revalidatePath("/finance", "layout");
 }
 
 async function run(fn: () => Promise<{ message?: string; href?: string } | void>): Promise<ApprovalActionResult> {
@@ -33,7 +36,9 @@ export async function approveAction(id: number, note: string) {
   const user = await requireUser();
   return run(async () => {
     const r = await approveRequest(user, id, note);
-    return { message: r.executed ? `已通过，${r.resultNo ? `做出来的单号 ${r.resultNo}` : "已经做掉了"}` : `已通过，但这件事现在做不成了：${r.error}` };
+    if (r.executed) return { message: `已通过，${r.resultNo ? `做出来的单号 ${r.resultNo}` : "已经生效"}` };
+    if ("forwardedTo" in r) return { message: `这一级已同意，转给${APPROVER_ROLE_LABELS[r.forwardedTo]}再批` };
+    return { message: `已通过，但这件事现在做不成了：${r.error}` };
   });
 }
 
