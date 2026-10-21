@@ -198,9 +198,11 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
           WHERE x.status IN ('PENDING', 'APPROVED') AND y.status IN ('PENDING', 'APPROVED') AND x.start_date <= y.end_date AND y.start_date <= x.end_date)
       + (SELECT COUNT(*) FROM approval_requests a
           WHERE a.status = 'PENDING' AND cardinality(a.chain) > 1 AND COALESCE(jsonb_array_length(a.step_log), 0) <> a.step - 1)
+      + (SELECT COUNT(*) FROM approval_requests a
+          WHERE a.action IN ('LEAVE', 'EXPENSE') AND (a.decided_at < a.created_at OR a.decided_at > now() AT TIME ZONE 'UTC'))
       + (SELECT COUNT(*) FROM expense_claims e LEFT JOIN approval_requests a ON a.id = e.approval_request_id
         WHERE a.id IS NULL OR a.action <> 'EXPENSE' OR (a.payload->>'claimId')::int IS DISTINCT FROM e.id OR a.amount_fen <> e.amount_fen
-          OR a.store_id IS DISTINCT FROM e.store_id OR (e.status = 'PAID' AND e.paid_on IS NULL)
+          OR a.store_id IS DISTINCT FROM e.store_id OR (e.status = 'PAID' AND (e.paid_on IS NULL OR e.paid_on < (a.decided_at + interval '8 hours')::date))
           OR NOT ((e.status = 'PENDING' AND a.status = 'PENDING')
             OR (e.status IN ('APPROVED', 'PAID') AND a.status = 'EXECUTED' AND a.result_id = e.id)
             OR (e.status = 'REJECTED' AND a.status = 'REJECTED')

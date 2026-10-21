@@ -14,6 +14,7 @@ export interface PnlInput {
   expenseFen: number; // 已付款的报销（按付款日期）
   payrollFen: number; // 这个月已发布工资条的应发，按那天在哪家店分过来的
   fixedFen: number; // 门店固定支出（房租、水电、物业……）
+  subsidyLossFen: number; // 国补驳回：这个月被平台驳回、现在还是驳回的补贴（门店承担，口径第 15 节）
   payrollPublished: boolean; // 这个月的工资条发布了没有
   fixedEntered: boolean; // 这家店这个月录了固定支出没有（录了 0 也算录了）
 }
@@ -23,7 +24,7 @@ export interface PnlNumbers extends PnlInput {
   costFen: number; // 销货成本 = 货品成本 + 维修成本
   grossFen: number; // 毛利 = 收入 − 销货成本
   grossRate: number | null; // 毛利率（收入为 0 时没有）
-  opexFen: number; // 费用 = 报销 + 工资 + 固定支出
+  opexFen: number; // 费用 = 报销 + 工资 + 固定支出 + 国补驳回
   profitFen: number; // 利润 = 毛利 − 费用
   missing: string[]; // 数据不全的原因
 }
@@ -32,14 +33,14 @@ export function computePnl(input: PnlInput): PnlNumbers {
   const revenueFen = input.salesFen + input.carrierFen + input.repairFen;
   const costFen = input.goodsCostFen + input.repairCostFen;
   const grossFen = revenueFen - costFen;
-  const opexFen = input.expenseFen + input.payrollFen + input.fixedFen;
+  const opexFen = input.expenseFen + input.payrollFen + input.fixedFen + input.subsidyLossFen;
   const missing = [...(input.payrollPublished ? [] : ["工资条还没发布"]), ...(input.fixedEntered ? [] : ["固定支出没录"])];
   return { ...input, revenueFen, costFen, grossFen, grossRate: revenueFen ? grossFen / revenueFen : null, opexFen, profitFen: grossFen - opexFen, missing };
 }
 
 /** 几家店加起来（合计行）：金额相加，数据不全的原因合并去重 */
 export function sumPnl(rows: PnlNumbers[]): PnlNumbers {
-  const keys = ["salesFen", "carrierFen", "repairFen", "goodsCostFen", "repairCostFen", "expenseFen", "payrollFen", "fixedFen"] as const;
+  const keys = ["salesFen", "carrierFen", "repairFen", "goodsCostFen", "repairCostFen", "expenseFen", "payrollFen", "fixedFen", "subsidyLossFen"] as const;
   const total = Object.fromEntries(keys.map((k) => [k, rows.reduce((s, r) => s + r[k], 0)])) as Record<(typeof keys)[number], number>;
   const n = computePnl({ ...total, payrollPublished: rows.every((r) => r.payrollPublished), fixedEntered: rows.every((r) => r.fixedEntered) });
   return { ...n, missing: [...new Set(rows.flatMap((r) => r.missing))] };

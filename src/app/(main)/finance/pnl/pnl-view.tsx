@@ -50,7 +50,7 @@ export function PnlView({ data }: { data: PnlPage }) {
 
   const lines: Line[] = [...data.rows.map((r) => ({ key: r.key, name: r.name, numbers: r.numbers, row: r })), ...(data.total ? [{ key: "total", name: "合计", numbers: data.total, row: null }] : [])];
   const columns: TableColumnsType<Line> = [
-    { title: "门店", fixed: "left", width: 150, render: (_, l) => (l.row ? l.name : <Typography.Text strong>{l.name}</Typography.Text>) },
+    { title: "门店", fixed: "left", width: 150, render: (_, l) => (l.row ? (l.row.inactive ? <Typography.Text type="secondary">{l.name}</Typography.Text> : l.name) : <Typography.Text strong>{l.name}</Typography.Text>) },
     { title: "销售额", align: "right", render: (_, l) => money(l.numbers.salesFen) },
     { title: "运营商佣金", align: "right", render: (_, l) => money(l.numbers.carrierFen) },
     { title: "维修收费", align: "right", render: (_, l) => money(l.numbers.repairFen) },
@@ -69,6 +69,7 @@ export function PnlView({ data }: { data: PnlPage }) {
     { title: "报销", align: "right", render: (_, l) => money(l.numbers.expenseFen) },
     { title: "工资", align: "right", render: (_, l) => money(l.numbers.payrollFen) },
     { title: "固定支出", align: "right", render: (_, l) => money(l.numbers.fixedFen) },
+    { title: "国补驳回", align: "right", render: (_, l) => money(l.numbers.subsidyLossFen) },
     { title: "利润", align: "right", render: (_, l) => <Typography.Text strong>{money(l.numbers.profitFen)}</Typography.Text> },
     { title: "", render: (_, l) => (l.numbers.missing.length ? <Space wrap size={2}>{l.numbers.missing.map((m) => <Tag key={m} color="orange">{m}</Tag>)}</Space> : null) },
     { title: "", fixed: "right", render: (_, l) => (l.row?.canEdit ? <a onClick={() => edit(l.row!)}>录固定支出</a> : null) },
@@ -85,9 +86,9 @@ export function PnlView({ data }: { data: PnlPage }) {
       }
     >
       <Typography.Paragraph type="secondary">
-        收入 = 销售额（应收扣退款，和看板一样）+ 运营商佣金（这个月办的、没作废没失败的，按政策记的）+ 维修收费（这个月取机结算的）。销货成本 = 卖出的机器、配件成本（退货冲回）+ 维修成本。费用 = 已付款的报销（按付款日期）+ 已发布工资条的应发（按那天在哪家店分）+ 门店固定支出。利润 = 毛利 − 费用。工资条没发布、固定支出没录的月份标“数据不全”。单位：元。
+        收入 = 销售额（应收扣退款，和看板一样）+ 运营商佣金（这个月办的、没作废没失败的，按政策记的）+ 维修收费（这个月取机结算的）。销货成本 = 卖出的机器、配件成本（退货冲回）+ 维修成本。费用 = 已付款的报销（按付款日期）+ 已发布工资条的应发（按那天在哪家店分）+ 门店固定支出 + 国补驳回（这个月被平台驳回、现在还是驳回的补贴，门店承担；改了重新提交的不算，明细去国补页看）。利润 = 毛利 − 费用。工资条没发布、固定支出没录的月份标“数据不全”；停用的店那个月有数据照样列出来，不能录。单位：元。
       </Typography.Paragraph>
-      <Table rowKey="key" size="small" columns={columns} dataSource={lines} pagination={false} scroll={{ x: 1400 }} rowClassName={(l) => (l.key === "total" ? "ant-table-row-selected" : "")} />
+      <Table rowKey="key" size="small" columns={columns} dataSource={lines} pagination={false} scroll={{ x: 1500 }} rowClassName={(l) => (l.key === "total" ? "ant-table-row-selected" : "")} />
       <Modal title={editing ? `录固定支出：${editing.name} ${data.month}` : ""} open={editing !== null} confirmLoading={pending} onCancel={() => setEditing(null)} onOk={save} destroyOnHidden>
         <Space orientation="vertical" style={{ width: "100%" }}>
           <Typography.Text type="secondary">这个月没有的项填 0；空着的不保存。录了（哪怕全是 0）这个月就不再标“固定支出没录”。</Typography.Text>

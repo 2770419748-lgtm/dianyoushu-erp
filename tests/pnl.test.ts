@@ -3,13 +3,19 @@ import { computePnl, sumPnl } from "@/lib/pnl";
 
 // 门店收支和利润表怎么拼（口径第 19 节）。纯函数，不连库。
 
-const base = { salesFen: 1000000, carrierFen: 50000, repairFen: 30000, goodsCostFen: 800000, repairCostFen: 10000, expenseFen: 20000, payrollFen: 150000, fixedFen: 30000, payrollPublished: true, fixedEntered: true };
+const base = { salesFen: 1000000, carrierFen: 50000, repairFen: 30000, goodsCostFen: 800000, repairCostFen: 10000, expenseFen: 20000, payrollFen: 150000, fixedFen: 30000, subsidyLossFen: 0, payrollPublished: true, fixedEntered: true };
 
 describe("一家店一个月", () => {
   it("收入 = 销售 + 运营商 + 维修；毛利 = 收入 − 销货成本；利润 = 毛利 − 报销 − 工资 − 固定支出", () => {
     const n = computePnl(base);
     expect(n).toMatchObject({ revenueFen: 1080000, costFen: 810000, grossFen: 270000, opexFen: 200000, profitFen: 70000, missing: [] });
     expect(n.grossRate).toBeCloseTo(0.25);
+  });
+
+  it("国补驳回算进费用（门店承担）", () => {
+    const n = computePnl({ ...base, subsidyLossFen: 12000 });
+    expect(n).toMatchObject({ opexFen: 212000, profitFen: 58000 });
+    expect(sumPnl([n, computePnl(base)]).subsidyLossFen).toBe(12000);
   });
 
   it("工资条没发布、固定支出没录：标数据不全；没收入就没有毛利率", () => {

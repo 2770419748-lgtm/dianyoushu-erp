@@ -59,6 +59,10 @@ function at(bizDate: Date, hour: number, minute: number): Date {
   return new Date(bizDate.getTime() + (hour - 8) * 3600000 + minute * 60000);
 }
 const ymd = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
+/** 审批时间最晚到现在前 5 分钟：今天建的单加上几个小时会落到明天，登记付款时日期框一天都选不了 */
+const notLaterThanNow = (ms: number) => new Date(Math.min(ms, Date.now() - 5 * 60000));
+/** 某个时刻是北京时间哪一天（UTC 零点的日期，和 bizDateOf 同一种表示） */
+const bjDayOf = (d: Date) => new Date(Math.floor((d.getTime() + 8 * 3600000) / DAY_MS) * DAY_MS);
 
 // ---------- 单号 ----------
 const docCounters = new Map<string, number>();
@@ -1299,9 +1303,10 @@ async function writeAttendanceDemo(users: { id: number; username: string; role: 
     });
     const twoLevel = chain.length > 1;
     const step = l.status === "PENDING" ? (l.step ?? 1) : chain.length;
-    const decidedAt = new Date(createdAt.getTime() + between(1, 6) * 3600000);
-    // 两级的：店长那一级已经批了（已批的，或者等总部批的）
-    const stepLog = twoLevel && (l.status === "APPROVED" || step === 2) && manager ? [{ step: 1, role: "STORE_MANAGER", userId: manager.id, name: names.get(manager.id) ?? "", at: new Date(createdAt.getTime() + 3600000).toISOString(), note: null }] : undefined;
+    const decidedAt = notLaterThanNow(createdAt.getTime() + between(1, 6) * 3600000);
+    // 两级的：店长那一级已经批了（已批的，或者等总部批的），在最后一级之前
+    const stepAt = notLaterThanNow(Math.min(createdAt.getTime() + 3600000, decidedAt.getTime() - 60000));
+    const stepLog = twoLevel && (l.status === "APPROVED" || step === 2) && manager ? [{ step: 1, role: "STORE_MANAGER", userId: manager.id, name: names.get(manager.id) ?? "", at: stepAt.toISOString(), note: null }] : undefined;
     const finalDecider = chain[chain.length - 1] === "HQ" ? hqId : (manager?.id ?? hqId);
     const label = LEAVE_KIND_LABELS[l.kind];
     const userName = names.get(l.user.id) ?? "";
@@ -1389,6 +1394,9 @@ async function writeExpenseDemo(users: { id: number; username: string; role: str
     const createdAt = createdOffset === 0 ? new Date(Date.now() - between(30, 180) * 60000) : at(bizDateOf(createdOffset), between(10, 20), between(0, 59));
     const day = createdOffset === 0 ? bizDateOf(0) : bizDateOf(createdOffset);
     const paidOffset = s.status === "PAID" ? Math.min(createdOffset + between(2, 8), -1) : null;
+    const decidedAt = notLaterThanNow(createdAt.getTime() + between(2, 20) * 3600000);
+    // 付款日期不早于批下来那天（口径第 19 节），也不早于发生日期
+    const paidOn = paidOffset === null ? null : new Date(Math.max(bizDateOf(paidOffset).getTime(), bizDateOf(s.occurred).getTime(), bjDayOf(decidedAt).getTime()));
     const claim = await prisma.expenseClaim.create({
       data: {
         claimNo: docNo("BX", day),
@@ -1399,7 +1407,7 @@ async function writeExpenseDemo(users: { id: number; username: string; role: str
         occurredOn: bizDateOf(s.occurred),
         description: s.description,
         status: s.status,
-        ...(paidOffset !== null ? { paidOn: bizDateOf(Math.max(paidOffset, s.occurred)), payMethod: pick(["BANK", "WECHAT", "ALIPAY"] as const), paidById: hqId } : {}),
+        ...(paidOn ? { paidOn, payMethod: pick(["BANK", "WECHAT", "ALIPAY"] as const), paidById: hqId } : {}),
         createdAt,
         updatedAt: createdAt,
       },
@@ -1407,7 +1415,8 @@ async function writeExpenseDemo(users: { id: number; username: string; role: str
     if (paidOffset !== null) paid++;
     const twoLevel = chain.length > 1;
     const step = s.status === "PENDING" ? Math.min(s.step ?? 1, chain.length) : chain.length;
-    const stepLog = twoLevel && (s.status === "APPROVED" || s.status === "PAID" || step === 2) && manager ? [{ step: 1, role: "STORE_MANAGER", userId: manager.id, name: names.get(manager.id) ?? "", at: new Date(createdAt.getTime() + 3600000).toISOString(), note: null }] : undefined;
+    const stepAt = notLaterThanNow(Math.min(createdAt.getTime() + 3600000, decidedAt.getTime() - 60000));
+    const stepLog = twoLevel && (s.status === "APPROVED" || s.status === "PAID" || step === 2) && manager ? [{ step: 1, role: "STORE_MANAGER", userId: manager.id, name: names.get(manager.id) ?? "", at: stepAt.toISOString(), note: null }] : undefined;
     const finalDecider = chain[chain.length - 1] === "HQ" ? hqId : (manager?.id ?? hqId);
     const label = EXPENSE_CATEGORY_LABELS[s.category];
     const store = stores.find((x) => x.id === s.storeId)!;
@@ -1431,7 +1440,7 @@ async function writeExpenseDemo(users: { id: number; username: string; role: str
         dedupeKey: `EXPENSE:${claim.id}`,
         ...(s.status === "PENDING" || s.status === "CANCELLED"
           ? {}
-          : { decidedById: s.status === "REJECTED" ? (manager?.id ?? hqId) : finalDecider, decidedAt: new Date(createdAt.getTime() + between(2, 20) * 3600000), decisionNote: s.status === "REJECTED" ? "这笔不在门店能报的范围，走总部采购" : null }),
+          : { decidedById: s.status === "REJECTED" ? (manager?.id ?? hqId) : finalDecider, decidedAt, decisionNote: s.status === "REJECTED" ? "这笔不在门店能报的范围，走总部采购" : null }),
         ...(s.status === "APPROVED" || s.status === "PAID" ? { resultId: claim.id, resultNo: claim.claimNo } : {}),
         createdAt,
       },

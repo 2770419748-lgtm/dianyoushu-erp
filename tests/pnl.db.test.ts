@@ -66,7 +66,7 @@ describe("门店利润表（连本机库，事务回滚）", () => {
         return { order, item, device };
       };
       const first = await mk("PNLTEST000000001", 300000, 200000, 3, "SO-PNLTEST-1");
-      await mk("PNLTEST000000002", 500000, 400000, 4, "SO-PNLTEST-2");
+      const second = await mk("PNLTEST000000002", 500000, 400000, 4, "SO-PNLTEST-2");
       const ret = await tx.returnOrder.create({ data: { orderNo: "RT-PNLTEST-1", storeId: store.id, salesOrderId: first.order.id, handledById: mgr.id, bizDate: day(8), refundFen: 300000 } });
       await tx.returnOrderItem.create({ data: { returnOrderId: ret.id, salesItemId: first.item.id, skuId: b.deviceSkuId, deviceId: first.device.id, refundFen: 300000 } });
       // 作废的单不算
@@ -83,10 +83,20 @@ describe("门店利润表（连本机库，事务回滚）", () => {
       await tx.expenseClaim.create({ data: { ...claimBase, claimNo: "BX-PNLTEST-1", amountFen: 20000, status: "PAID", paidOn: day(10), payMethod: "BANK", paidById: b.hq.id } });
       await tx.expenseClaim.create({ data: { ...claimBase, claimNo: "BX-PNLTEST-2", amountFen: 30000, status: "APPROVED" } });
 
+      // 国补：这台的补贴 500 元上个月 12 号被平台驳回、现在还是驳回（算进费用）；同样驳回过、又改了重新提交的不算
+      const policy = await tx.subsidyPolicy.findFirst({ select: { id: true, categoryId: true } });
+      if (policy) {
+        const customer = await tx.customer.create({ data: { name: "利润测试客户", phone: "19900002222" } });
+        const claim = { storeId: store.id, salesOrderId: second.order.id, customerId: customer.id, deviceId: second.device.id, policyId: policy.id, categoryId: policy.categoryId, bizDate: day(4), basePriceFen: 500000, subsidyFen: 50000, submittedAt: new Date(`${prev}-05T04:00:00Z`), reviewedAt: new Date(`${prev}-12T04:00:00Z`) };
+        await tx.subsidyClaim.create({ data: { ...claim, claimNo: "GB-PNLTEST-1", salesOrderItemId: second.item.id, qualificationCode: "PNLTEST-QC-1", status: "REJECTED", rejectReason: "测试驳回" } });
+        const third = await mk("PNLTEST000000003", 400000, 300000, 4, "SO-PNLTEST-4");
+        await tx.subsidyClaim.create({ data: { ...claim, claimNo: "GB-PNLTEST-2", salesOrderId: third.order.id, deviceId: third.device.id, salesOrderItemId: third.item.id, qualificationCode: "PNLTEST-QC-2", status: "SUBMITTED" } });
+      }
+
       const r1 = await getPnl(mgr, { month: prev }, new Date(), tx);
       expect(r1.rows).toHaveLength(1); // 店长只有本店
       const row = r1.rows[0]!;
-      expect(row.numbers).toMatchObject({ salesFen: 500000, goodsCostFen: 400000, expenseFen: 20000, fixedFen: 0, fixedEntered: false });
+      expect(row.numbers).toMatchObject({ salesFen: policy ? 900000 : 500000, goodsCostFen: policy ? 700000 : 400000, expenseFen: 20000, fixedFen: 0, fixedEntered: false, subsidyLossFen: policy ? 50000 : 0 });
       if (sample) expect(row.numbers.carrierFen).toBe(8000);
       expect(row.numbers.missing).toContain("固定支出没录");
       expect(row.canEdit).toBe(true);
@@ -98,10 +108,24 @@ describe("门店利润表（连本机库，事务回滚）", () => {
       const n = r2.rows[0]!.numbers;
       expect(n).toMatchObject({ fixedFen: 2000000, fixedEntered: true });
       expect(n.missing).not.toContain("固定支出没录");
-      expect(n.profitFen).toBe(n.grossFen - n.expenseFen - n.payrollFen - n.fixedFen);
+      expect(n.profitFen).toBe(n.grossFen - n.expenseFen - n.payrollFen - n.fixedFen - n.subsidyLossFen);
       expect(n.grossFen).toBe(n.revenueFen - n.costFen);
       await saveFixedExpenses(mgr, { storeId: store.id, month: prev, items: [{ category: "RENT", amountFen: 2100000 }] }, { db: tx }); // 改
       expect((await tx.auditLog.findFirstOrThrow({ where: { action: "pnl.fixed.save", entityId: String(store.id) }, orderBy: { id: "desc" } })).detail).toMatchObject({ before: { RENT: 2000000, UTILITIES: 0 }, after: { RENT: 2100000 } });
+
+      // 关店（停用）以后，以前月份照样列出来、标已停用、不能录；没数据的停用店不列
+      const before = await getPnl(b.hq, { month: prev }, new Date(), tx);
+      await tx.store.update({ where: { id: store.id }, data: { isActive: false } });
+      await tx.store.create({ data: { code: "ZT-PNL2", name: "没数据的停用店", regionId: b.regionId, isActive: false } });
+      const after = await getPnl(b.hq, { month: prev }, new Date(), tx);
+      const closed = after.rows.find((x) => x.storeId === store.id)!;
+      expect(closed).toMatchObject({ inactive: true, canEdit: false });
+      expect(closed.name).toContain("已停用");
+      expect(after.rows.some((x) => x.name.includes("没数据的停用店"))).toBe(false);
+      expect(after.total!.salesFen).toBe(before.total!.salesFen);
+      expect(after.total!.profitFen).toBe(before.total!.profitFen);
+      expect(after.stores.some((s) => s.id === store.id)).toBe(true);
+      await expect(saveFixedExpenses(b.hq, { storeId: store.id, month: prev, items: [{ category: "RENT", amountFen: 1 }] }, { db: tx })).rejects.toThrow("门店不存在");
     });
   });
 

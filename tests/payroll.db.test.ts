@@ -199,6 +199,8 @@ describe("工资条（连本机库，事务回滚）", () => {
       await tx.salesOrder.create({ data: { orderNo: "SO-PAYTEST-G", storeId: b.a.id, salespersonId: gone.id, bizDate: dateFromKey(day(3)), subtotalFen: 5000, totalFen: 5000 } });
       // 账号在用、档案里有离职日期：一个在这个月中间（底薪折算），一个在上上个月（不生成）；都要提醒
       const stale = await mk("paytest_t", "工资测试离职未清", true, { leaveDate: day(20) });
+      // 先填了离职日期、人还在用，离职日期以后的班还排着：不算缺勤、不算上班天数
+      for (let n = 21; n <= 25; n++) await tx.shiftSchedule.create({ data: { storeId: b.a.id, userId: stale.id, date: dateFromKey(day(n)), shift: "MORNING", updatedById: manager.id } });
       const stale2 = await mk("paytest_t2", "工资测试早已离职", true, { leaveDate: beforePrev });
 
       const r = await generatePayroll(b.hq, prev, { db: tx });
@@ -208,7 +210,7 @@ describe("工资条（连本机库，事务回滚）", () => {
       expect(of(newbie.id)).toMatchObject({ employedDays: days - 10, absentDays: 0, absenceDeductionFen: 0, baseFen: Math.round((300000 * (days - 10)) / days), storeDays: { [String(b.a.id)]: 5 } });
       expect(of(gone.id)).toBeUndefined();
       expect(of(stale2.id)).toBeUndefined();
-      expect(of(stale.id)).toMatchObject({ employedDays: 20 });
+      expect(of(stale.id)).toMatchObject({ employedDays: 20, absentDays: 0, absenceDeductionFen: 0, storeDays: {} });
       expect(r.stale).toEqual(expect.arrayContaining(["工资测试离职未清", "工资测试早已离职"]));
       expect(r.stale).not.toContain("工资测试已走");
       const page = await getPayrollPage(b.hq, { month: prev }, new Date(), tx);
