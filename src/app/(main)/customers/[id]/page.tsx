@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { canSell } from "@/server/auth/permissions";
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 export default async function CustomerDetailPage({ params }: PageProps<"/customers/[id]">) {
   const { id } = await params;
   const customerId = Number(id);
-  if (!Number.isInteger(customerId) || customerId <= 0) notFound();
+  if (!isDbId(customerId)) notFound();
   const user = await requireUser();
   if (!canSell(user.role)) return <NoAccess />;
   const detail = await getCustomerDetail(user, customerId);

@@ -1,4 +1,6 @@
 import "server-only";
+import { pruneNoticeNotifications } from "@/server/notice/notice-service";
+import { todayBizDate } from "@/server/stock/doc-no";
 import { prisma } from "@/lib/prisma";
 import type { Role } from "@/generated/prisma/enums";
 import { DEMO_PROTECTED_MESSAGE, isProtectedDemoAccount } from "@/server/auth/demo-accounts";
@@ -261,6 +263,7 @@ export async function updateUser(actor: Actor, id: number, input: UserInput) {
     throw error;
   }
   await writeAudit({ userId: actor.id, action: "user.update", entity: "user", entityId: id, detail: data });
+  await pruneNoticeNotifications(prisma, id); // 调了店、换了区域：看不到的公告消息从小铃铛里清掉
   if (wecom?.changed) await writeAudit({ userId: actor.id, action: "wecom.user.bind_userid", entity: "user", entityId: id, detail: { wecomUserid: wecom.value, checked: wecom.checked } });
   return { ...user, notice: wecom?.notice };
 }
@@ -308,6 +311,13 @@ export async function setUserActive(actor: CurrentUser, id: number, isActive: bo
   if (id === actor.id && !isActive) throw new OrgError("不能停用自己");
   const user = await prisma.user.update({ where: { id }, data: { isActive, sessionVersion: { increment: 1 } } });
   await writeAudit({ userId: actor.id, action: isActive ? "user.activate" : "user.deactivate", entity: "user", entityId: id });
+  // 员工档案的离职日期（口径第 19 节）：停用时没填过的记成今天（总部已经填了的不覆盖）；重新启用说明人回来了，清空
+  if (isActive) await prisma.employeeProfile.updateMany({ where: { userId: id }, data: { leaveDate: null } });
+  else {
+    const today = todayBizDate();
+    await prisma.employeeProfile.upsert({ where: { userId: id }, create: { userId: id, leaveDate: today }, update: {} });
+    await prisma.employeeProfile.updateMany({ where: { userId: id, leaveDate: null }, data: { leaveDate: today } });
+  }
   let notice: string | undefined;
   if (isActive) {
     const cancelled = await cancelResignedTransfersFor(prisma, id, "员工重新启用了，离职继承取消");

@@ -172,7 +172,12 @@ type Outcome = "duplicate" | "skipped" | "event" | "servicer" | "human" | "repli
  * 转人工：先调企业微信的接口，成功了再告诉客户“已经转人工”；接口报错就告诉客户打门店电话，会话还是自动答复。
  * 不抛错：这一批里后面的消息照常处理。leadText 是转之前要先说的话（比如没绑定查保障的说明）。
  */
+/**
+ * 转人工：先告诉客户“正在帮您转人工”，再调接口。企业微信只让会话在“新接入待处理”“智能助手接待”时用接口发消息，
+ * 转进待接入池以后这句就发不出去了，所以必须先发。接口报错时会话还在智能助手这边，可以接着告诉客户打门店电话。
+ */
 async function transfer(ctx: HandlerContext, session: Session, reason: string, leadText: string): Promise<boolean> {
+  await sendReply(ctx, session.id, leadText, null);
   try {
     await ctx.client.transferKfToHuman({ openKfid: session.openKfid, externalUserid: session.externalUserid });
   } catch (error) {
@@ -184,7 +189,6 @@ async function transfer(ctx: HandlerContext, session: Session, reason: string, l
   }
   await ctx.db.wecomKfSession.update({ where: { id: session.id }, data: { state: "HUMAN", humanAt: ctx.now, missCount: 0 } });
   await ctx.db.wecomKfMessage.create({ data: { msgid: `note-${randomUUID()}`, sessionId: session.id, direction: "OUT", msgType: "event", content: "[转人工]", note: reason, sentAt: ctx.now } });
-  await sendReply(ctx, session.id, leadText, null);
   return true;
 }
 

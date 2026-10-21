@@ -48,6 +48,19 @@ export interface AlertDraft {
   detail: string;
   link: string | null;
   facts: Record<string, string | number>;
+  /** 命中的关键数字（台数、张数、差额……，不含“最久几天”“等了几小时”这种随时间变的）：今日待办按它判断内容变没变 */
+  key?: string;
+}
+
+/** 店员那份今日待办不放的：KPI 的钱数、日结差额（看板、日结店员打不开，2026-10-21 复查后定） */
+export const MANAGER_ONLY_KINDS: AlertKindKey[] = ["KPI_BEHIND", "DAILY_CLOSE"];
+
+/** 一份今日待办命中了什么：种类 + 关键数字，排好序拼起来。一样就不重写、不重推群、不重标未读 */
+export function digestSignature(items: Pick<AlertDraft, "kind" | "key">[]): string {
+  return items
+    .map((i) => `${i.kind}:${i.key ?? ""}`)
+    .sort()
+    .join("|");
 }
 
 export function scopeKeyOf(draft: Pick<AlertDraft, "scope" | "storeId" | "regionId">): string {

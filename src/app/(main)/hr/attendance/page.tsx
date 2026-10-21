@@ -1,3 +1,4 @@
+import { isDbId } from "@/lib/paging";
 import { requireUser } from "@/server/auth/current-user";
 import { AttendanceError, getMyToday, manualPunchTargets, monthStats, userMonthDetail } from "@/server/hr/attendance-service";
 import { AttendanceView } from "./attendance-view";
@@ -14,7 +15,8 @@ export default async function AttendancePage({ searchParams }: PageProps<"/hr/at
   const params = await searchParams;
   const storeId = Number(one(params.store)) || undefined;
   const [today, stats, targets] = await Promise.all([getMyToday(user), monthStats(user, { month: one(params.month), storeId }), manualPunchTargets(user)]);
-  const detailUserId = Number(one(params.user)) || null;
+  const requested = Number(one(params.user));
+  const detailUserId = isDbId(requested) ? requested : null;
   let detail = null;
   let detailError: string | null = null;
   if (detailUserId) {

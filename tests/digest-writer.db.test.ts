@@ -59,7 +59,7 @@ describe("今日待办的写法（连本机库，事务回滚）", () => {
       expect(good.content).toContain("> AI 生成，数字以系统为准");
 
       const madeUp = await modelWriter({ db: tx, dailyLimit: 10, client: fakeClient('{"items":[{"ref":1,"text":"压了 12 台，大概占了 8 万块"}]}') })(input);
-      expect(madeUp).toMatchObject({ source: "TEMPLATE", fallbackReason: "模型写了清单外的数字：8" });
+      expect(madeUp).toMatchObject({ source: "TEMPLATE", fallbackReason: "模型写的数字对不上清单：8" });
       expect(madeUp.content).toContain("> 系统按规则生成");
 
       expect((await modelWriter({ db: tx, dailyLimit: 10, client: fakeClient("今天要做的事有……") })(input)).fallbackReason).toBe("模型返回的格式不对：不是 JSON");

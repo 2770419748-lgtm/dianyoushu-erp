@@ -1,6 +1,7 @@
 import "server-only";
 import { ALERT_KIND_LABELS, ALERT_THRESHOLDS, type AlertDraft, type AlertKindKey, kpiBehind, suggestTransfers, yuanText } from "@/lib/alerts";
 import { formatDate } from "@/lib/format";
+import { PAYMENT_METHOD_LABELS } from "@/lib/sales-labels";
 import { dailyGap, timeProgress } from "@/server/dashboard/metrics";
 import type { Db } from "@/server/db-tx";
 import { describeIntegrity, integrityOk, runIntegrityChecks } from "../../../prisma/integrity-checks";
@@ -21,7 +22,7 @@ export interface StoreInfo {
 const label = (s: StoreInfo) => `${s.code} ${s.name}`;
 
 function storeDraft(kind: AlertKindKey, store: StoreInfo, severity: 1 | 2 | 3, detail: string, link: string | null, facts: Record<string, string | number>, metric: { value: number; unit: string }): AlertDraft & { metric: { value: number; unit: string }; store: StoreInfo } {
-  return { kind, scope: "STORE", storeId: store.id, regionId: null, severity, title: ALERT_KIND_LABELS[kind], detail, link, facts, metric, store };
+  return { kind, scope: "STORE", storeId: store.id, regionId: null, severity, title: ALERT_KIND_LABELS[kind], detail, link, facts, metric, store, key: `${metric.value}${metric.unit}` };
 }
 
 export type StoreAlert = ReturnType<typeof storeDraft>;
@@ -98,7 +99,7 @@ async function kpiBehindStores(db: Db, stores: Map<number, StoreInfo>, now: Date
   return out;
 }
 
-/** 4. 日结没做完：昨天有营业、日结没确认；或者确认了有差额 */
+/** 4. 日结没做完：昨天有营业、日结没确认；或者确认了有差额（按收款方式分别看：现金多 500、微信少 500 也要提醒） */
 async function dailyClose(db: Db, stores: Map<number, StoreInfo>, now: Date): Promise<StoreAlert[]> {
   const yesterday = new Date(new Date(formatDate(now)).getTime() - DAY_MS);
   const ids = [...stores.keys()];
@@ -106,7 +107,7 @@ async function dailyClose(db: Db, stores: Map<number, StoreInfo>, now: Date): Pr
     db.$queryRaw<{ store_id: number }[]>`
       SELECT store_id FROM sales_orders WHERE biz_date = ${yesterday} AND store_id = ANY(${ids})
       UNION SELECT store_id FROM return_orders WHERE biz_date = ${yesterday} AND store_id = ANY(${ids})`,
-    db.dailyClose.findMany({ where: { bizDate: yesterday, storeId: { in: ids } }, include: { lines: { select: { diffFen: true } } } }),
+    db.dailyClose.findMany({ where: { bizDate: yesterday, storeId: { in: ids } }, include: { lines: { select: { method: true, diffFen: true } } } }),
   ]);
   const out: StoreAlert[] = [];
   const day = formatDate(yesterday);
@@ -114,13 +115,13 @@ async function dailyClose(db: Db, stores: Map<number, StoreInfo>, now: Date): Pr
     const close = closes.find((c) => c.storeId === store_id);
     const store = stores.get(store_id)!;
     if (!close || close.status !== "CONFIRMED") {
-      out.push(storeDraft("DAILY_CLOSE", store, 3, `${day} 的日结还没确认，先核对实收再确认`, "/daily-close", { 日期: day }, { value: 1, unit: "家" }));
+      out.push({ ...storeDraft("DAILY_CLOSE", store, 3, `${day} 的日结还没确认，先核对实收再确认`, "/daily-close", { 日期: day }, { value: 1, unit: "家" }), key: `${day}没确认` });
       continue;
     }
-    const diff = close.lines.reduce((s, l) => s + (l.diffFen ?? 0), 0);
-    if (diff !== 0) {
-      const text = `${diff > 0 ? "多" : "少"} ${yuanText(Math.abs(diff))} 元`;
-      out.push(storeDraft("DAILY_CLOSE", store, 3, `${day} 的日结实收和系统对不上，${text}，查一下原因`, "/daily-close", { 日期: day, 差额: text }, { value: 1, unit: "家" }));
+    const off = close.lines.filter((l) => (l.diffFen ?? 0) !== 0);
+    if (off.length > 0) {
+      const text = off.map((l) => `${PAYMENT_METHOD_LABELS[l.method]}${l.diffFen! > 0 ? "多" : "少"} ${yuanText(Math.abs(l.diffFen!))} 元`).join("、");
+      out.push({ ...storeDraft("DAILY_CLOSE", store, 3, `${day} 的日结实收和系统对不上，${text}，查一下原因`, "/daily-close", { 日期: day, 差额: text }, { value: 1, unit: "家" }), key: `${day}差额${text}` });
     }
   }
   return out;
@@ -183,7 +184,7 @@ async function pendingApprovals(db: Db, stores: Map<number, StoreInfo>, now: Dat
     const hours = r._min.createdAt ? Math.floor((now.getTime() - r._min.createdAt.getTime()) / 3600000) : 0;
     store.push(storeDraft("APPROVAL_PENDING", stores.get(r.storeId)!, 2, `${r._count._all} 张审批单等店长批，最早的等了 ${hours} 小时`, "/approvals", { 张数: r._count._all, 最久小时: hours }, { value: r._count._all, unit: "张" }));
   }
-  const hq = withHq && hqCount > 0 ? { kind: "APPROVAL_PENDING" as const, scope: "HQ" as const, storeId: null, regionId: null, severity: 2 as const, title: ALERT_KIND_LABELS.APPROVAL_PENDING, detail: `${hqCount} 张审批单等总部批`, link: "/approvals", facts: { 张数: hqCount } } : null;
+  const hq = withHq && hqCount > 0 ? { kind: "APPROVAL_PENDING" as const, scope: "HQ" as const, storeId: null, regionId: null, severity: 2 as const, title: ALERT_KIND_LABELS.APPROVAL_PENDING, detail: `${hqCount} 张审批单等总部批`, link: "/approvals", facts: { 张数: hqCount }, key: `${hqCount}张` } : null;
   return { store, hq };
 }
 
@@ -214,7 +215,7 @@ async function transferSuggestions(db: Db, stores: Map<number, StoreInfo>, now: 
 
 function suggestionDraft(scope: "REGION" | "HQ", regionId: number | null, list: ReturnType<typeof suggestTransfers>): AlertDraft {
   const lines = list.map((s) => `${s.model}：${s.from.storeName}压了 ${s.from.stale} 台，${s.to.storeName}近 30 天卖了 ${s.to.sold30} 台、现在没货`);
-  return { kind: "TRANSFER_SUGGEST", scope, storeId: null, regionId: scope === "REGION" ? regionId : null, severity: 1, title: ALERT_KIND_LABELS.TRANSFER_SUGGEST, detail: `建议调货：${lines.join("；")}`, link: "/transfers/new", facts: { 条数: list.length, 明细: lines.join("；") } };
+  return { kind: "TRANSFER_SUGGEST", scope, storeId: null, regionId: scope === "REGION" ? regionId : null, severity: 1, title: ALERT_KIND_LABELS.TRANSFER_SUGGEST, detail: `建议调货：${lines.join("；")}`, link: "/transfers/new", facts: { 条数: list.length, 明细: lines.join("；") }, key: lines.join("；") };
 }
 
 /** 门店的提醒汇总到区域、总部：几家店、合计多少、最多的几家 */
@@ -224,7 +225,7 @@ function aggregate(kind: AlertKindKey, scope: "REGION" | "HQ", regionId: number 
   const total = sorted.reduce((s, i) => s + i.metric.value, 0);
   const top = sorted.slice(0, scope === "HQ" ? 5 : 3).map((i) => (unit === "家" ? `${label(i.store)}（${i.detail.split("，")[0]}）` : `${label(i.store)} ${i.metric.value} ${unit}`));
   const detail = unit === "家" ? `${items.length} 家店：${top.join("；")}` : `${items.length} 家店共 ${total} ${unit}，最多的是 ${top.join("、")}`;
-  return { kind, scope, storeId: null, regionId: scope === "REGION" ? regionId : null, severity: Math.max(...items.map((i) => i.severity)) as 1 | 2 | 3, title: ALERT_KIND_LABELS[kind], detail, link: null, facts: { 店数: items.length, 合计: total, 明细: top.join("；") } };
+  return { kind, scope, storeId: null, regionId: scope === "REGION" ? regionId : null, severity: Math.max(...items.map((i) => i.severity)) as 1 | 2 | 3, title: ALERT_KIND_LABELS[kind], detail, link: null, facts: { 店数: items.length, 合计: total, 明细: top.join("；") }, key: sorted.map((i) => `${i.store.id}:${i.key}`).join(",") };
 }
 
 /**
@@ -247,7 +248,7 @@ export async function collectAlerts(db: Db, now: Date, options: { storeIds?: num
     pendingApprovals(db, stores, now, full),
   ]);
   const storeItems = [...stale, ...low, ...kpi, ...close, ...transfers, ...stocktakes, ...tradeIns, ...approvals.store];
-  const drafts: AlertDraft[] = storeItems.map((i) => ({ kind: i.kind, scope: i.scope, storeId: i.storeId, regionId: i.regionId, severity: i.severity, title: i.title, detail: i.detail, link: i.link, facts: i.facts }));
+  const drafts: AlertDraft[] = storeItems.map((i) => ({ kind: i.kind, scope: i.scope, storeId: i.storeId, regionId: i.regionId, severity: i.severity, title: i.title, detail: i.detail, link: i.link, facts: i.facts, key: i.key }));
   if (!full) return { stores: list, drafts };
 
   // 区域：辖区各店按类汇总（待审批区域经理管不了，不汇总）+ 调拨建议；总部：全部门店按类汇总 + 调拨建议 + 要总部批的 + 对账自检
@@ -268,13 +269,13 @@ export async function collectAlerts(db: Db, now: Date, options: { storeIds?: num
     const existing = drafts.findIndex((d) => d.scope === "HQ" && d.kind === "APPROVAL_PENDING");
     if (existing >= 0) {
       const d = drafts[existing]!;
-      drafts[existing] = { ...d, detail: `${d.detail}；另外 ${approvals.hq.detail}`, facts: { ...d.facts, 等总部批: approvals.hq.facts.张数! } };
+      drafts[existing] = { ...d, detail: `${d.detail}；另外 ${approvals.hq.detail}`, facts: { ...d.facts, 等总部批: approvals.hq.facts.张数! }, key: `${d.key}+${approvals.hq.key}` };
     } else drafts.push(approvals.hq);
   }
   const checks = await runIntegrityChecks(db as unknown as PrismaClient);
   if (!integrityOk(checks)) {
     const total = Object.values(checks).reduce((s: number, v) => s + (typeof v === "number" ? v : 0), 0);
-    drafts.push({ kind: "INTEGRITY", scope: "HQ", storeId: null, regionId: null, severity: 3, title: ALERT_KIND_LABELS.INTEGRITY, detail: `对账自检有对不上的：${describeIntegrity(checks)}跑一下 pnpm db:check 看明细`, link: "/logs", facts: { 处数: total } });
+    drafts.push({ kind: "INTEGRITY", scope: "HQ", storeId: null, regionId: null, severity: 3, title: ALERT_KIND_LABELS.INTEGRITY, detail: `对账自检有对不上的：${describeIntegrity(checks)}跑一下 pnpm db:check 看明细`, link: "/logs", facts: { 处数: total }, key: describeIntegrity(checks) });
   }
   return { stores: list, drafts };
 }

@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser, type CurrentUser } from "@/server/auth/current-user";
 import { canSell, canVoidSales } from "@/server/auth/permissions";
@@ -25,7 +26,7 @@ async function load(user: CurrentUser, id: number): Promise<Loaded> {
 export default async function SalesDetailPage({ params }: PageProps<"/sales/[id]">) {
   const { id } = await params;
   const orderId = Number(id);
-  if (!Number.isInteger(orderId) || orderId <= 0) notFound();
+  if (!isDbId(orderId)) notFound();
   const user = await requireUser();
   const loaded = await load(user, orderId);
   if (loaded.kind === "missing") notFound();

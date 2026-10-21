@@ -1,3 +1,4 @@
+import { isDbId } from "@/lib/paging";
 import { requireUser } from "@/server/auth/current-user";
 import { getAlertsPage } from "@/server/alerts/alert-service";
 import { AlertsView } from "./alerts-view";
@@ -13,6 +14,6 @@ export default async function AlertsPage({ searchParams }: PageProps<"/alerts">)
   const user = await requireUser();
   const params = await searchParams;
   const digestId = Number(one(params.digest));
-  const data = await getAlertsPage(user, { date: one(params.date) || undefined, digestId: Number.isInteger(digestId) && digestId > 0 ? digestId : undefined });
+  const data = await getAlertsPage(user, { date: one(params.date) || undefined, digestId: isDbId(digestId) ? digestId : undefined });
   return <AlertsView data={data} />;
 }

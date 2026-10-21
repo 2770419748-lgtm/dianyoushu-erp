@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser, type CurrentUser } from "@/server/auth/current-user";
 import { canSell } from "@/server/auth/permissions";
@@ -24,7 +25,7 @@ async function load(user: CurrentUser, id: number): Promise<Loaded> {
 export default async function ReturnPage({ params }: PageProps<"/sales/[id]/return">) {
   const { id } = await params;
   const orderId = Number(id);
-  if (!Number.isInteger(orderId) || orderId <= 0) notFound();
+  if (!isDbId(orderId)) notFound();
   const user = await requireUser();
   if (!canSell(user.role)) return <NoAccess />;
   const loaded = await load(user, orderId);

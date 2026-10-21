@@ -1874,6 +1874,7 @@ model AlertDigest {
   content        String // markdown
   source         AlertDigestSource
   fallbackReason String?           @map("fallback_reason") // 为什么没用模型写（没开、出错、超额、数字对不上）
+  signature      String? // 命中了哪些提醒（种类 + 关键数字）：一样就不重写、不重推、不重标未读
   itemCount      Int               @map("item_count")
   pushStatus     String?           @map("push_status") // SENT 发了 / SIMULATED 演示没真发 / FAILED 没发出去 / NONE 门店没填群地址
   pushError      String?           @map("push_error")

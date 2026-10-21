@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser, type CurrentUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
@@ -23,7 +24,7 @@ async function load(user: CurrentUser, id: number): Promise<Loaded> {
 export default async function RepairDetailPage({ params }: PageProps<"/repairs/[id]">) {
   const { id } = await params;
   const repairId = Number(id);
-  if (!Number.isInteger(repairId) || repairId <= 0) notFound();
+  if (!isDbId(repairId)) notFound();
   const user = await requireUser();
   const loaded = await load(user, repairId);
   if (loaded.kind === "missing") notFound();

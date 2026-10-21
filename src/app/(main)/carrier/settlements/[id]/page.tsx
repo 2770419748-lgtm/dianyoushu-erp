@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { canManageCarrier } from "@/server/auth/permissions";
@@ -12,7 +13,7 @@ export default async function CarrierSettlementPage({ params }: PageProps<"/carr
   const user = await requireUser();
   if (!canManageCarrier(user.role)) return <NoAccess subTitle="运营商结算对账只有总部能做。" />;
   const id = Number((await params).id);
-  if (!Number.isInteger(id) || id <= 0) notFound();
+  if (!isDbId(id)) notFound();
   const detail = await getSettlement(user, id);
   if (!detail) notFound();
   return <SettlementDetailView detail={detail} />;

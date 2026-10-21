@@ -6,6 +6,7 @@ import { canPublishNotice } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { type Db, withTx } from "@/server/db-tx";
+import { isDbId } from "@/lib/paging";
 
 // 公告（口径第 19 节）：总部发全部、区域、门店，店长发本店。发布时给范围内在职的人发系统内消息（小铃铛），
 // 打开详情算已读；发布人和总部看已读人数；撤下了大家都看不到（不删）。
@@ -28,6 +29,15 @@ function visibleWhere(user: CurrentUser): Prisma.NoticeWhereInput {
   };
 }
 
+/** 这个人在不在这条公告的发送范围里（按他现在在哪家店、哪个区域算；发布人自己不算） */
+function isRecipient(user: CurrentUser, notice: { scope: "ALL" | "REGION" | "STORE"; regionId: number | null; storeId: number | null; authorId: number }): boolean {
+  if (notice.authorId === user.id) return false;
+  if (notice.scope === "ALL") return true;
+  if (notice.scope === "STORE") return user.storeId !== null && user.storeId === notice.storeId;
+  const regionId = user.role === "REGIONAL_MANAGER" ? user.regionId : (user.store?.regionId ?? null);
+  return regionId !== null && regionId === notice.regionId;
+}
+
 /** 发给哪些人：范围内在职的人 */
 async function recipientsOf(db: Db, scope: "ALL" | "REGION" | "STORE", regionId: number | null, storeId: number | null) {
   const where: Prisma.UserWhereInput = scope === "ALL" ? {} : scope === "REGION" ? { OR: [{ regionId }, { store: { regionId: regionId ?? -1 } }] } : { storeId };
@@ -48,21 +58,22 @@ export async function publishNotice(user: CurrentUser, input: { title: unknown; 
     scope = "STORE";
     storeId = user.storeId; // 店长只能发本店
   } else {
-    scope = input.scope === "REGION" ? "REGION" : input.scope === "STORE" ? "STORE" : "ALL";
+    if (input.scope !== undefined && input.scope !== "ALL" && input.scope !== "REGION" && input.scope !== "STORE") throw new NoticeError("发给谁不对（全公司、区域或门店）");
+    scope = input.scope ?? "ALL";
     if (scope === "REGION") {
       regionId = Number(input.regionId);
-      if (!Number.isInteger(regionId) || !(await db.region.findUnique({ where: { id: regionId } }))) throw new NoticeError("选一个区域");
+      if (!isDbId(regionId) || !(await db.region.findFirst({ where: { id: regionId, isActive: true } }))) throw new NoticeError("选一个在用的区域");
     }
     if (scope === "STORE") {
       storeId = Number(input.storeId);
-      if (!Number.isInteger(storeId) || !(await db.store.findUnique({ where: { id: storeId } }))) throw new NoticeError("选一家门店");
+      if (!isDbId(storeId) || !(await db.store.findFirst({ where: { id: storeId, isActive: true } }))) throw new NoticeError("选一家在营业的门店");
     }
   }
   return withTx(db, async (tx) => {
-    const users = await recipientsOf(tx, scope, regionId, storeId);
+    const users = (await recipientsOf(tx, scope, regionId, storeId)).filter((u) => u.id !== user.id); // 发给的人不算发布人自己
     const notice = await tx.notice.create({ data: { title, body, scope, regionId, storeId, authorId: user.id, recipients: users.length } });
     await tx.notification.createMany({
-      data: users.filter((u) => u.id !== user.id).map((u) => ({ userId: u.id, noticeId: notice.id, title: `公告：${title}`, body: body.replace(/\s+/g, " ").slice(0, 60), link: `/notices/${notice.id}` })),
+      data: users.map((u) => ({ userId: u.id, noticeId: notice.id, title: `公告：${title}`, body: body.replace(/\s+/g, " ").slice(0, 60), link: `/notices/${notice.id}` })),
       skipDuplicates: true,
     });
     await writeAudit({ userId: user.id, action: "notice.publish", entity: "notice", entityId: notice.id, detail: { title, scope, regionId, storeId, recipients: users.length } }, tx);
@@ -123,8 +134,9 @@ export async function getNotice(user: CurrentUser, id: number, db: Db = prisma) 
   const notice = await db.notice.findFirst({ where: { AND: [{ id }, visibleWhere(user)] }, include: { author: { select: { name: true } } } });
   if (!notice) return null;
   if (notice.withdrawnAt && notice.authorId !== user.id && user.role !== "HQ") return null;
-  if (!notice.withdrawnAt && notice.authorId !== user.id) {
-    await db.noticeRead.upsert({ where: { noticeId_userId: { noticeId: id, userId: user.id } }, create: { noticeId: id, userId: user.id }, update: {} });
+  // 只有发送范围里的人打开才算已读（总部打开别人的门店公告不算）；同一个人两个标签页同时打开，已有的跳过，不报错
+  if (!notice.withdrawnAt && isRecipient(user, notice)) {
+    await db.noticeRead.createMany({ data: [{ noticeId: id, userId: user.id }], skipDuplicates: true });
     await db.notification.updateMany({ where: { noticeId: id, userId: user.id, readAt: null }, data: { readAt: new Date() } });
   }
   const canSeeReads = notice.authorId === user.id || user.role === "HQ";
@@ -132,7 +144,7 @@ export async function getNotice(user: CurrentUser, id: number, db: Db = prisma) 
   let readCount = 0;
   if (canSeeReads) {
     const [reads, recipients] = await Promise.all([db.noticeRead.findMany({ where: { noticeId: id }, select: { userId: true } }), recipientsOf(db, notice.scope, notice.regionId, notice.storeId)]);
-    readCount = reads.length;
+    readCount = reads.filter((r) => r.userId !== notice.authorId).length;
     const readIds = new Set(reads.map((r) => r.userId));
     const unreadIds = recipients.map((u) => u.id).filter((uid) => !readIds.has(uid) && uid !== notice.authorId);
     unread = (await db.user.findMany({ where: { id: { in: unreadIds.slice(0, 50) } }, select: { name: true } })).map((u) => u.name);
@@ -151,3 +163,20 @@ export async function getNotice(user: CurrentUser, id: number, db: Db = prisma) 
 }
 
 export type NoticeDetail = NonNullable<Awaited<ReturnType<typeof getNotice>>>;
+
+/** 调店、换区域、换角色以后，小铃铛里已经看不到的公告消息删掉（不然点开是 404） */
+export async function pruneNoticeNotifications(db: Db, userId: number) {
+  const user = await db.user.findUnique({ where: { id: userId }, include: { store: { select: { id: true, name: true, regionId: true } }, region: { select: { id: true, name: true } } } });
+  if (!user) return 0;
+  const me = user as unknown as CurrentUser;
+  const notes = await db.notification.findMany({ where: { userId, noticeId: { not: null } }, select: { id: true, notice: { select: { scope: true, regionId: true, storeId: true, authorId: true } } } });
+  const stale = notes.filter((n) => n.notice && me.role !== "HQ" && n.notice.authorId !== userId && !isRecipient(me, n.notice)).map((n) => n.id);
+  if (stale.length > 0) await db.notification.deleteMany({ where: { id: { in: stale } } });
+  return stale.length;
+}
+
+/** 点开一条已经看不到的公告：小铃铛里这条清掉，告诉他不在范围了（返回 true 说明是这种情况） */
+export async function dropStaleNotice(userId: number, noticeId: number): Promise<boolean> {
+  const removed = await prisma.notification.deleteMany({ where: { userId, noticeId } });
+  return removed.count > 0;
+}

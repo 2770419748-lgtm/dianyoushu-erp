@@ -4,7 +4,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { listEmployees, saveEmployeeProfile } from "@/server/hr/employee-service";
-import { getNotice, publishNotice, withdrawNotice } from "@/server/notice/notice-service";
+import { getNotice, pruneNoticeNotifications, publishNotice, withdrawNotice } from "@/server/notice/notice-service";
 
 // 人事 OA 第一步（口径第 19 节，连本机库，事务回滚不留数据）：公告的范围、消息、已读、撤下；员工档案的范围、工资谁能看、校验。
 
@@ -64,15 +64,19 @@ describe("公告和员工档案（连本机库，事务回滚）", () => {
       const notice = await tx.notice.findUniqueOrThrow({ where: { id: r.id } });
       expect(notice).toMatchObject({ scope: "STORE", storeId: p.manager.storeId });
       const storeUsers = await tx.user.count({ where: { storeId: p.manager.storeId, isActive: true } });
-      expect(r.recipients).toBe(storeUsers);
-      expect(await tx.notification.count({ where: { noticeId: r.id } })).toBe(storeUsers - 1); // 不发给自己
+      expect(r.recipients).toBe(storeUsers - 1); // 发给的人不算发布人自己
+      expect(await tx.notification.count({ where: { noticeId: r.id } })).toBe(storeUsers - 1);
 
       expect(await getNotice(p.otherStaff, r.id, tx)).toBeNull(); // 别店的看不到
       const seen = await getNotice(p.staff, r.id, tx);
       expect(seen?.reads).toBeNull(); // 店员看不到已读统计
       expect(await tx.notification.findFirstOrThrow({ where: { noticeId: r.id, userId: p.staff.id } })).toMatchObject({ readAt: expect.any(Date) });
+      await getNotice(p.staff, r.id, tx); // 同一个人再打开（两个标签页）：已有的跳过，不报错
+      await getNotice(p.hq, r.id, tx); // 总部不在本店公告的发送范围里，打开不算已读
+      expect(await tx.noticeRead.count({ where: { noticeId: r.id } })).toBe(1);
       const mine = await getNotice(p.manager, r.id, tx);
-      expect(mine?.reads?.readCount).toBe(1);
+      expect(mine?.reads).toMatchObject({ readCount: 1, recipients: storeUsers - 1 });
+      expect(mine!.reads!.unread).toHaveLength(storeUsers - 2);
 
       await expect(withdrawNotice(p.staff, r.id, tx)).rejects.toThrow("发布人和总部");
       await withdrawNotice(p.manager, r.id, tx);
@@ -91,7 +95,23 @@ describe("公告和员工档案（连本机库，事务回滚）", () => {
       expect(r.recipients).toBe(expected);
       expect(await getNotice(p.regional, r.id, tx)).not.toBeNull();
       expect(await getNotice(p.otherStaff, r.id, tx)).toBeNull();
-      await expect(publishNotice(p.hq, { title: "x", body: "y", scope: "STORE", storeId: 999999 }, tx)).rejects.toThrow("选一家门店");
+      await expect(publishNotice(p.hq, { title: "x", body: "y", scope: "STORE", storeId: 999999 }, tx)).rejects.toThrow("选一家在营业的门店");
+      await expect(publishNotice(p.hq, { title: "x", body: "y", scope: "EVERYONE" }, tx)).rejects.toThrow("发给谁不对"); // 不认识的范围不当成全公司
+      const closed = await tx.store.create({ data: { code: "ZT-NT1", name: "停业测试店", regionId, isActive: false } });
+      await expect(publishNotice(p.hq, { title: "x", body: "y", scope: "STORE", storeId: closed.id }, tx)).rejects.toThrow("在营业的门店");
+    });
+  });
+
+  it("调店以后：小铃铛里原门店的公告消息清掉，全公司的留着", async (ctx) => {
+    if (!f) return ctx.skip();
+    const p = f;
+    await inRolledBackTx(async (tx) => {
+      const storeNotice = await publishNotice(p.manager, { title: "本店通知", body: "只给本店" }, tx);
+      const allNotice = await publishNotice(p.hq, { title: "全公司通知", body: "大家都看" }, tx);
+      expect(await tx.notification.count({ where: { userId: p.staff.id, noticeId: { in: [storeNotice.id, allNotice.id] } } })).toBe(2);
+      await tx.user.update({ where: { id: p.staff.id }, data: { storeId: p.otherStaff.storeId } });
+      expect(await pruneNoticeNotifications(tx, p.staff.id)).toBeGreaterThanOrEqual(1);
+      expect(await tx.notification.findMany({ where: { userId: p.staff.id, noticeId: { in: [storeNotice.id, allNotice.id] } }, select: { noticeId: true } })).toEqual([{ noticeId: allNotice.id }]);
     });
   });
 

@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser, type CurrentUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
@@ -23,7 +24,7 @@ async function loadStore(user: CurrentUser, storeId: number): Promise<LoadResult
 export default async function StoreDetailPage({ params }: PageProps<"/stores/[id]">) {
   const { id } = await params;
   const storeId = Number(id);
-  if (!Number.isInteger(storeId) || storeId <= 0) notFound();
+  if (!isDbId(storeId)) notFound();
 
   const user = await requireUser();
   const result = await loadStore(user, storeId);

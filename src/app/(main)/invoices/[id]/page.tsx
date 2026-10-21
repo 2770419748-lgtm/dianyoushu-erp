@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
 export default async function InvoicePage({ params }: PageProps<"/invoices/[id]">) {
   const user = await requireUser();
   const id = Number((await params).id);
-  if (!Number.isInteger(id) || id <= 0) notFound();
+  if (!isDbId(id)) notFound();
   const invoice = await getInvoice(user, id).catch((error: unknown) => {
     if (error instanceof PermissionError) return "forbidden" as const;
     throw error;

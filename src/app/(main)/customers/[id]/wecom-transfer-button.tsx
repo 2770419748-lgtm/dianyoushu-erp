@@ -56,7 +56,7 @@ export function WecomUnbindButton({ customerId }: { customerId: number }) {
         message.error(result.error);
         return;
       }
-      message.success("解绑了，客户本人的微信可以重新扫码或认领");
+      message.success("解绑了：可以在企微侧边栏重新认领，或者让客户扫新的开单二维码");
       setOpen(false);
       router.refresh();
     });

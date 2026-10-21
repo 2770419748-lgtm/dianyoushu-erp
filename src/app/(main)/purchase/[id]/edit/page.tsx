@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { canManagePurchase } from "@/server/auth/permissions";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
 export default async function EditPurchasePage({ params }: PageProps<"/purchase/[id]/edit">) {
   const { id } = await params;
   const orderId = Number(id);
-  if (!Number.isInteger(orderId) || orderId <= 0) notFound();
+  if (!isDbId(orderId)) notFound();
 
   const user = await requireUser();
   if (!canManagePurchase(user.role)) return <NoAccess />;

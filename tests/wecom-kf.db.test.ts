@@ -130,10 +130,38 @@ describe("微信客服（连本机库，事务回滚）", () => {
       const c = { db: tx, client, now: new Date(), simulated: true };
       const ext = "wmKfTestFail01";
       expect(await handleKfMessage(c, msg(ext, "我要投诉"))).toBe("replied");
-      expect(sent).toEqual([expect.stringContaining("暂时转不了人工")]);
+      expect(sent).toEqual([expect.stringContaining("正在帮您转人工"), expect.stringContaining("暂时转不了人工")]); // 先说“正在转”，转不了接着说打门店电话
       expect((await tx.wecomKfSession.findFirstOrThrow({ where: { externalUserid: ext } })).state).toBe("AUTO");
       expect(await tx.wecomKfMessage.count({ where: { session: { externalUserid: ext }, content: "[转人工失败]" } })).toBe(1);
       expect(await handleKfMessage(c, msg(ext, "保修多久"))).toBe("replied"); // 后面的消息照常答
+    });
+  });
+
+  it("先发“正在转人工”再调接口：转进待接入池以后企业微信不让再用接口发消息，客户也能收到这句", async (ctx) => {
+    if (!hq) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const order: string[] = [];
+      let inPool = false;
+      const base = createSimulatedWecomClient();
+      const client: WecomClient = {
+        ...base,
+        async sendKfText(input) {
+          if (inPool) throw new Error("会话不在智能助手接待状态（95018）"); // 照企业微信的规定写的假接口
+          order.push(`发：${input.text}`);
+          return base.sendKfText(input);
+        },
+        async transferKfToHuman() {
+          order.push("转人工");
+          inPool = true;
+        },
+      };
+      const c = { db: tx, client, now: new Date(), simulated: true };
+      expect(await handleKfMessage(c, msg("wmKfTestPool01", "人工"))).toBe("transferred");
+      expect(order).toEqual([expect.stringContaining("正在帮您转人工"), "转人工"]);
+      inPool = false;
+      order.length = 0;
+      expect(await handleKfMessage(c, msg("wmKfTestPool02", "我的碎屏险到什么时候"))).toBe("transferred"); // 没绑定档案：先说要核对身份
+      expect(order).toEqual([expect.stringContaining("核对身份"), "转人工"]);
     });
   });
 

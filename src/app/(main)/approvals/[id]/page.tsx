@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { isDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { ApprovalError, getApproval } from "@/server/approval/approval-service";
@@ -10,7 +11,7 @@ export const dynamic = "force-dynamic";
 export default async function ApprovalPage({ params }: PageProps<"/approvals/[id]">) {
   const user = await requireUser();
   const id = Number((await params).id);
-  if (!Number.isInteger(id) || id <= 0) notFound();
+  if (!isDbId(id)) notFound();
   let detail;
   try {
     detail = await getApproval(user, id);

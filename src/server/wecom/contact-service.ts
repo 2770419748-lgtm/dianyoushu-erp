@@ -170,7 +170,7 @@ export async function onAddExternalContact(fields: Fields, ctx: HandlerContext):
   const staff = await ctx.db.user.findUnique({ where: { wecomUserid: userid }, select: { id: true, name: true, store: { select: { name: true } } } });
 
   // 1. 跟进关系（重复的事件只会更新同一行）
-  const follow = await ctx.db.wecomFollow.upsert({
+  await ctx.db.wecomFollow.upsert({
     where: { externalUserid_wecomUserid: { externalUserid, wecomUserid: userid } },
     create: { externalUserid, wecomUserid: userid, userId: staff?.id ?? null, state, firstAddAt: addedAt },
     update: { status: "ACTIVE", deletedAt: null, deletedBy: null, userId: staff?.id ?? undefined, state: state ?? undefined },
@@ -190,7 +190,8 @@ export async function onAddExternalContact(fields: Fields, ctx: HandlerContext):
       bindNote = result.reason;
     }
   }
-  if (customerId && follow.customerId !== customerId) await ctx.db.wecomFollow.update({ where: { id: follow.id }, data: { customerId } });
+  // 这个微信和别的店员原有的好友关系也一起认这个客户（解绑后重新扫码绑上时，原来那几条是空的），和侧边栏认领一样
+  if (customerId) await ctx.db.wecomFollow.updateMany({ where: { externalUserid, OR: [{ customerId: null }, { customerId: { not: customerId } }] }, data: { customerId } });
 
   // 3. 欢迎语
   let welcomeNote = "没有 welcome_code（企业微信后台给这个员工配了欢迎语时不会给）";
@@ -288,6 +289,8 @@ export async function unbindCustomerWecom(user: CurrentUser, customerId: number,
     await tx.customer.update({ where: { id: customerId }, data: { wecomExternalUserid: null, wecomNickname: null, wecomAvatarUrl: null, wecomBoundAt: null } });
     await tx.wecomFollow.updateMany({ where: { externalUserid: ext }, data: { customerId: null } });
     await tx.wecomKfSession.updateMany({ where: { externalUserid: ext }, data: { customerId: null } });
+    // 还没办完的客户继承也不再认这个客户（接替完毕时按那时绑的客户写）
+    await tx.wecomTransfer.updateMany({ where: { externalUserid: ext, status: { in: ["WAITING_DELETE", "SUBMITTED"] } }, data: { customerId: null } });
     await writeAudit({ userId: user.id, action: "wecom.unbind", entity: "customer", entityId: customerId, detail: { externalUserid: ext, reason: why } }, tx);
   });
 }

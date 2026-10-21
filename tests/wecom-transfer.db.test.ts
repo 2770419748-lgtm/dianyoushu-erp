@@ -4,7 +4,8 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { createSimulatedWecomClient, type WecomClient } from "@/server/wecom/client";
-import { cancelResignedTransfersFor, cancelTransfer, createResignedTransfers, processTransfers, transferOnJob } from "@/server/wecom/transfer-service";
+import { cancelResignedTransfersFor, cancelTransfer, createResignedTransfers, processTransfers, STUCK_DAYS, transferOnJob } from "@/server/wecom/transfer-service";
+import { onAddExternalContact, unbindCustomerWecom } from "@/server/wecom/contact-service";
 
 // 企业微信客户继承（口径第 12 节第三步，连本机库，事务回滚不留数据）：在职转接的权限和限制、查结果回写跟进关系、
 // 客户拒绝、离职继承要等删除成员、90 天 2 次。
@@ -131,6 +132,43 @@ describe("企业微信客户继承（连本机库，事务回滚）", () => {
       await processTransfers({ db: tx, client: clientWith(1), storeId: s.a });
       expect((await tx.wecomTransfer.findFirstOrThrow({ where: { followId: fo.id } })).status).toBe("SUBMITTED");
       expect((await tx.wecomTransfer.findFirstOrThrow({ where: { followId: f1.id, status: { not: "FAILED" } } })).status).toBe("DONE");
+    });
+  });
+
+  it("快核后补：转接没办完时解绑，接替完毕后不再认原客户；提交了 3 天企业微信还查不到的标没成；重新绑上时别的店员的好友关系一起认回", async (ctx) => {
+    if (!stores) return ctx.skip();
+    const s = stores;
+    await inRolledBackTx(async (tx) => {
+      const p = await people(tx, s.a, s.b);
+      const customer = await tx.customer.create({ data: { name: "继承测试客户三", phone: "19922225555", wecomExternalUserid: "wmTrTest03" } });
+      const follow = await tx.wecomFollow.create({ data: { externalUserid: "wmTrTest03", wecomUserid: "trTestA", userId: p.a.id, customerId: customer.id, firstAddAt: new Date() } });
+      const other = await tx.wecomFollow.create({ data: { externalUserid: "wmTrTest03", wecomUserid: "trTestC", userId: p.c.id, customerId: customer.id, firstAddAt: new Date() } });
+      await transferOnJob(p.manager, { followId: follow.id, toUserId: p.b.id }, { db: tx, client: clientWith(2) });
+      await unbindCustomerWecom(p.manager, customer.id, "认领时手机号输错了", tx);
+      expect((await tx.wecomTransfer.findFirstOrThrow({ where: { followId: follow.id } })).customerId).toBeNull();
+      await processTransfers({ db: tx, client: clientWith(1) });
+      const moved = await tx.wecomFollow.findUniqueOrThrow({ where: { externalUserid_wecomUserid: { externalUserid: "wmTrTest03", wecomUserid: "trTestB" } } });
+      expect(moved).toMatchObject({ status: "ACTIVE", customerId: null }); // 不再认回原客户
+
+      // 客户本人又绑回来（这里直接写档案，代表侧边栏认领或扫码之后的状态），再有店员加他：这个微信的好友关系都认回客户
+      await tx.customer.update({ where: { id: customer.id }, data: { wecomExternalUserid: "wmTrTest03" } });
+      await onAddExternalContact({ UserID: "trTestA", ExternalUserID: "wmTrTest03" }, { db: tx, client: createSimulatedWecomClient(), now: new Date(), simulated: true });
+      expect(await tx.wecomFollow.count({ where: { externalUserid: "wmTrTest03", customerId: customer.id } })).toBe(3);
+      expect((await tx.wecomFollow.findUniqueOrThrow({ where: { id: other.id } })).customerId).toBe(customer.id);
+
+      // 卡住的：记了已提交、企业微信那边查不到
+      const stuckFollow = await tx.wecomFollow.create({ data: { externalUserid: "wmTrTest04", wecomUserid: "trTestA", userId: p.a.id, firstAddAt: new Date() } });
+      const stuck = await tx.wecomTransfer.create({
+        data: { kind: "ON_JOB", followId: stuckFollow.id, externalUserid: "wmTrTest04", fromUserId: p.a.id, fromWecomUserid: "trTestA", toUserId: p.b.id, toWecomUserid: "trTestB", status: "SUBMITTED", createdById: p.manager.id, submittedAt: new Date(Date.now() - (STUCK_DAYS + 2) * 24 * 3600 * 1000) },
+      });
+      const freshFollow = await tx.wecomFollow.create({ data: { externalUserid: "wmTrTest05", wecomUserid: "trTestA", userId: p.a.id, firstAddAt: new Date() } });
+      const fresh = await tx.wecomTransfer.create({
+        data: { kind: "ON_JOB", followId: freshFollow.id, externalUserid: "wmTrTest05", fromUserId: p.a.id, fromWecomUserid: "trTestA", toUserId: p.c.id, toWecomUserid: "trTestC", status: "SUBMITTED", createdById: p.manager.id, submittedAt: new Date() },
+      });
+      const nothing: WecomClient = { ...createSimulatedWecomClient(), async getTransferResults() { return {}; } };
+      await processTransfers({ db: tx, client: nothing });
+      expect(await tx.wecomTransfer.findUniqueOrThrow({ where: { id: stuck.id } })).toMatchObject({ status: "FAILED", error: expect.stringContaining("查不到") });
+      expect((await tx.wecomTransfer.findUniqueOrThrow({ where: { id: fresh.id } })).status).toBe("SUBMITTED"); // 刚提交的还等着
     });
   });
 

@@ -149,20 +149,29 @@ function chunks<T>(rows: T[], size: number): T[][] {
   return out;
 }
 
-/** 接替完毕：原来那条标“已转走”，接手人名下建（或恢复）一条跟进关系，客户档案的绑定不变 */
+/**
+ * 接替完毕：原来那条标“已转走”，接手人名下建（或恢复）一条跟进关系，客户档案的绑定不变。
+ * 新跟进关系认的客户按这个微信现在绑的客户写（转接期间解绑了就是空的），不用提交时记下的那个。
+ */
 async function finishDone(db: Db, t: TransferRow, now: Date) {
   await withTx(db, async (tx) => {
     const changed = await tx.wecomTransfer.updateMany({ where: { id: t.id, status: "SUBMITTED" }, data: { status: "DONE", finishedAt: now } });
     if (changed.count === 0) return;
+    const bound = await tx.customer.findFirst({ where: { wecomExternalUserid: t.externalUserid }, select: { id: true } });
+    const customerId = bound?.id ?? null;
     await tx.wecomFollow.updateMany({ where: { id: t.followId, status: "ACTIVE" }, data: { status: "DELETED", deletedBy: "TRANSFERRED", deletedAt: now } });
     await tx.wecomFollow.upsert({
       where: { externalUserid_wecomUserid: { externalUserid: t.externalUserid, wecomUserid: t.toWecomUserid } },
-      create: { externalUserid: t.externalUserid, wecomUserid: t.toWecomUserid, userId: t.toUserId, customerId: t.customerId, state: "transfer", firstAddAt: now },
-      update: { status: "ACTIVE", deletedAt: null, deletedBy: null, userId: t.toUserId, customerId: t.customerId ?? undefined },
+      create: { externalUserid: t.externalUserid, wecomUserid: t.toWecomUserid, userId: t.toUserId, customerId, state: "transfer", firstAddAt: now },
+      update: { status: "ACTIVE", deletedAt: null, deletedBy: null, userId: t.toUserId, customerId },
     });
+    if (t.customerId !== customerId) await tx.wecomTransfer.update({ where: { id: t.id }, data: { customerId } });
     await writeAudit({ userId: null, action: "wecom.transfer.done", entity: "wecom_transfer", entityId: t.id, detail: { externalUserid: t.externalUserid, kind: t.kind } }, tx);
   });
 }
+
+/** 提交后过了几天企业微信还查不到，就当没提交上（客户 24 小时内能拒绝，超过就自动接替，3 天足够） */
+export const STUCK_DAYS = 3;
 
 /** 每日任务和页面上的“查进度”：离职的先看成员删了没、删了就提交；已提交的查结果回写 */
 export async function processTransfers(options: { db?: Db; client?: WecomClient; now?: Date; storeId?: number } = {}) {
@@ -229,6 +238,10 @@ export async function processTransfers(options: { db?: Db; client?: WecomClient;
           report.refused++;
         } else if (status === 4 || status === 5) {
           await db.wecomTransfer.updateMany({ where: { id: t.id, status: "SUBMITTED" }, data: { status: "FAILED", finishedAt: now, error: RESULT_TEXT[status] } });
+          report.failed++;
+        } else if (status === undefined && t.submittedAt && now.getTime() - t.submittedAt.getTime() > STUCK_DAYS * 24 * 3600 * 1000) {
+          // 记了“已提交”、企业微信那边一直查不到（比如进程正好在记下和调接口之间退出了）：标没成，让人重新安排，不挡着这个客户再转
+          await db.wecomTransfer.updateMany({ where: { id: t.id, status: "SUBMITTED" }, data: { status: "FAILED", finishedAt: now, error: "企业微信查不到这次转接，可能没提交上，请重新安排" } });
           report.failed++;
         } else {
           report.pending++; // 2 等待接替，或者还查不到
