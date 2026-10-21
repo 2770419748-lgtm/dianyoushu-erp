@@ -12,7 +12,7 @@ import type { CustomerEntitlement } from "@/server/entitlement/entitlement-servi
 import type { CustomerWecom } from "@/server/wecom/contact-service";
 import type { RepairHistoryRow } from "@/server/repair/repair-service";
 import { RepairHistory } from "../../repairs/repair-history";
-import { WecomTransferButton } from "./wecom-transfer-button";
+import { WecomTransferButton, WecomUnbindButton } from "./wecom-transfer-button";
 
 type OrderRow = CustomerDetail["orders"][number];
 
@@ -87,7 +87,7 @@ export function CustomerDetailView({ detail, wecom, repairs, transferTargets = [
         <Table rowKey="id" size="small" columns={entitlementColumns} dataSource={entitlements} pagination={false} scroll={{ x: true }} locale={{ emptyText: "没有买过碎屏险、延保" }} />
       </Card>
 
-      {wecom ? <WecomSection wecom={wecom} transferTargets={transferTargets} /> : null}
+      {wecom ? <WecomSection wecom={wecom} transferTargets={transferTargets} customerId={customer.id} /> : null}
 
       {repairs.length > 0 ? <RepairHistory rows={repairs} /> : null}
 
@@ -100,7 +100,7 @@ export function CustomerDetailView({ detail, wecom, repairs, transferTargets = [
 }
 
 /** 企业微信区：绑定状态、跟进人（按口径第 12 节只显示你看得到的）、标签 */
-function WecomSection({ wecom, transferTargets }: { wecom: CustomerWecom; transferTargets: { id: number; label: string }[] }) {
+function WecomSection({ wecom, transferTargets, customerId }: { wecom: CustomerWecom; transferTargets: { id: number; label: string }[]; customerId: number }) {
   const columns: TableColumnsType<FollowRow> = [
     { title: "跟进员工", dataIndex: "staff" },
     { title: "门店", dataIndex: "store", render: (v: string | null) => v ?? "-" },
@@ -129,7 +129,7 @@ function WecomSection({ wecom, transferTargets }: { wecom: CustomerWecom; transf
       : []),
   ];
   return (
-    <Card title="企业微信">
+    <Card title="企业微信" extra={wecom.canUnbind ? <WecomUnbindButton customerId={customerId} /> : null}>
       <Space orientation="vertical" style={{ width: "100%" }}>
         <Typography.Text>
           {wecom.bound

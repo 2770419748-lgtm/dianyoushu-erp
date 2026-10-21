@@ -22,6 +22,8 @@ import type { PrismaClient } from "../src/generated/prisma/client";
 //     作废的单不该有待开票、已开票的；申请之后又退了货的，不该还是待开票、已开票（要撤回、红冲）；开了的要有号码和开具时间，红冲了的要有红字号码。
 // 11. 审批单（口径第 17 节）：已通过的要有审批人、时间和做出来的单据，开单审批做出来的销售单是同一家店的；没做成的要有原因；
 //     驳回的要有原因；待审批、撤回的不该有审批人和结果。
+// 12. 企业微信（口径第 12 节第三步）：好友关系、客服会话认的客户，这个客户绑的微信要就是这个；接替完毕的继承，接手人名下要有这条好友关系；
+//     继承的原跟进关系要是这个客户的；客服会话里“客户发消息后回了几条”不超过 5。
 
 export interface IntegrityResult {
   accessory: number;
@@ -35,6 +37,7 @@ export interface IntegrityResult {
   subsidy: number;
   invoice: number;
   approval: number;
+  wecom: number;
 }
 
 export async function runIntegrityChecks(prisma: PrismaClient): Promise<IntegrityResult> {
@@ -172,6 +175,14 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
         WHERE a.status = 'EXECUTED' AND a.action = 'SALE'
           AND NOT EXISTS (SELECT 1 FROM sales_orders o WHERE o.id = a.result_id AND o.store_id = a.store_id))
     )::bigint AS n`;
+  const [wecom] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT (
+      (SELECT COUNT(*) FROM wecom_follows f JOIN customers c ON c.id = f.customer_id WHERE c.wecom_external_userid IS DISTINCT FROM f.external_userid)
+      + (SELECT COUNT(*) FROM wecom_kf_sessions k JOIN customers c ON c.id = k.customer_id WHERE c.wecom_external_userid IS DISTINCT FROM k.external_userid)
+      + (SELECT COUNT(*) FROM wecom_transfers t
+          WHERE t.status = 'DONE' AND NOT EXISTS (SELECT 1 FROM wecom_follows f WHERE f.external_userid = t.external_userid AND f.wecom_userid = t.to_wecom_userid))
+      + (SELECT COUNT(*) FROM wecom_transfers t JOIN wecom_follows f ON f.id = t.follow_id WHERE f.external_userid <> t.external_userid OR f.wecom_userid <> t.from_wecom_userid)
+    )::bigint AS n`;
   return {
     accessory: Number(accessory!.n) + Number(accessoryLast!.n) + Number(accessoryOrphan!.n),
     device: Number(device!.n),
@@ -184,13 +195,14 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
     subsidy: Number(subsidy!.n),
     invoice: Number(invoice!.n),
     approval: Number(approval!.n),
+    wecom: Number(wecom!.n),
   };
 }
 
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {
-  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval === 0;
+  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval + r.wecom === 0;
 }

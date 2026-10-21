@@ -38,6 +38,9 @@ export interface SalesItemInput {
   serviceDeviceId?: unknown; // 服务行保的是本单哪台机器（机器 id），可不选
   qty?: unknown; // 小件数量
   unitPriceFen?: unknown; // 不填按门店售价 / 指导价
+  /** 审批单里写死的原价、服务期限（口径第 17 节）：只在审批通过后执行时认，平时开单传了也不认 */
+  frozenListPriceFen?: unknown;
+  frozenServiceMonths?: unknown;
 }
 
 export interface SalesOrderInput {
@@ -66,22 +69,28 @@ function optionalFen(value: unknown, label: string): number | null {
   return n;
 }
 
-function parseOrder(input: SalesOrderInput) {
+function frozenInt(value: unknown, trusted: boolean, max: number): number | null {
+  if (!trusted || value === undefined || value === null) return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 && n <= max ? n : null;
+}
+
+function parseOrder(input: SalesOrderInput, trustFrozen = false) {
   const storeId = requireId(input.storeId, "门店");
   const customerId = input.customerId ? requireId(input.customerId, "客户") : null;
   if (!Array.isArray(input.items) || input.items.length === 0) throw new SalesError("至少要有一件商品");
-  const deviceLines: { deviceId: number; unitPriceFen: number | null }[] = [];
-  const accessoryLines: { skuId: number; qty: number; unitPriceFen: number | null; serviceDeviceId: number | null }[] = [];
+  const deviceLines: { deviceId: number; unitPriceFen: number | null; frozenListPriceFen: number | null }[] = [];
+  const accessoryLines: { skuId: number; qty: number; unitPriceFen: number | null; serviceDeviceId: number | null; frozenListPriceFen: number | null; frozenServiceMonths: number | null }[] = [];
   input.items.forEach((item, index) => {
     const unitPriceFen = optionalFen(item.unitPriceFen, `第 ${index + 1} 行单价`);
     if (item.deviceId) {
-      deviceLines.push({ deviceId: requireId(item.deviceId, "机器"), unitPriceFen });
+      deviceLines.push({ deviceId: requireId(item.deviceId, "机器"), unitPriceFen, frozenListPriceFen: frozenInt(item.frozenListPriceFen, trustFrozen, MAX_AMOUNT_FEN) });
     } else {
       const qty = Number(item.qty ?? 1);
       if (!Number.isInteger(qty) || qty <= 0) throw new SalesError(`第 ${index + 1} 行数量必须是正整数`);
       if (!isValidQty(qty)) throw new SalesError(`数量不对：第 ${index + 1} 行最多 ${MAX_QTY} 件`);
       const serviceDeviceId = item.serviceDeviceId ? requireId(item.serviceDeviceId, "服务保的机器") : null;
-      accessoryLines.push({ skuId: requireId(item.skuId, "配件"), qty, unitPriceFen, serviceDeviceId });
+      accessoryLines.push({ skuId: requireId(item.skuId, "配件"), qty, unitPriceFen, serviceDeviceId, frozenListPriceFen: frozenInt(item.frozenListPriceFen, trustFrozen, MAX_AMOUNT_FEN), frozenServiceMonths: frozenInt(item.frozenServiceMonths, trustFrozen, 120) });
     }
   });
   if (new Set(deviceLines.map((d) => d.deviceId)).size !== deviceLines.length) throw new SalesError("同一台机器选了两次");
@@ -105,7 +114,7 @@ function wrapStockError(error: unknown): never {
 
 export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: SalesOrderInput, options: ApprovalCheckOptions = {}) {
   if (!canSell(user.role)) throw new SalesError("你的角色不能开单");
-  const data = parseOrder(input);
+  const data = parseOrder(input, options.approved === true);
   const store = await tx.store.findUnique({ where: { id: data.storeId }, select: { id: true, regionId: true, isActive: true } });
   if (!store || !store.isActive) throw new SalesError("门店不存在或已停用");
   assertStoreAccess(user, store);
@@ -132,7 +141,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     if (!deviceCanSell(device.status)) throw new SalesError(`${device.code} 现在不能卖`);
     // 原价 = 开单时的门店售价（没设就是指导价）；成交价可以手改，两个都存，单据和日志上能看出改过价
     // 门店售价、指导价都是 0（回收机用通用商品）时退到这台的成本，见 deviceDefaultPriceFen
-    const listPriceFen = (await resolveUnitPrice(tx, data.storeId, device.skuId, device.sku.guidePriceFen)) || device.costFen;
+    const listPriceFen = d.frozenListPriceFen ?? ((await resolveUnitPrice(tx, data.storeId, device.skuId, device.sku.guidePriceFen)) || device.costFen);
     const unitPriceFen = d.unitPriceFen ?? listPriceFen;
     if (device.tradeInOrderId === null) newDeviceCategory.set(lines.length, device.sku.model.categoryId);
     lines.push({ skuId: device.skuId, deviceId: device.id, qty: 1, listPriceFen, unitPriceFen, lineTotalFen: unitPriceFen, costFen: device.costFen });
@@ -149,11 +158,11 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
       if (sku.serviceKind === "EXTENDED_WARRANTY" && a.serviceDeviceId === null) throw new SalesError(`${sku.name} 要和机器同一张单买，选保本单哪台机器（从这台的保修到期次日起算）`);
       const key = `${sku.id}:${a.serviceDeviceId ?? "无"}`;
       if (Array.from(serviceOf.entries()).some(([i, s]) => `${lines[i]!.skuId}:${s.deviceId ?? "无"}` === key)) throw new SalesError(`同一台机器的 ${sku.name} 选了两次`);
-      serviceOf.set(lines.length, { deviceId: a.serviceDeviceId, months: sku.serviceMonths ?? 0, kind: sku.serviceKind });
+      serviceOf.set(lines.length, { deviceId: a.serviceDeviceId, months: a.frozenServiceMonths || (sku.serviceMonths ?? 0), kind: sku.serviceKind });
     } else if (a.serviceDeviceId !== null) {
       throw new SalesError(`${sku.name} 不是服务类商品，不用选保哪台机器`);
     }
-    const listPriceFen = await resolveUnitPrice(tx, data.storeId, sku.id, sku.guidePriceFen);
+    const listPriceFen = a.frozenListPriceFen ?? (await resolveUnitPrice(tx, data.storeId, sku.id, sku.guidePriceFen));
     const unitPriceFen = a.unitPriceFen ?? listPriceFen;
     lines.push({ skuId: sku.id, deviceId: null, qty: a.qty, listPriceFen, unitPriceFen, lineTotalFen: unitPriceFen * a.qty, costFen: sku.costPriceFen * a.qty });
     lineLabels.push(`${sku.name} × ${a.qty}：原价 ${yuan(listPriceFen)}，成交 ${yuan(unitPriceFen)}`);
@@ -211,7 +220,14 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   const listFen = lines.reduce((s, l) => s + l.listPriceFen * l.qty, 0);
   let deviceIndex = 0;
   let accessoryIndex = data.deviceLines.length;
-  const frozenInput: SalesOrderInput = { ...input, items: input.items.map((item) => ({ ...item, unitPriceFen: (item.deviceId ? lines[deviceIndex++] : lines[accessoryIndex++])!.unitPriceFen })) };
+  const frozenInput: SalesOrderInput = {
+    ...input,
+    items: input.items.map((item) => {
+      const index = item.deviceId ? deviceIndex++ : accessoryIndex++;
+      const line = lines[index]!;
+      return { ...item, unitPriceFen: line.unitPriceFen, frozenListPriceFen: line.listPriceFen, ...(serviceOf.has(index) ? { frozenServiceMonths: serviceOf.get(index)!.months } : {}) };
+    }),
+  };
   await checkApproval(
     tx,
     user,

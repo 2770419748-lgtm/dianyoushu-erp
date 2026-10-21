@@ -7,7 +7,7 @@ import { PermissionError } from "@/server/auth/scope";
 import { writeAudit } from "@/server/audit";
 import { isUniqueViolation } from "@/server/db-errors";
 import { lockRow } from "@/server/db-lock";
-import { type Db, getWecomClient, type TransferKindKey, translateWecomError, type WecomClient, WecomError, withTx } from "./client";
+import { asTx, type Db, getWecomClient, type TransferKindKey, translateWecomError, type WecomClient, WecomError, withTx } from "./client";
 
 // 企业微信客户继承（口径第 12 节第三步）：
 // - 在职转接：店长、总部在客户详情里把一个员工的客户转给另一个员工，马上提交企业微信；客户 24 小时内可以拒绝，同一个客户 90 天内最多转 2 次；
@@ -45,8 +45,9 @@ export async function transferOnJob(user: CurrentUser, input: { followId: unknow
   if (!Number.isInteger(followId) || !Number.isInteger(toUserId)) throw new WecomTransferError("选一个接手人");
   const db = options.db ?? prisma;
   const now = options.now ?? new Date();
+  let claimed: { id: number; externalUserid: string; fromWecomUserid: string; toWecomUserid: string; to: string; from: string };
   try {
-    return await withTx(db, async (tx) => {
+    claimed = await withTx(db, async (tx) => {
       if (!(await lockRow(tx, "wecom_follows", followId))) throw new WecomTransferError("这条跟进关系不存在");
       const follow = await tx.wecomFollow.findUniqueOrThrow({ where: { id: followId }, include: { user: { select: { id: true, name: true, storeId: true, isActive: true } } } });
       if (follow.status !== "ACTIVE") throw new WecomTransferError("这个客户已经不是好友了，转不了");
@@ -61,20 +62,47 @@ export async function transferOnJob(user: CurrentUser, input: { followId: unknow
       const recent = await tx.wecomTransfer.count({ where: { externalUserid: follow.externalUserid, kind: "ON_JOB", status: { in: ["SUBMITTED", "DONE"] }, createdAt: { gte: since } } });
       if (recent >= TRANSFER_LIMIT_COUNT) throw new WecomTransferError(`这个客户 ${TRANSFER_LIMIT_DAYS} 天内已经转过 ${TRANSFER_LIMIT_COUNT} 次了（企业微信的规定）`);
 
-      const client = options.client ?? getWecomClient();
-      const codes = await client.transferCustomers({ kind: "ON_JOB", handoverUserid: follow.wecomUserid, takeoverUserid: to.wecomUserid, externalUserids: [follow.externalUserid] });
-      const code = codes[follow.externalUserid] ?? -1;
-      if (code !== 0) throw new WecomTransferError(`企业微信没接受这次转接：${translateWecomError(code, "")}`);
       const row = await tx.wecomTransfer.create({
         data: { kind: "ON_JOB", followId, externalUserid: follow.externalUserid, customerId: follow.customerId, fromUserId: follow.userId, fromWecomUserid: follow.wecomUserid, toUserId: to.id, toWecomUserid: to.wecomUserid, status: "SUBMITTED", createdById: user.id, submittedAt: now },
       });
-      await writeAudit({ userId: user.id, action: "wecom.transfer.on_job", entity: "wecom_transfer", entityId: row.id, detail: { externalUserid: follow.externalUserid, from: follow.user?.name ?? follow.wecomUserid, to: to.name, mode: client.mode } }, tx);
-      return { id: row.id, to: to.name };
+      return { id: row.id, externalUserid: follow.externalUserid, fromWecomUserid: follow.wecomUserid, toWecomUserid: to.wecomUserid, to: to.name, from: follow.user?.name ?? follow.wecomUserid };
     });
   } catch (error) {
     if (isUniqueViolation(error)) throw new WecomTransferError("这个客户正在转接中，等结果出来再说");
     throw error;
   }
+  // 事务外调企业微信（单次最多几秒，不占着数据库的锁）
+  const client = options.client ?? getWecomClient();
+  let failure: string | null = null;
+  try {
+    const codes = await client.transferCustomers({ kind: "ON_JOB", handoverUserid: claimed.fromWecomUserid, takeoverUserid: claimed.toWecomUserid, externalUserids: [claimed.externalUserid] });
+    const code = codes[claimed.externalUserid] ?? -1;
+    if (code !== 0) failure = translateWecomError(code, "");
+  } catch (error) {
+    failure = error instanceof Error ? error.message : String(error);
+  }
+  if (failure) {
+    await db.wecomTransfer.updateMany({ where: { id: claimed.id, status: "SUBMITTED" }, data: { status: "FAILED", finishedAt: new Date(), error: `企业微信没接受：${failure}`.slice(0, 300) } });
+    throw new WecomTransferError(`企业微信没接受这次转接：${failure}`);
+  }
+  await writeAudit({ userId: user.id, action: "wecom.transfer.on_job", entity: "wecom_transfer", entityId: claimed.id, detail: { externalUserid: claimed.externalUserid, from: claimed.from, to: claimed.to, mode: client.mode } }, asTx(db));
+  return { id: claimed.id, to: claimed.to };
+}
+
+/** 员工重新启用了：他还在“等删除成员”的离职继承任务没意义了，取消掉（2026-10-21 复查后补） */
+export async function cancelResignedTransfersFor(db: Db, userId: number, reason: string) {
+  return db.wecomTransfer.updateMany({ where: { fromUserId: userId, status: "WAITING_DELETE" }, data: { status: "FAILED", finishedAt: new Date(), error: reason } });
+}
+
+/** 客户继承页“取消”：还没提交的离职继承（店长本店、总部） */
+export async function cancelTransfer(user: CurrentUser, id: number, db: Db = prisma) {
+  assertCanTransfer(user);
+  const t = await db.wecomTransfer.findUnique({ where: { id }, include: { fromUser: { select: { storeId: true } } } });
+  if (!t) throw new WecomTransferError("这条继承不存在");
+  if (user.role === "STORE_MANAGER" && t.fromUser?.storeId !== user.storeId) throw new WecomTransferError("店长只能取消本店员工的");
+  const changed = await db.wecomTransfer.updateMany({ where: { id, status: "WAITING_DELETE" }, data: { status: "FAILED", finishedAt: new Date(), error: `${user.name}手工取消` } });
+  if (changed.count === 0) throw new WecomTransferError("只有还在“等删除成员”的能取消，已经提交给企业微信的等结果");
+  await writeAudit({ userId: user.id, action: "wecom.transfer.cancel", entity: "wecom_transfer", entityId: id, detail: { externalUserid: t.externalUserid } }, asTx(db));
 }
 
 /**
@@ -137,14 +165,15 @@ async function finishDone(db: Db, t: TransferRow, now: Date) {
 }
 
 /** 每日任务和页面上的“查进度”：离职的先看成员删了没、删了就提交；已提交的查结果回写 */
-export async function processTransfers(options: { db?: Db; client?: WecomClient; now?: Date } = {}) {
+export async function processTransfers(options: { db?: Db; client?: WecomClient; now?: Date; storeId?: number } = {}) {
   const db = options.db ?? prisma;
   const client = options.client ?? getWecomClient();
   const now = options.now ?? new Date();
   const report = { submitted: 0, waitingDelete: 0, done: 0, refused: 0, failed: 0, pending: 0, errors: [] as string[] };
+  const scope: Prisma.WecomTransferWhereInput = options.storeId ? { fromUser: { storeId: options.storeId } } : {};
 
   // 1. 离职继承：等删除成员的
-  const waiting = await db.wecomTransfer.findMany({ where: { status: "WAITING_DELETE" }, orderBy: { id: "asc" }, take: 1000 });
+  const waiting = await db.wecomTransfer.findMany({ where: { status: "WAITING_DELETE", ...scope }, orderBy: { id: "asc" }, take: 1000 });
   const deletedCache = new Map<string, boolean>();
   for (const [key, rows] of groupBy(waiting, (t) => `${t.fromWecomUserid}|${t.toWecomUserid}`)) {
     const [from, to] = key.split("|") as [string, string];
@@ -155,14 +184,26 @@ export async function processTransfers(options: { db?: Db; client?: WecomClient;
         continue;
       }
       for (const part of chunks(rows, 100)) {
-        const codes = await client.transferCustomers({ kind: "RESIGNED", handoverUserid: from, takeoverUserid: to, externalUserids: part.map((t) => t.externalUserid) });
+        // 先占住：条件更新成功的才归这一次提交（另一个同时在跑的“查进度”占不到，就不会重复提交）
+        const mine: typeof part = [];
         for (const t of part) {
+          const claimedRow = await db.wecomTransfer.updateMany({ where: { id: t.id, status: "WAITING_DELETE" }, data: { status: "SUBMITTED", submittedAt: now } });
+          if (claimedRow.count === 1) mine.push(t);
+        }
+        if (mine.length === 0) continue;
+        let codes: Record<string, number>;
+        try {
+          codes = await client.transferCustomers({ kind: "RESIGNED", handoverUserid: from, takeoverUserid: to, externalUserids: mine.map((t) => t.externalUserid) });
+        } catch (error) {
+          // 整批没提交上：放回“等删除成员”，下次再试
+          await db.wecomTransfer.updateMany({ where: { id: { in: mine.map((t) => t.id) }, status: "SUBMITTED" }, data: { status: "WAITING_DELETE", submittedAt: null } });
+          throw error;
+        }
+        for (const t of mine) {
           const code = codes[t.externalUserid] ?? -1;
-          if (code === 0) {
-            await db.wecomTransfer.updateMany({ where: { id: t.id, status: "WAITING_DELETE" }, data: { status: "SUBMITTED", submittedAt: now } });
-            report.submitted++;
-          } else {
-            await db.wecomTransfer.updateMany({ where: { id: t.id, status: "WAITING_DELETE" }, data: { status: "FAILED", finishedAt: now, error: translateWecomError(code, "") } });
+          if (code === 0) report.submitted++;
+          else {
+            await db.wecomTransfer.updateMany({ where: { id: t.id, status: "SUBMITTED" }, data: { status: "FAILED", finishedAt: now, error: translateWecomError(code, "") } });
             report.failed++;
           }
         }
@@ -173,7 +214,7 @@ export async function processTransfers(options: { db?: Db; client?: WecomClient;
   }
 
   // 2. 已提交的：查结果
-  const submitted = await db.wecomTransfer.findMany({ where: { status: "SUBMITTED" }, orderBy: { id: "asc" }, take: 2000 });
+  const submitted = await db.wecomTransfer.findMany({ where: { status: "SUBMITTED", ...scope }, orderBy: { id: "asc" }, take: 2000 });
   for (const [key, rows] of groupBy(submitted, (t) => `${t.kind}|${t.fromWecomUserid}|${t.toWecomUserid}`)) {
     const [kind, from, to] = key.split("|") as [TransferKindKey, string, string];
     try {
@@ -203,7 +244,8 @@ export async function processTransfers(options: { db?: Db; client?: WecomClient;
 /** 页面上的“查进度”（店长、总部）：和每日任务做的一样 */
 export async function processTransfersNow(user: CurrentUser) {
   assertCanTransfer(user);
-  const report = await processTransfers();
+  // 店长只处理本店员工的（结果数和本店页面对得上，也不会看到别店的企业微信账号）
+  const report = await processTransfers(user.role === "STORE_MANAGER" ? { storeId: user.storeId ?? -1 } : {});
   await writeAudit({ userId: user.id, action: "wecom.transfer.process", detail: report });
   return report;
 }

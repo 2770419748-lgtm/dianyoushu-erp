@@ -108,7 +108,7 @@ export function KfView({ mode, list, detail }: { mode: "real" | "simulated"; lis
                 if (m.msgType === "event") {
                   return (
                     <Typography.Text key={m.id} type="secondary" style={{ textAlign: "center", fontSize: 12 }}>
-                      {m.content === "[转人工]" ? `—— 转人工：${m.note ?? ""} ——` : `—— ${m.content.replace(/^[|]$/g, "")} ——`}
+                      {m.content === "[转人工]" || m.content === "[转人工失败]" ? `—— ${m.content.slice(1, -1)}：${m.note ?? ""} ——` : `—— ${m.content.replace(/^[|]$/g, "")} ——`}
                     </Typography.Text>
                   );
                 }

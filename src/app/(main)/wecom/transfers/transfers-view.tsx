@@ -7,7 +7,7 @@ import { Alert, App, Button, Card, Modal, Select, Space, Statistic, Table, Tag, 
 import type { TableColumnsType } from "antd";
 import { formatDateTime } from "@/lib/format";
 import type { TransferPage } from "@/server/wecom/transfer-service";
-import { assignResignedAction, processTransfersAction } from "./actions";
+import { assignResignedAction, cancelTransferAction, processTransfersAction } from "./actions";
 
 // 客户继承：上面是统计和“查进度”，中间是还没安排接手人的离职员工，下面是最近的继承记录。
 
@@ -50,6 +50,7 @@ export function TransfersView({ mode, data }: { mode: "real" | "simulated"; data
     { title: "交给", dataIndex: "to" },
     { title: "进度", render: (_, r) => <Tag color={STATUS[r.status].color}>{STATUS[r.status].label}</Tag> },
     { title: "结果", render: (_, r) => r.error ?? (r.finishedAt ? formatDateTime(r.finishedAt) : r.submittedAt ? `${formatDateTime(r.submittedAt)} 提交` : "-") },
+    { title: "", render: (_, r) => (r.status === "WAITING_DELETE" ? <Button size="small" disabled={pending} onClick={() => act(() => cancelTransferAction(r.id))}>取消</Button> : null) },
   ];
 
   const c = data.counts;

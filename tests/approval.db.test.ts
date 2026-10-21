@@ -235,6 +235,7 @@ describe("审批（连本机库，事务回滚）", () => {
       expect(r.executed).toBe(true);
       const done = await tx.approvalRequest.findUniqueOrThrow({ where: { id: req.id } });
       expect((await tx.salesOrder.findUniqueOrThrow({ where: { id: done.resultId! } })).totalFen).toBe(f.priceFen - Math.round(f.priceFen / 10));
+      expect((await tx.salesOrderItem.findFirstOrThrow({ where: { orderId: done.resultId! } })).listPriceFen).toBe(f.priceFen); // 原价也是申请时的
       await tx.storePrice.deleteMany({ where: { storeId: f.storeId, skuId: f.skuId } }); // 价格改回来，后面的单按原价
 
       // 发起人批之前调到了别的店

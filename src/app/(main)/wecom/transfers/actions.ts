@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
 import { WecomError } from "@/server/wecom/client";
-import { createResignedTransfers, processTransfersNow, WecomTransferError } from "@/server/wecom/transfer-service";
+import { cancelTransfer, createResignedTransfers, processTransfersNow, WecomTransferError } from "@/server/wecom/transfer-service";
 
 // 客户继承页（店长、总部）的 Server Function：查进度、给离职员工的客户安排接手人。
 
@@ -28,6 +28,14 @@ export async function processTransfersAction() {
     const r = await processTransfersNow(user);
     const parts = [`提交 ${r.submitted} 个`, `接替完毕 ${r.done} 个`, `客户拒绝 ${r.refused} 个`, `失败 ${r.failed} 个`, `还在等 ${r.pending + r.waitingDelete} 个`];
     return `查完了：${parts.join("，")}${r.errors.length > 0 ? `；出错：${r.errors.join("；")}` : ""}`;
+  });
+}
+
+export async function cancelTransferAction(id: number) {
+  const user = await requireUser();
+  return run(async () => {
+    await cancelTransfer(user, id);
+    return "取消了";
   });
 }
 

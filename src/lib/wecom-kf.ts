@@ -29,13 +29,14 @@ export function parseKfMessage(raw: Record<string, unknown>): KfInboundMessage {
   };
 }
 
-export type KfIntent = "HUMAN" | "MY_ENTITLEMENT" | "CLAIM" | "WARRANTY" | "HOURS" | "PRICE" | "UNKNOWN";
+export type KfIntent = "HUMAN" | "MY_ENTITLEMENT" | "CLAIM" | "WARRANTY" | "REPAIR" | "HOURS" | "PRICE" | "UNKNOWN";
 
 export const KF_INTENT_LABELS: Record<KfIntent, string> = {
   HUMAN: "转人工",
   MY_ENTITLEMENT: "我的保障",
   CLAIM: "理赔",
   WARRANTY: "保修政策",
+  REPAIR: "手机坏了",
   HOURS: "营业时间和地址",
   PRICE: "价格和有没有货",
   UNKNOWN: "没听懂",
@@ -54,10 +55,11 @@ export const KF_RETENTION_DAYS = 180;
  * 再看“我的保障”（比“保修政策”具体），理赔、保修、营业时间地址、价格库存。
  */
 const RULES: [Exclude<KfIntent, "UNKNOWN">, RegExp][] = [
-  ["HUMAN", /人工|真人|投诉|退货|退款|换货|维修报价|修.{0,4}多少钱|找店长|转接/],
+  ["HUMAN", /人工|真人|投诉|退货|退款|退钱|我想退|要退|换货|维修报价|(?<!保)修.{0,4}多少钱|找店长|转接/],
   ["MY_ENTITLEMENT", /我的(保障|保险|碎屏险|延保|保修)|(保险|碎屏险|延保|保修).{0,6}(到期|到什么时候|到哪天|还有多久|还剩|过期)|我.{0,8}买的.{0,10}(保修|保险|碎屏险|延保)/],
   ["CLAIM", /理赔|怎么赔|赔付|摔(坏|碎)|屏(幕)?(碎|裂)|(碎屏险|延保).{0,6}(怎么|如何)(用|赔)/],
   ["WARRANTY", /保修|三包|质保/],
+  ["REPAIR", /坏了|坏掉|开不了机|开不开机|不开机|没反应|黑屏|花屏|进水|充不进电|要修|维修/],
   ["HOURS", /营业|几点|开门|关门|下班|地址|在哪|怎么走|门店|店在/],
   ["PRICE", /多少钱|价格|价钱|报价|售价|有货|有没有货|库存|现货|几多钱|卖多少/],
 ];
@@ -92,14 +94,38 @@ export interface ModelCandidate {
  * 按客户说的话找型号：话里包含型号名（“华为mate70多少钱” 包含 “mate70”），或型号名包含这句话（“iphone16” 是 “iPhone 16 Pro Max” 的一部分）。
  * 话里完整说出型号名的优先，越长越具体；只是型号名的一部分的，越短越接近。最多给 3 个。
  */
-export function matchModels(models: ModelCandidate[], query: string): ModelCandidate[] {
+/** 客户常说的品牌叫法换成型号名里的写法（“苹果16”就是“iPhone 16”） */
+const BRAND_ALIASES: [RegExp, string][] = [[/苹果|apple/g, "iphone"]];
+
+export function applyBrandAliases(query: string): string {
+  return BRAND_ALIASES.reduce((q, [re, to]) => (q.includes("iphone") ? q : q.replace(re, to)), query);
+}
+
+/** 话里完整说出了这个型号：型号名只有数字的（一加的“13”）要连牌子一起说才算，不然“13”谁都像 */
+function saysModel(query: string, m: ModelCandidate): boolean {
+  const name = normalizeName(m.name);
+  const full = normalizeName(m.brand + m.name);
+  return query.includes(full) || (!/^\d+$/.test(name) && query.includes(name));
+}
+
+/** 客户只说了型号的一部分（“pro”“13”），对上好几个牌子的型号：先问是哪个牌子，别一下列一堆 */
+export function isAmbiguousModelQuery(models: ModelCandidate[], query: string): boolean {
+  const q = applyBrandAliases(query);
+  const said = models.some((m) => saysModel(q, m));
+  if (said) return false;
+  const matched = matchModels(models, query);
+  return new Set(matched.map((m) => m.brand)).size > 1;
+}
+
+export function matchModels(models: ModelCandidate[], rawQuery: string): ModelCandidate[] {
+  const query = applyBrandAliases(rawQuery);
   const said: { model: ModelCandidate; name: string }[] = [];
   const partial: { model: ModelCandidate; name: string }[] = [];
   for (const m of models) {
     const name = normalizeName(m.name);
     const full = normalizeName(m.brand + m.name);
     if (name.length < 2) continue;
-    if (query.includes(full) || query.includes(name)) said.push({ model: m, name });
+    if (saysModel(query, m)) said.push({ model: m, name });
     else if (name.includes(query) || full.includes(query)) partial.push({ model: m, name });
   }
   if (said.length > 0) {
@@ -133,5 +159,9 @@ export const KF_CLAIM_TEXT =
   "碎屏险、延保理赔：带上机器到任意门店，店员按机器串号查到您的保障，在保障期内直接接件维修，不用先垫钱。碎屏险管屏幕碎裂，延保接在 12 个月保修后面、管非人为的质量问题。";
 
 export const KF_HUMAN_TEXT = "好的，已经帮您转人工客服，请稍等，接待人员马上来。";
+
+export const KF_HUMAN_FAILED_TEXT = "暂时转不了人工客服，麻烦直接打门店电话，或者稍后再发“人工”试试。";
+
+export const KF_REPAIR_TEXT = "手机坏了可以带到任意门店接件检测：保修期内非人为的质量问题免费修，买了碎屏险、延保的按保险来，进水、摔坏这类人为损坏要先检测报价。要估价或预约请回复“人工”。";
 
 export const KF_NEED_BIND_TEXT = "查保障要先核对身份：帮您转人工客服处理。也可以下次到店时扫店员的企业微信二维码，以后在这里就能直接查了。";

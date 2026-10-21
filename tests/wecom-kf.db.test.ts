@@ -112,6 +112,31 @@ describe("微信客服（连本机库，事务回滚）", () => {
     });
   });
 
+  it("转人工接口报错：先不告诉客户“已转人工”，改说打门店电话，会话还是自动答复，不整批失败", async (ctx) => {
+    if (!hq) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const sent: string[] = [];
+      const base = createSimulatedWecomClient();
+      const client: WecomClient = {
+        ...base,
+        async sendKfText(input) {
+          sent.push(input.text);
+          return base.sendKfText(input);
+        },
+        async transferKfToHuman() {
+          throw new Error("会话状态不允许转接（95016）");
+        },
+      };
+      const c = { db: tx, client, now: new Date(), simulated: true };
+      const ext = "wmKfTestFail01";
+      expect(await handleKfMessage(c, msg(ext, "我要投诉"))).toBe("replied");
+      expect(sent).toEqual([expect.stringContaining("暂时转不了人工")]);
+      expect((await tx.wecomKfSession.findFirstOrThrow({ where: { externalUserid: ext } })).state).toBe("AUTO");
+      expect(await tx.wecomKfMessage.count({ where: { session: { externalUserid: ext }, content: "[转人工失败]" } })).toBe(1);
+      expect(await handleKfMessage(c, msg(ext, "保修多久"))).toBe("replied"); // 后面的消息照常答
+    });
+  });
+
   it("我的保障只答绑定过档案的客户；拉消息按游标、存游标", async (ctx) => {
     if (!hq) return ctx.skip();
     await inRolledBackTx(async (tx) => {

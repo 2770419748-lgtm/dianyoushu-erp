@@ -9,7 +9,7 @@ import { getWecomClient, WecomError } from "@/server/wecom/client";
 import { WECOM_USERID_PATTERN, wecomMode } from "@/server/wecom/config";
 import { writeAudit } from "@/server/audit";
 import { isWecomWebhookUrl } from "@/lib/alerts";
-import { createResignedTransfers, WecomTransferError } from "@/server/wecom/transfer-service";
+import { cancelResignedTransfersFor, createResignedTransfers, WecomTransferError } from "@/server/wecom/transfer-service";
 
 // 组织管理服务层：区域、门店、员工的新增、编辑、停用。只有总部能调；每次写入记操作日志。
 // 页面里的 Server Function 只负责把表单值传进来，规则都在这里。
@@ -309,6 +309,10 @@ export async function setUserActive(actor: CurrentUser, id: number, isActive: bo
   const user = await prisma.user.update({ where: { id }, data: { isActive, sessionVersion: { increment: 1 } } });
   await writeAudit({ userId: actor.id, action: isActive ? "user.activate" : "user.deactivate", entity: "user", entityId: id });
   let notice: string | undefined;
+  if (isActive) {
+    const cancelled = await cancelResignedTransfersFor(prisma, id, "员工重新启用了，离职继承取消");
+    if (cancelled.count > 0) notice = `他还在等删除成员的 ${cancelled.count} 个离职继承取消了`;
+  }
   if (!isActive && options.takeoverUserId) {
     try {
       const result = await createResignedTransfers(actor, { fromUserId: id, toUserId: options.takeoverUserId });

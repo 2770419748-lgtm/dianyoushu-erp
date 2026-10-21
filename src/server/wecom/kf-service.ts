@@ -8,7 +8,10 @@ import {
   detectKfIntent,
   extractProductQuery,
   KF_CLAIM_TEXT,
+  KF_HUMAN_FAILED_TEXT,
   KF_HUMAN_TEXT,
+  KF_REPAIR_TEXT,
+  isAmbiguousModelQuery,
   KF_MAX_MISSES,
   KF_MENU_TEXT,
   KF_NEED_BIND_TEXT,
@@ -119,10 +122,9 @@ async function priceReply(db: Db, text: string): Promise<Reply> {
   const query = extractProductQuery(text);
   if (!query) return { text: "想问哪个机型？比如回复“iPhone 16 Pro 多少钱”。", miss: true };
   const models = await db.productModel.findMany({ where: { isActive: true, skus: { some: { isActive: true, isService: false } } }, select: { id: true, name: true, brand: { select: { name: true } } } });
-  const matched = matchModels(
-    models.map((m) => ({ id: m.id, name: m.name, brand: m.brand.name })),
-    query,
-  );
+  const candidates = models.map((m) => ({ id: m.id, name: m.name, brand: m.brand.name }));
+  if (isAmbiguousModelQuery(candidates, query)) return { text: "好几个牌子都有这个型号，是哪个牌子的？比如回复“小米 15 Pro 多少钱”。", miss: true };
+  const matched = matchModels(candidates, query);
   if (matched.length === 0) return { text: "没找到这个机型，换个说法试试（比如“小米 15 多少钱”），或者回复“人工”。", miss: true };
   const lines: string[] = [];
   for (const m of matched) {
@@ -151,6 +153,8 @@ async function composeReply(db: Db, intent: KfIntent, text: string, customerId: 
       return { text: KF_CLAIM_TEXT };
     case "WARRANTY":
       return { text: KF_WARRANTY_TEXT };
+    case "REPAIR":
+      return { text: KF_REPAIR_TEXT };
     case "HOURS":
       return { text: await hoursReply(db, customerId) };
     case "PRICE":
@@ -164,10 +168,24 @@ async function composeReply(db: Db, intent: KfIntent, text: string, customerId: 
 
 type Outcome = "duplicate" | "skipped" | "event" | "servicer" | "human" | "replied" | "transferred";
 
-async function transfer(ctx: HandlerContext, session: Session, reason: string) {
-  await ctx.client.transferKfToHuman({ openKfid: session.openKfid, externalUserid: session.externalUserid });
+/**
+ * 转人工：先调企业微信的接口，成功了再告诉客户“已经转人工”；接口报错就告诉客户打门店电话，会话还是自动答复。
+ * 不抛错：这一批里后面的消息照常处理。leadText 是转之前要先说的话（比如没绑定查保障的说明）。
+ */
+async function transfer(ctx: HandlerContext, session: Session, reason: string, leadText: string): Promise<boolean> {
+  try {
+    await ctx.client.transferKfToHuman({ openKfid: session.openKfid, externalUserid: session.externalUserid });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await ctx.db.wecomKfMessage.create({ data: { msgid: `note-${randomUUID()}`, sessionId: session.id, direction: "OUT", msgType: "event", content: "[转人工失败]", note: `${reason}；接口报错：${message}`.slice(0, 300), sentAt: ctx.now } });
+    await ctx.db.wecomKfSession.update({ where: { id: session.id }, data: { missCount: 0 } });
+    await sendReply(ctx, session.id, KF_HUMAN_FAILED_TEXT, "转人工没成功");
+    return false;
+  }
   await ctx.db.wecomKfSession.update({ where: { id: session.id }, data: { state: "HUMAN", humanAt: ctx.now, missCount: 0 } });
   await ctx.db.wecomKfMessage.create({ data: { msgid: `note-${randomUUID()}`, sessionId: session.id, direction: "OUT", msgType: "event", content: "[转人工]", note: reason, sentAt: ctx.now } });
+  await sendReply(ctx, session.id, leadText, null);
+  return true;
 }
 
 export async function handleKfMessage(ctx: HandlerContext, m: KfInboundMessage): Promise<Outcome> {
@@ -217,16 +235,13 @@ export async function handleKfMessage(ctx: HandlerContext, m: KfInboundMessage):
   const reply = await composeReply(ctx.db, intent, text, customerId, m.msgType);
   const misses = reply.miss ? current.missCount + 1 : 0;
   if (reply.miss && misses >= KF_MAX_MISSES) {
-    await sendReply(ctx, session.id, `还是没太明白，${KF_HUMAN_TEXT}`, "连着两句没听懂，转人工");
-    await transfer(ctx, current, "连着两句没听懂");
-    return "transferred";
+    return (await transfer(ctx, current, "连着两句没听懂", `还是没太明白，${KF_HUMAN_TEXT}`)) ? "transferred" : "replied";
   }
   await ctx.db.wecomKfSession.update({ where: { id: session.id }, data: { missCount: misses } });
-  await sendReply(ctx, session.id, reply.text, null);
   if (reply.transfer) {
-    await transfer(ctx, current, intent === "MY_ENTITLEMENT" ? "没绑定档案，查保障要人工核对身份" : "客户要人工");
-    return "transferred";
+    return (await transfer(ctx, current, intent === "MY_ENTITLEMENT" ? "没绑定档案，查保障要人工核对身份" : "客户要人工", reply.text)) ? "transferred" : "replied";
   }
+  await sendReply(ctx, session.id, reply.text, null);
   return "replied";
 }
 

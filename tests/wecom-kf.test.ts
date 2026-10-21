@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canSendKf, detectKfIntent, extractProductQuery, matchModels, normalizeName, parseKfMessage } from "@/lib/wecom-kf";
+import { canSendKf, detectKfIntent, extractProductQuery, isAmbiguousModelQuery, matchModels, normalizeName, parseKfMessage } from "@/lib/wecom-kf";
 
 // 微信客服（口径第 12 节第三步）：认意图、抽机型、找型号、48 小时 5 条、解析企业微信的消息。纯函数，不连库。
 
@@ -17,6 +17,11 @@ describe("认意图", () => {
     expect(detectKfIntent("门店地址在哪")).toBe("HOURS");
     expect(detectKfIntent("iPhone 16 Pro 多少钱？有货吗")).toBe("PRICE");
     expect(detectKfIntent("在吗")).toBe("UNKNOWN");
+    // 复查后补
+    expect(detectKfIntent("退钱")).toBe("HUMAN");
+    expect(detectKfIntent("我想退")).toBe("HUMAN");
+    expect(detectKfIntent("我的手机坏了")).toBe("REPAIR");
+    expect(detectKfIntent("保修多少钱")).toBe("WARRANTY");
     expect(detectKfIntent("   ")).toBe("UNKNOWN");
   });
 });
@@ -41,6 +46,20 @@ describe("找型号", () => {
     expect(matchModels(models, "华为mate70").map((m) => m.id)).toEqual([4]);
     expect(matchModels(models, "iphone").map((m) => m.id)).toEqual([1, 2, 3]);
     expect(matchModels(models, "pixel9")).toEqual([]);
+    expect(matchModels(models, "苹果16").map((m) => m.id)).toEqual([1]); // “苹果”当成 iPhone
+  });
+
+  it("只说了“pro”“13”这种好几个牌子都有的：先问牌子", () => {
+    const many = [
+      { id: 1, name: "15 Pro", brand: "小米" },
+      { id: 2, name: "Mate 70 Pro", brand: "华为" },
+      { id: 3, name: "13", brand: "一加" },
+      { id: 4, name: "nova 13", brand: "华为" },
+    ];
+    expect(isAmbiguousModelQuery(many, "pro")).toBe(true);
+    expect(isAmbiguousModelQuery(many, "13")).toBe(true);
+    expect(isAmbiguousModelQuery(many, "mate70pro")).toBe(false);
+    expect(isAmbiguousModelQuery(many, "nova13")).toBe(false);
   });
 });
 

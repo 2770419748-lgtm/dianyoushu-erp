@@ -254,6 +254,8 @@ export async function getCustomerWecom(user: CurrentUser, customerId: number) {
     : [];
   return {
     bound: customer.wecomExternalUserid ? { nickname: customer.wecomNickname, boundAt: customer.wecomBoundAt } : null,
+    // 绑错了能解绑（口径第 12 节第三步，2026-10-21 复查后补）：总部；店长要这个微信加的是本店员工
+    canUnbind: customer.wecomExternalUserid !== null && (user.role === "HQ" || (user.role === "STORE_MANAGER" && follows.some((f) => f.user?.store?.id === user.storeId))),
     follows: visible.map((f) => {
       const open = f.transfers[0] ?? null;
       // 能不能“转接跟进人”（口径第 12 节第三步）：店长转本店在职员工的，总部任意；正在转接的不能再转
@@ -266,5 +268,28 @@ export async function getCustomerWecom(user: CurrentUser, customerId: number) {
 }
 
 export type CustomerWecom = NonNullable<Awaited<ReturnType<typeof getCustomerWecom>>>;
+
+/**
+ * 解绑客户档案和微信（认领绑错了、客户报错了号）：要写原因、记日志。解绑后这个微信的好友关系、客服会话都不再算这个客户，
+ * 客服问“我的保障”按没绑定处理（转人工）；客户本人的微信可以重新绑。
+ */
+export async function unbindCustomerWecom(user: CurrentUser, customerId: number, reason: unknown, db: Db = prisma) {
+  const why = typeof reason === "string" ? reason.trim().slice(0, 100) : "";
+  if (!why) throw new WecomContactError("写一下为什么解绑（比如认领时手机号输错了）");
+  if (user.role !== "HQ" && user.role !== "STORE_MANAGER") throw new WecomContactError("只有店长和总部能解绑");
+  return withTx(db, async (tx) => {
+    const customer = await tx.customer.findUnique({ where: { id: customerId }, select: { id: true, wecomExternalUserid: true } });
+    if (!customer?.wecomExternalUserid) throw new WecomContactError("这个客户没有绑定微信");
+    const ext = customer.wecomExternalUserid;
+    if (user.role === "STORE_MANAGER") {
+      const mine = await tx.wecomFollow.count({ where: { externalUserid: ext, user: { storeId: user.storeId } } });
+      if (mine === 0) throw new WecomContactError("这个微信加的不是本店员工，找总部解绑");
+    }
+    await tx.customer.update({ where: { id: customerId }, data: { wecomExternalUserid: null, wecomNickname: null, wecomAvatarUrl: null, wecomBoundAt: null } });
+    await tx.wecomFollow.updateMany({ where: { externalUserid: ext }, data: { customerId: null } });
+    await tx.wecomKfSession.updateMany({ where: { externalUserid: ext }, data: { customerId: null } });
+    await writeAudit({ userId: user.id, action: "wecom.unbind", entity: "customer", entityId: customerId, detail: { externalUserid: ext, reason: why } }, tx);
+  });
+}
 
 export { WecomError };

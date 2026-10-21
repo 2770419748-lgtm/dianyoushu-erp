@@ -4,6 +4,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import { createSimulatedWecomClient } from "@/server/wecom/client";
 import { claimFromSidebar, getSidebarProfile, issueSidebarToken, type SidebarUser, sidebarUserFromToken } from "@/server/wecom/sidebar-service";
+import { unbindCustomerWecom } from "@/server/wecom/contact-service";
 import { signSidebarToken } from "@/server/wecom/sidebar-token";
 
 // 企微侧边栏（口径第 12 节第三步，连本机库）：票换人要核对会话版本和企业微信账号；只能看自己的好友；按完整手机号认领。
@@ -96,6 +97,16 @@ describe("企微侧边栏（连本机库）", () => {
       const c = await tx.customer.create({ data: { name: "侧边栏丙", phone: "19900003333" } });
       await expect(claimFromSidebar(me, ext, c.phone, { client, db: tx })).rejects.toThrow("这个微信已经绑了别的客户");
       await expect(claimFromSidebar(me, ext, a.phone, { client, db: tx })).rejects.toThrow("已经绑定在这个客户上了");
+
+      // 绑错了能解绑：店员不行、要写原因；解绑后好友关系不再算这个客户，客户本人的微信能再绑
+      await expect(unbindCustomerWecom(me, a.id, "输错了", tx)).rejects.toThrow("店长和总部");
+      const hqUser = { ...me, role: "HQ" as const, storeId: null };
+      await expect(unbindCustomerWecom(hqUser, a.id, "", tx)).rejects.toThrow("写一下");
+      await unbindCustomerWecom(hqUser, a.id, "认领时手机号输错了", tx);
+      expect(await tx.customer.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ wecomExternalUserid: null, wecomNickname: null });
+      expect((await tx.wecomFollow.findFirstOrThrow({ where: { externalUserid: ext } })).customerId).toBeNull();
+      expect(await tx.auditLog.count({ where: { action: "wecom.unbind", entityId: String(a.id) } })).toBe(1);
+      expect(await claimFromSidebar(me, ext, c.phone, { client, db: tx })).toMatchObject({ id: c.id });
     });
   });
 });

@@ -4,7 +4,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { createSimulatedWecomClient, type WecomClient } from "@/server/wecom/client";
-import { createResignedTransfers, processTransfers, transferOnJob } from "@/server/wecom/transfer-service";
+import { cancelResignedTransfersFor, cancelTransfer, createResignedTransfers, processTransfers, transferOnJob } from "@/server/wecom/transfer-service";
 
 // 企业微信客户继承（口径第 12 节第三步，连本机库，事务回滚不留数据）：在职转接的权限和限制、查结果回写跟进关系、
 // 客户拒绝、离职继承要等删除成员、90 天 2 次。
@@ -99,6 +99,38 @@ describe("企业微信客户继承（连本机库，事务回滚）", () => {
       await processTransfers({ db: tx, client: clientWith(1) });
       const third = await tx.wecomFollow.findUniqueOrThrow({ where: { externalUserid_wecomUserid: { externalUserid: "wmTrTest01", wecomUserid: "trTestC" } } });
       await expect(transferOnJob(p.hq, { followId: third.id, toUserId: p.a.id }, opts)).rejects.toThrow("90 天内已经转过 2 次");
+    });
+  });
+
+  it("复查后补：企业微信不接受转接记“没成”；重新启用取消等删除的；手工取消；店长查进度只处理本店的", async (ctx) => {
+    if (!stores) return ctx.skip();
+    const s = stores;
+    await inRolledBackTx(async (tx) => {
+      const p = await people(tx, s.a, s.b);
+      const f1 = await tx.wecomFollow.create({ data: { externalUserid: "wmTrTest31", wecomUserid: "trTestA", userId: p.a.id, firstAddAt: new Date() } });
+      const refuse: WecomClient = { ...createSimulatedWecomClient(), async transferCustomers(input) { return Object.fromEntries(input.externalUserids.map((id) => [id, 40096])); } };
+      await expect(transferOnJob(p.manager, { followId: f1.id, toUserId: p.b.id }, { db: tx, client: refuse })).rejects.toThrow("企业微信没接受");
+      expect(await tx.wecomTransfer.findFirstOrThrow({ where: { followId: f1.id } })).toMatchObject({ status: "FAILED" });
+      await transferOnJob(p.manager, { followId: f1.id, toUserId: p.b.id }, { db: tx, client: clientWith(1) }); // 没成的不挡下一次
+
+      // 离职继承：重新启用后等删除的取消
+      for (const ext of ["wmTrTest32", "wmTrTest33"]) await tx.wecomFollow.create({ data: { externalUserid: ext, wecomUserid: "trTestC", userId: p.c.id, firstAddAt: new Date() } });
+      await tx.user.update({ where: { id: p.c.id }, data: { isActive: false } });
+      await createResignedTransfers(p.manager, { fromUserId: p.c.id, toUserId: p.b.id }, { db: tx });
+      const one = await tx.wecomTransfer.findFirstOrThrow({ where: { fromUserId: p.c.id, status: "WAITING_DELETE" } });
+      await expect(cancelTransfer(p.otherManager, one.id, tx)).rejects.toThrow("本店员工");
+      await cancelTransfer(p.manager, one.id, tx);
+      expect((await cancelResignedTransfersFor(tx, p.c.id, "员工重新启用了")).count).toBe(1);
+      expect(await tx.wecomTransfer.count({ where: { fromUserId: p.c.id, status: "WAITING_DELETE" } })).toBe(0);
+
+      // 店长查进度只处理本店员工的：别店的已提交保持不动
+      const otherStaff = await tx.user.create({ data: { username: "trtest_O", passwordHash: "x", name: "继承测试O", role: "STAFF", storeId: s.b, wecomUserid: "trTestO" } });
+      const otherTarget = await tx.user.create({ data: { username: "trtest_P", passwordHash: "x", name: "继承测试P", role: "STAFF", storeId: s.b, wecomUserid: "trTestP" } });
+      const fo = await tx.wecomFollow.create({ data: { externalUserid: "wmTrTest34", wecomUserid: "trTestO", userId: otherStaff.id, firstAddAt: new Date() } });
+      await transferOnJob(p.otherManager, { followId: fo.id, toUserId: otherTarget.id }, { db: tx, client: clientWith(1) });
+      await processTransfers({ db: tx, client: clientWith(1), storeId: s.a });
+      expect((await tx.wecomTransfer.findFirstOrThrow({ where: { followId: fo.id } })).status).toBe("SUBMITTED");
+      expect((await tx.wecomTransfer.findFirstOrThrow({ where: { followId: f1.id, status: { not: "FAILED" } } })).status).toBe("DONE");
     });
   });
 
