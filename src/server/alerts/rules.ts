@@ -56,7 +56,8 @@ async function lowAccessories(db: Db, stores: Map<number, StoreInfo>): Promise<S
   for (const r of rows) byStore.set(r.store_id, [...(byStore.get(r.store_id) ?? []), r]);
   return [...byStore].map(([storeId, list]) => {
     const top = list.slice(0, 3).map((r) => `${r.sku}（剩 ${r.qty}，安全库存 ${r.safety}）`).join("、");
-    return storeDraft("LOW_ACCESSORY", stores.get(storeId)!, list.some((r) => r.qty === 0) ? 2 : 1, `${list.length} 种配件低于安全库存：${top}`, "/stock", { 种数: list.length, 最缺的: top }, { value: list.length, unit: "种" });
+    // 关键数字：几种 + 是哪几种、各剩几个（同样几种、但又卖掉了也算变了）
+    return { ...storeDraft("LOW_ACCESSORY", stores.get(storeId)!, list.some((r) => r.qty === 0) ? 2 : 1, `${list.length} 种配件低于安全库存：${top}`, "/stock", { 种数: list.length, 最缺的: top }, { value: list.length, unit: "种" }), key: list.map((r) => `${r.sku}:${r.qty}`).join(",") };
   });
 }
 
@@ -84,8 +85,8 @@ async function kpiBehindStores(db: Db, stores: Map<number, StoreInfo>, now: Date
     const progressPct = Math.round(progress * 100);
     const need = yuanText(gap.needPerDay);
     const per = yuanText(gap.actualPerDay);
-    out.push(
-      storeDraft(
+    out.push({
+      ...storeDraft(
         "KPI_BEHIND",
         stores.get(t.storeId)!,
         progressPct - ratePct >= 15 ? 3 : 2,
@@ -94,7 +95,8 @@ async function kpiBehindStores(db: Db, stores: Map<number, StoreInfo>, now: Date
         { 完成率: `${ratePct}%`, 时间进度: `${progressPct}%`, 剩余天数: gap.remainingDays, 每天要卖元: need, 现在日均元: per },
         { value: 1, unit: "家" },
       ),
-    );
+      key: `完成率${Math.floor(ratePct / 5) * 5}`, // 完成率按 5 个点一档：卖了一台不至于每次都重推，掉了一大截会重写
+    });
   }
   return out;
 }

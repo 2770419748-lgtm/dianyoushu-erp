@@ -31,12 +31,22 @@ describe("日期都按北京时间", () => {
 
 describe("一天的考勤", () => {
   const day = "2026-10-21";
-  it("早班 9:00～17:00：9:05 打卡不算迟到，9:05 以后算；17:00 前 5 分钟以内走不算早退", () => {
+  it("早班 9:00～17:00：按整分钟算，9:05（含 9:05:59）不算迟到，9:06 算迟到 6 分钟；16:55 走不算早退，16:54:59 算早退 6 分钟", () => {
     expect(computeDay({ date: day, shift: "MORNING", punches: [{ kind: "IN", at: t(day, "09:05") }, { kind: "OUT", at: t(day, "16:55") }], leave: null, now: NOW })).toMatchObject({ lateMinutes: 0, earlyMinutes: 0, missing: false, absent: false, state: "WORK" });
-    expect(computeDay({ date: day, shift: "MORNING", punches: [{ kind: "IN", at: t(day, "09:05", 30) }, { kind: "OUT", at: t(day, "17:10") }], leave: null, now: NOW }).lateMinutes).toBe(6);
+    expect(computeDay({ date: day, shift: "MORNING", punches: [{ kind: "IN", at: t(day, "09:05", 59) }, { kind: "OUT", at: t(day, "17:10") }], leave: null, now: NOW }).lateMinutes).toBe(0);
+    const late = computeDay({ date: day, shift: "MORNING", punches: [{ kind: "IN", at: t(day, "09:06", 1) }, { kind: "OUT", at: t(day, "16:54", 59) }], leave: null, now: NOW });
+    expect(late).toMatchObject({ lateMinutes: 6, earlyMinutes: 6 });
+    expect(late.label).toBe("早班 迟到 6 分钟，早退 6 分钟（上班 9:06，下班 16:54）"); // 分钟数和显示的时间对得上
     const early = computeDay({ date: day, shift: "MORNING", punches: [{ kind: "IN", at: t(day, "08:50") }, { kind: "OUT", at: t(day, "16:30") }], leave: null, now: NOW });
     expect(early).toMatchObject({ lateMinutes: 0, earlyMinutes: 30 });
     expect(early.label).toContain("早退 30 分钟");
+  });
+
+  it("早上误点了下班再点上班：那次下班不算（只认上班卡之后的下班卡），没再打下班就是缺卡", () => {
+    const r = computeDay({ date: day, shift: "EVENING", punches: [{ kind: "OUT", at: t(day, "08:50") }, { kind: "IN", at: t(day, "12:55") }], leave: null, now: NOW });
+    expect(r).toMatchObject({ earlyMinutes: 0, missing: true, lastOut: null });
+    const fixed = computeDay({ date: day, shift: "EVENING", punches: [{ kind: "OUT", at: t(day, "08:50") }, { kind: "IN", at: t(day, "12:55") }, { kind: "OUT", at: t(day, "21:31") }], leave: null, now: NOW });
+    expect(fixed).toMatchObject({ earlyMinutes: 0, missing: false, label: "晚班 正常（上班 12:55，下班 21:31）" });
   });
 
   it("上班卡取最早的、下班卡取最晚的（下班卡可以重复打）", () => {

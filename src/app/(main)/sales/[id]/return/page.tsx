@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { isDbId } from "@/lib/paging";
+import { isDbId, toDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser, type CurrentUser } from "@/server/auth/current-user";
 import { canSell } from "@/server/auth/permissions";
@@ -24,7 +24,7 @@ async function load(user: CurrentUser, id: number): Promise<Loaded> {
 // 退货：选原单明细退回，按原收款方式退款，以旧换新抵扣不退。
 export default async function ReturnPage({ params }: PageProps<"/sales/[id]/return">) {
   const { id } = await params;
-  const orderId = Number(id);
+  const orderId = toDbId(id);
   if (!isDbId(orderId)) notFound();
   const user = await requireUser();
   if (!canSell(user.role)) return <NoAccess />;

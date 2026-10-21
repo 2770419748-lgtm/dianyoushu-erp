@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { isDbId } from "@/lib/paging";
+import { isDbId, toDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser, type CurrentUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
@@ -23,7 +23,7 @@ async function load(user: CurrentUser, id: number): Promise<Loaded> {
 // 维修单详情（口径第 13 节）：按状态给出报价、客户同意 / 不修、修好 / 修不好、取机结算、作废。
 export default async function RepairDetailPage({ params }: PageProps<"/repairs/[id]">) {
   const { id } = await params;
-  const repairId = Number(id);
+  const repairId = toDbId(id);
   if (!isDbId(repairId)) notFound();
   const user = await requireUser();
   const loaded = await load(user, repairId);

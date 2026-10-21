@@ -18,7 +18,7 @@ export function LeavesView({ data, status, month, today }: { data: LeaveList; st
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState<{ kind?: LeaveKindKey; range: [string, string] | null; reason: string }>({ range: null, reason: "" });
+  const [form, setForm] = useState<{ kind: LeaveKindKey; range: [string, string] | null; reason: string }>({ kind: "PERSONAL", range: null, reason: "" }); // 默认事假：选择框会高亮第一个，值也要真的设上
 
   function go(next: { view?: LeaveView; status?: OaStatusKey | null; month?: string | null; page?: number }) {
     const sp = new URLSearchParams();
@@ -105,10 +105,10 @@ export function LeavesView({ data, status, month, today }: { data: LeaveList; st
         confirmLoading={pending}
         onCancel={() => setOpen(false)}
         onOk={() => {
-          if (!form.kind || !form.range) return void message.error("选一下类型和日期");
-          act(() => submitLeaveAction({ kind: form.kind!, startDate: form.range![0], endDate: form.range![1], reason: form.reason }), () => {
+          if (!form.range) return void message.error("选一下请假日期");
+          act(() => submitLeaveAction({ kind: form.kind, startDate: form.range![0], endDate: form.range![1], reason: form.reason }), () => {
             setOpen(false);
-            setForm({ range: null, reason: "" });
+            setForm({ kind: "PERSONAL", range: null, reason: "" });
           });
         }}
         okText="提交审批"

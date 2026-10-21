@@ -19,7 +19,7 @@ export const SHIFT_TIMES: Record<WorkShiftKey, { start: number; end: number }> =
   EVENING: { start: 13 * 60, end: 21 * 60 + 30 },
 };
 
-/** 宽限：上班晚 5 分钟以内、下班早 5 分钟以内都不算（9:05 打卡不算迟到，9:05 以后算） */
+/** 宽限：上班晚 5 分钟以内、下班早 5 分钟以内都不算。打卡时间按整分钟算（秒舍掉）：9:05:59 是 9:05，不算迟到；9:06 算迟到 6 分钟 */
 export const GRACE_MINUTES = 5;
 
 export const PUNCH_LABELS: Record<PunchKindKey, string> = { IN: "上班", OUT: "下班" };
@@ -175,8 +175,9 @@ export interface DayResult {
 export function computeDay(input: { date: string; shift: ShiftKindKey | null; punches: PunchFact[]; leave: LeaveKindKey | null; now: Date }): DayResult {
   const { date, shift, punches, leave, now } = input;
   const ins = punches.filter((p) => p.kind === "IN").map((p) => p.at.getTime());
-  const outs = punches.filter((p) => p.kind === "OUT").map((p) => p.at.getTime());
   const firstIn = ins.length ? new Date(Math.min(...ins)) : null;
+  // 下班卡只认上班卡之后的（早上误点了下班再点上班，那次下班不算，不然会算成一大段早退）
+  const outs = punches.filter((p) => p.kind === "OUT" && (!firstIn || p.at.getTime() > firstIn.getTime())).map((p) => p.at.getTime());
   const lastOut = outs.length ? new Date(Math.max(...outs)) : null;
   const today = bjDateKey(now);
   const base: DayResult = { date, shift, state: "UNSCHEDULED", firstIn, lastOut, lateMinutes: 0, earlyMinutes: 0, missing: false, absent: false, leave: null, overtimeMinutes: 0, label: "", future: date > today };
@@ -193,10 +194,11 @@ export function computeDay(input: { date: string; shift: ShiftKindKey | null; pu
   if (base.future) return { ...base, state: "UPCOMING", label: `${SHIFT_LABELS[shift]}（还没到）` };
   const t = SHIFT_TIMES[shift];
   const finished = date < today || bjMinuteOfDay(now) >= t.end;
-  const inMin = firstIn ? bjMinuteOfDay(firstIn) : null;
-  const outMin = lastOut ? bjMinuteOfDay(lastOut) : null;
-  const lateMinutes = inMin !== null && inMin > t.start + GRACE_MINUTES ? Math.ceil(inMin - t.start) : 0;
-  const earlyMinutes = outMin !== null && outMin < t.end - GRACE_MINUTES ? Math.ceil(t.end - outMin) : 0;
+  // 按整分钟算，和显示的“上班 9:05”对得上
+  const inMin = firstIn ? Math.floor(bjMinuteOfDay(firstIn)) : null;
+  const outMin = lastOut ? Math.floor(bjMinuteOfDay(lastOut)) : null;
+  const lateMinutes = inMin !== null && inMin - t.start > GRACE_MINUTES ? inMin - t.start : 0;
+  const earlyMinutes = outMin !== null && t.end - outMin > GRACE_MINUTES ? t.end - outMin : 0;
   const absent = finished && !firstIn && !lastOut;
   const missing = finished && !absent && (!firstIn || !lastOut);
   const parts = [

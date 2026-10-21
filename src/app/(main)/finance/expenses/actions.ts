@@ -27,6 +27,7 @@ export async function submitExpenseAction(input: { category: ExpenseCategoryKey;
   const user = await requireUser();
   return run(async () => {
     const r = await submitExpense(user, input);
+    if (r.autoApproved) return `已登记报销单 ${r.claimNo}：总部本人的报销不用批，等登记付款`;
     return `已提交报销单 ${r.claimNo}，审批单 ${r.requestNo}：${r.chain.map((c) => APPROVER_ROLE_LABELS[c]).join("批完")}批`;
   });
 }

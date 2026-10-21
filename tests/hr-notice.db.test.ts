@@ -5,6 +5,7 @@ import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { listEmployees, saveEmployeeProfile } from "@/server/hr/employee-service";
 import { getNotice, pruneNoticeNotifications, publishNotice, withdrawNotice } from "@/server/notice/notice-service";
+import { setUserActive } from "@/server/org/org-service";
 
 // 人事 OA 第一步（口径第 19 节，连本机库，事务回滚不留数据）：公告的范围、消息、已读、撤下；员工档案的范围、工资谁能看、校验。
 
@@ -132,6 +133,34 @@ describe("公告和员工档案（连本机库，事务回滚）", () => {
       await expect(saveEmployeeProfile(p.hq, p.staff.id, { hireDate: "2026-05-01", leaveDate: "2026-04-01" }, tx)).rejects.toThrow("不能早于");
       await saveEmployeeProfile(p.hq, p.staff.id, { position: "收银", phone: "13800001111", baseSalaryFen: 420000, hireDate: "2025-03-01" }, tx);
       expect(await tx.employeeProfile.findUniqueOrThrow({ where: { userId: p.staff.id } })).toMatchObject({ position: "收银", phone: "13800001111", baseSalaryFen: 420000 });
+    });
+  });
+
+  it("停用记离职日期（总部填过的不覆盖、入职还没到的不记），重新启用只清自动记的，原值进日志", async (ctx) => {
+    if (!f) return ctx.skip();
+    const p = f;
+    await inRolledBackTx(async (tx) => {
+      const today = new Date().toISOString().slice(0, 10);
+      const bj = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      const mk = (key: string) => tx.user.create({ data: { username: `lvtest_${key}`, passwordHash: "x", name: `离职测试${key}`, role: "STAFF", storeId: p.staff.storeId } });
+      const a = await mk("a");
+      await setUserActive(p.hq, a.id, false, { db: tx });
+      const auto = (await tx.employeeProfile.findUniqueOrThrow({ where: { userId: a.id } })).leaveDate!.toISOString().slice(0, 10);
+      expect([today, bj]).toContain(auto); // 北京时间的今天
+      await setUserActive(p.hq, a.id, true, { db: tx });
+      expect((await tx.employeeProfile.findUniqueOrThrow({ where: { userId: a.id } })).leaveDate).toBeNull();
+      expect((await tx.auditLog.findFirstOrThrow({ where: { action: "user.activate", entityId: String(a.id) }, orderBy: { id: "desc" } })).detail).toMatchObject({ leaveDateBefore: auto, leaveDateAfter: null });
+
+      const b = await mk("b"); // 总部填了月底走
+      await tx.employeeProfile.create({ data: { userId: b.id, leaveDate: new Date("2026-10-31T00:00:00Z") } });
+      await setUserActive(p.hq, b.id, false, { db: tx });
+      await setUserActive(p.hq, b.id, true, { db: tx });
+      expect((await tx.employeeProfile.findUniqueOrThrow({ where: { userId: b.id } })).leaveDate?.toISOString().slice(0, 10)).toBe("2026-10-31");
+
+      const c = await mk("c"); // 入职日期还没到
+      await tx.employeeProfile.create({ data: { userId: c.id, hireDate: new Date(Date.now() + 30 * 24 * 3600 * 1000) } });
+      await setUserActive(p.hq, c.id, false, { db: tx });
+      expect((await tx.employeeProfile.findUniqueOrThrow({ where: { userId: c.id } })).leaveDate).toBeNull();
     });
   });
 });

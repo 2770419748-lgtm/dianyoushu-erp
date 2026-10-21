@@ -37,6 +37,8 @@ export interface ApprovalExecutor<P extends ApprovalPayload = ApprovalPayload> {
   resultHref(payload: P, resultId: number): string | null;
   /** 这些错误算“做不成”的业务原因（记到审批单上给发起人看），别的错误算程序出错 */
   businessErrors: (abstract new (...args: never[]) => Error)[];
+  /** 发起人停用、调店了也照样批下去（报销：钱已经垫出去了，算的是当时那家店）；不登记就是判“批了没做成” */
+  survivesRequesterLeaving?: boolean;
 }
 
 type Registry = { [K in ApprovalPayload["action"]]: ApprovalExecutor<Extract<ApprovalPayload, { action: K }>> };
@@ -94,6 +96,7 @@ const EXECUTORS: Registry = {
     onClosed: (tx, p, status) => closeExpenseTx(tx, p.claimId, status),
     resultHref: () => "/finance/expenses",
     businessErrors: [ExpenseError],
+    survivesRequesterLeaving: true,
   },
 };
 

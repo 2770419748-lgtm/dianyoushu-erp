@@ -2,10 +2,11 @@ import "dotenv/config";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
-import { addDays, bjDateKey, bjDateTime, dateFromKey, weekStartOf } from "@/lib/attendance";
+import { addDays, bjDateKey, bjDateTime, dateFromKey, weekDates, weekStartOf } from "@/lib/attendance";
 import type { CurrentUser } from "@/server/auth/current-user";
-import { approveRequest, getApproval, rejectRequest } from "@/server/approval/approval-service";
-import { addManualPunch, punch, userMonthSummary } from "@/server/hr/attendance-service";
+import { approveRequest, cancelPendingOaFor, getApproval, rejectRequest } from "@/server/approval/approval-service";
+import { submitExpense } from "@/server/finance/expense-service";
+import { addManualPunch, monthStats, punch, userMonthDetail, userMonthSummary } from "@/server/hr/attendance-service";
 import { cancelLeave, submitLeave } from "@/server/hr/leave-service";
 import { copyLastWeek, saveSchedule } from "@/server/hr/schedule-service";
 
@@ -153,7 +154,7 @@ describe("请假和两级审批（连本机库，事务回滚）", () => {
     });
   });
 
-  it("店长的假直接总部批；总部员工的假不挂门店，只有发起人和总部看得到", async (ctx) => {
+  it("店长的假直接总部批；区域经理的假不挂门店，只有发起人和总部看得到", async (ctx) => {
     if (!stores || !hq) return ctx.skip();
     const me = hq;
     await inRolledBackTx(async (tx) => {
@@ -164,12 +165,12 @@ describe("请假和两级审批（连本机库，事务回滚）", () => {
       await expect(approveRequest(p.mgrA, id, "", tx)).rejects.toThrow("自己");
       await expect(approveRequest(p.mgrB, id, "", tx)).rejects.toThrow();
 
-      const r2 = await submitLeave(p.hq2, leave(2, 2), { db: tx });
+      const r2 = await submitLeave(p.regional, leave(2, 2), { db: tx }); // 区域经理没有门店：不挂门店、直接总部批
       const id2 = (await tx.leaveRequest.findUniqueOrThrow({ where: { id: r2.id } })).approvalRequestId!;
       expect((await tx.approvalRequest.findUniqueOrThrow({ where: { id: id2 } })).storeId).toBeNull();
-      await expect(getApproval(p.regional, id2, tx)).rejects.toThrow("没有权限");
+      await expect(getApproval(p.staffB, id2, tx)).rejects.toThrow("没有权限");
       await expect(getApproval(p.mgrA, id2, tx)).rejects.toThrow("没有权限");
-      expect((await getApproval(p.hq2, id2, tx))?.can).toEqual({ decide: false, cancel: true });
+      expect((await getApproval(p.regional, id2, tx))?.can).toEqual({ decide: false, cancel: true });
       expect((await getApproval(me, id2, tx))?.can.decide).toBe(true);
       await expect(approveRequest(p.mgrA, id2, "", tx)).rejects.toThrow("总部");
       expect(await approveRequest(me, id2, "", tx)).toMatchObject({ executed: true });
@@ -237,6 +238,109 @@ describe("打卡和补卡（连本机库，事务回滚）", () => {
       await expect(addManualPunch(p.mgrA, { ...input, time: "25:00" }, { db: tx, now: NIGHT })).rejects.toThrow("时间");
       await expect(addManualPunch(p.regional, input, { db: tx, now: NIGHT })).rejects.toThrow("店长和总部");
       await addManualPunch(hq!, { ...input, userId: p.staffB.id }, { db: tx, now: NIGHT }); // 总部能给任何店补
+    });
+  });
+});
+
+describe("8b 复查后补（连本机库，事务回滚）", () => {
+  it("店长不能改自己今天和以前的班；改今天以前的格子按格记日志；别的店的班这里改不了", async (ctx) => {
+    if (!stores || !hq) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const p = await people(tx);
+      const { a, b } = stores!;
+      const yesterday = addDays(today, -1);
+      await expect(saveSchedule(p.mgrA, { storeId: a.id, cells: [{ userId: p.mgrA.id, date: today, shift: "OFF" }] }, { db: tx })).rejects.toThrow("自己今天和以前的班不能改");
+      expect(await saveSchedule(p.mgrA, { storeId: a.id, cells: [{ userId: p.mgrA.id, date: addDays(today, 3), shift: "MORNING" }] }, { db: tx })).toBe(1); // 以后的自己照常排
+      await saveSchedule(hq!, { storeId: a.id, cells: [{ userId: p.mgrA.id, date: yesterday, shift: "OFF" }] }, { db: tx }); // 总部能改
+
+      await tx.shiftSchedule.create({ data: { storeId: a.id, userId: p.staffA1.id, date: dateFromKey(yesterday), shift: "MIDDLE", updatedById: p.mgrA.id } });
+      await saveSchedule(p.mgrA, { storeId: a.id, cells: [{ userId: p.staffA1.id, date: yesterday, shift: "OFF" }] }, { db: tx });
+      const log = await tx.auditLog.findFirstOrThrow({ where: { action: "hr.schedule.change_past", entityId: String(p.staffA1.id) } });
+      expect(log.detail).toMatchObject({ date: yesterday, from: "中班", to: "休息", name: "人事测试staffA1" });
+
+      await tx.shiftSchedule.create({ data: { storeId: b.id, userId: p.staffA2.id, date: dateFromKey(addDays(today, -2)), shift: "MORNING", updatedById: p.mgrB.id } });
+      await expect(saveSchedule(p.mgrA, { storeId: a.id, cells: [{ userId: p.staffA2.id, date: addDays(today, -2), shift: "OFF" }] }, { db: tx })).rejects.toThrow("别的店");
+    });
+  });
+
+  it("复制上周只填今天以后的空格子（过去的日子补排班会凭空多出缺勤）", async (ctx) => {
+    if (!stores || !hq) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const p = await people(tx);
+      const week = weekStartOf(today);
+      for (const d of weekDates(addDays(week, -7))) await tx.shiftSchedule.create({ data: { storeId: stores!.a.id, userId: p.staffA2.id, date: dateFromKey(d), shift: "MORNING", updatedById: p.mgrA.id } });
+      const dates = weekDates(week);
+      if (dates[6]! <= today) return; // 今天是周日，本周没有以后的日子
+      await copyLastWeek(p.mgrA, { storeId: stores!.a.id, week }, { db: tx });
+      const copied = await tx.shiftSchedule.findMany({ where: { userId: p.staffA2.id, date: { gte: dateFromKey(dates[0]!), lte: dateFromKey(dates[6]!) } }, select: { date: true }, orderBy: { date: "asc" } });
+      expect(copied.map((c) => c.date.toISOString().slice(0, 10))).toEqual(dates.filter((d) => d > today));
+    });
+  });
+
+  it("补卡记那天的门店，只有那家店的店长能补", async (ctx) => {
+    if (!stores || !hq) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const p = await people(tx);
+      const yesterday = addDays(today, -1);
+      await tx.shiftSchedule.create({ data: { storeId: stores!.b.id, userId: p.staffA1.id, date: dateFromKey(yesterday), shift: "MORNING", updatedById: p.mgrB.id } }); // 调店前那天在 B 店
+      const input = { userId: p.staffA1.id, date: yesterday, kind: "IN", time: "09:00", note: "忘打卡" };
+      await expect(addManualPunch(p.mgrA, input, { db: tx, now: NIGHT })).rejects.toThrow("那天在本店上班");
+      await addManualPunch(p.mgrB, input, { db: tx, now: NIGHT });
+      expect((await tx.attendancePunch.findFirstOrThrow({ where: { userId: p.staffA1.id, manual: true } })).storeId).toBe(stores!.b.id);
+    });
+  });
+
+  it("月度统计按那天在哪家店算；调走、停用的人在他上过班的月份照样列出来", async (ctx) => {
+    if (!stores || !hq) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const p = await people(tx);
+      const { a, b } = stores!;
+      const [y, m] = today.split("-").map(Number) as [number, number];
+      const prev = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7);
+      // staffA1 上个月 1 号在 A 店、2 号在 B 店，都没打卡（缺勤）；staffA2 上个月在 A 店上过班，现在停用了
+      await tx.shiftSchedule.create({ data: { storeId: a.id, userId: p.staffA1.id, date: dateFromKey(prev + "-01"), shift: "MORNING", updatedById: p.mgrA.id } });
+      await tx.shiftSchedule.create({ data: { storeId: b.id, userId: p.staffA1.id, date: dateFromKey(prev + "-02"), shift: "MORNING", updatedById: p.mgrB.id } });
+      await tx.shiftSchedule.create({ data: { storeId: a.id, userId: p.staffA2.id, date: dateFromKey(prev + "-03"), shift: "MORNING", updatedById: p.mgrA.id } });
+      await tx.user.update({ where: { id: p.staffA2.id }, data: { isActive: false } });
+
+      const statsA = await monthStats(p.mgrA, { month: prev }, NIGHT, tx);
+      expect(statsA.rows.find((r) => r.userId === p.staffA1.id)).toMatchObject({ note: null, summary: { scheduled: 1, absent: 1 } });
+      expect(statsA.rows.find((r) => r.userId === p.staffA2.id)).toMatchObject({ note: "已停用", summary: { scheduled: 1, absent: 1 } });
+      const statsB = await monthStats(p.mgrB, { month: prev }, NIGHT, tx);
+      expect(statsB.rows.find((r) => r.userId === p.staffA1.id)).toMatchObject({ note: "已调走", summary: { scheduled: 1, absent: 1 } });
+      const detail = await userMonthDetail(p.mgrB, p.staffA1.id, prev, NIGHT, tx);
+      expect(detail.days.find((d) => d.date === prev + "-01")).toMatchObject({ label: "在别的店", absent: false });
+      expect(detail.summary.absent).toBe(1);
+      expect((await userMonthDetail(hq!, p.staffA1.id, prev, NIGHT, tx)).summary.absent).toBe(2); // 总部看整月
+      expect(await userMonthSummary(tx, p.staffA1.id, prev, NIGHT)).toMatchObject({ absent: 2 }); // 工资按人算整月
+    });
+  });
+
+  it("总部本人的请假、报销提交就算通过；调店、停用时审批中的请假自动撤回，报销照原来的门店批下去", async (ctx) => {
+    if (!stores || !hq) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const p = await people(tx);
+      const hqLeave = await submitLeave(p.hq2, leave(5, 2), { db: tx });
+      expect(hqLeave.autoApproved).toBe(true);
+      expect((await tx.leaveRequest.findUniqueOrThrow({ where: { id: hqLeave.id } })).status).toBe("APPROVED");
+      const hqApproval = await tx.approvalRequest.findFirstOrThrow({ where: { requestNo: hqLeave.requestNo } });
+      expect(hqApproval).toMatchObject({ status: "EXECUTED", decidedById: p.hq2.id, decisionNote: expect.stringContaining("不用批") });
+      const hqExpense = await submitExpense(p.hq2, { category: "OFFICE", amountFen: 5000, occurredOn: addDays(today, -1), description: "打印纸" }, { db: tx });
+      expect(hqExpense.autoApproved).toBe(true);
+      expect((await tx.expenseClaim.findUniqueOrThrow({ where: { id: hqExpense.id } })).status).toBe("APPROVED");
+
+      const l = await submitLeave(p.staffA1, leave(5, 3), { db: tx });
+      await expect(submitLeave(p.staffA1, leave(6, 1), { db: tx })).rejects.toThrow("先在请假页撤回那张");
+      const e = await submitExpense(p.staffA1, { category: "OFFICE", amountFen: 5000, occurredOn: addDays(today, -1), description: "打印纸" }, { db: tx });
+      expect(await cancelPendingOaFor(tx, p.staffA1.id, "调店了，审批中的单自动撤回，到新门店重新提交")).toBe(1);
+      expect((await tx.leaveRequest.findUniqueOrThrow({ where: { id: l.id } })).status).toBe("CANCELLED");
+      expect((await tx.expenseClaim.findUniqueOrThrow({ where: { id: e.id } })).status).toBe("PENDING"); // 报销不撤
+      expect((await submitLeave(p.staffA1, leave(6, 1), { db: tx })).id).toBeGreaterThan(0); // 撤回以后同一天能重新交
+      // 调到 B 店、再停用：报销照原来的门店（A 店）批下去，变成待付款
+      await tx.user.update({ where: { id: p.staffA1.id }, data: { storeId: stores!.b.id, isActive: false } });
+      const eApproval = (await tx.expenseClaim.findUniqueOrThrow({ where: { id: e.id } })).approvalRequestId!;
+      expect(await approveRequest(p.mgrA, eApproval, "", tx)).toMatchObject({ executed: true });
+      expect(await tx.expenseClaim.findUniqueOrThrow({ where: { id: e.id } })).toMatchObject({ status: "APPROVED", storeId: stores!.a.id });
     });
   });
 });

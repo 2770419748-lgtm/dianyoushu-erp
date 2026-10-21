@@ -1,4 +1,5 @@
 import "server-only";
+import { cancelPendingOaFor } from "@/server/approval/approval-service";
 import { pruneNoticeNotifications } from "@/server/notice/notice-service";
 import { todayBizDate } from "@/server/stock/doc-no";
 import { prisma } from "@/lib/prisma";
@@ -10,6 +11,7 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { getWecomClient, WecomError } from "@/server/wecom/client";
 import { WECOM_USERID_PATTERN, wecomMode } from "@/server/wecom/config";
 import { writeAudit } from "@/server/audit";
+import { type Db, withTx } from "@/server/db-tx";
 import { isWecomWebhookUrl } from "@/lib/alerts";
 import { cancelResignedTransfersFor, createResignedTransfers, WecomTransferError } from "@/server/wecom/transfer-service";
 
@@ -255,6 +257,7 @@ export async function updateUser(actor: Actor, id: number, input: UserInput) {
   const data = parseUserInput(input);
   if (id === actor.id && data.role !== "HQ") throw new OrgError("不能把自己改成非总部角色");
   const wecom = input.wecomUserid === undefined ? null : await checkWecomUserid(id, input.wecomUserid);
+  const before = await prisma.user.findUnique({ where: { id }, select: { storeId: true } });
   let user;
   try {
     user = await prisma.user.update({ where: { id }, data: wecom ? { ...data, wecomUserid: wecom.value } : data });
@@ -265,7 +268,10 @@ export async function updateUser(actor: Actor, id: number, input: UserInput) {
   await writeAudit({ userId: actor.id, action: "user.update", entity: "user", entityId: id, detail: data });
   await pruneNoticeNotifications(prisma, id); // 调了店、换了区域：看不到的公告消息从小铃铛里清掉
   if (wecom?.changed) await writeAudit({ userId: actor.id, action: "wecom.user.bind_userid", entity: "user", entityId: id, detail: { wecomUserid: wecom.value, checked: wecom.checked } });
-  return { ...user, notice: wecom?.notice };
+  // 调了店：审批中的请假自动撤回，到新店重新提交（报销不撤，照原来的门店批，口径第 19 节）
+  const cancelled = before && before.storeId !== user.storeId ? await cancelPendingOaFor(prisma, id, "调店了，审批中的单自动撤回，到新门店重新提交") : 0;
+  const notices = [wecom?.notice, cancelled > 0 ? `他审批中的 ${cancelled} 张请假已自动撤回，到新门店重新提交` : null].filter(Boolean);
+  return { ...user, notice: notices.length ? notices.join("；") : undefined };
 }
 
 /**
@@ -305,31 +311,52 @@ export async function resetUserPassword(actor: Actor, id: number, password: unkn
  * 停用、启用员工。停用马上生效，不等企业微信的客户继承（口径第 12 节第三步）；
  * 传了接手人就给他跟进中的企业微信客户生成离职继承任务，没传的以后在客户继承页再安排。继承出错不影响停用，写在提示里。
  */
-export async function setUserActive(actor: CurrentUser, id: number, isActive: boolean, options: { takeoverUserId?: number } = {}) {
+export async function setUserActive(actor: CurrentUser, id: number, isActive: boolean, options: { takeoverUserId?: number; db?: Db } = {}) {
   assertCanManage(actor);
   await assertNotDemoAccount(id);
   if (id === actor.id && !isActive) throw new OrgError("不能停用自己");
-  const user = await prisma.user.update({ where: { id }, data: { isActive, sessionVersion: { increment: 1 } } });
-  await writeAudit({ userId: actor.id, action: isActive ? "user.activate" : "user.deactivate", entity: "user", entityId: id });
-  // 员工档案的离职日期（口径第 19 节）：停用时没填过的记成今天（总部已经填了的不覆盖）；重新启用说明人回来了，清空
-  if (isActive) await prisma.employeeProfile.updateMany({ where: { userId: id }, data: { leaveDate: null } });
-  else {
-    const today = todayBizDate();
-    await prisma.employeeProfile.upsert({ where: { userId: id }, create: { userId: id, leaveDate: today }, update: {} });
-    await prisma.employeeProfile.updateMany({ where: { userId: id, leaveDate: null }, data: { leaveDate: today } });
-  }
-  let notice: string | undefined;
-  if (isActive) {
-    const cancelled = await cancelResignedTransfersFor(prisma, id, "员工重新启用了，离职继承取消");
-    if (cancelled.count > 0) notice = `他还在等删除成员的 ${cancelled.count} 个离职继承取消了`;
-  }
+  const today = todayBizDate();
+  const key = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
+  // 停用（启用）、日志、离职日期、跟着撤的单放一个事务：中间哪步出错都不会出现“账号停了、离职日期没记”
+  const { user, notice: inTxNotice } = await withTx(options.db ?? prisma, async (tx) => {
+    const user = await tx.user.update({ where: { id }, data: { isActive, sessionVersion: { increment: 1 } } });
+    const profile = await tx.employeeProfile.findUnique({ where: { userId: id }, select: { leaveDate: true, hireDate: true } });
+    const before = key(profile?.leaveDate);
+    let after = before;
+    let autoLeaveDate: string | null = null;
+    if (!isActive) {
+      // 离职日期（口径第 19 节）：没填过的记成今天；总部已经填了的不覆盖；入职日期还没到的（人还没来上班）不记
+      if (!profile?.leaveDate && !(profile?.hireDate && profile.hireDate > today)) {
+        await tx.employeeProfile.upsert({ where: { userId: id }, create: { userId: id, leaveDate: today }, update: { leaveDate: today } });
+        after = autoLeaveDate = key(today);
+      }
+    } else if (before) {
+      // 重新启用：只清停用那一刻系统自动记的（总部手填的“月底走”留着），原值写进日志
+      const last = await tx.auditLog.findFirst({ where: { action: "user.deactivate", entity: "user", entityId: String(id) }, orderBy: { id: "desc" }, select: { detail: true } });
+      if ((last?.detail as { autoLeaveDate?: string } | null)?.autoLeaveDate === before) {
+        await tx.employeeProfile.update({ where: { userId: id }, data: { leaveDate: null } });
+        after = null;
+      }
+    }
+    await writeAudit({ userId: actor.id, action: isActive ? "user.activate" : "user.deactivate", entity: "user", entityId: id, detail: { leaveDateBefore: before, leaveDateAfter: after, ...(autoLeaveDate ? { autoLeaveDate } : {}) } }, tx);
+    let notice: string | undefined;
+    if (isActive) {
+      const cancelled = await cancelResignedTransfersFor(tx, id, "员工重新启用了，离职继承取消");
+      if (cancelled.count > 0) notice = `他还在等删除成员的 ${cancelled.count} 个离职继承取消了`;
+    } else {
+      const cancelled = await cancelPendingOaFor(tx, id, "员工停用了，审批中的请假自动撤回");
+      if (cancelled > 0) notice = `他审批中的 ${cancelled} 张请假已自动撤回（报销照常审批、付款）`;
+    }
+    return { user, notice };
+  });
+  let notice = inTxNotice;
   if (!isActive && options.takeoverUserId) {
     try {
       const result = await createResignedTransfers(actor, { fromUserId: id, toUserId: options.takeoverUserId });
-      notice = `${result.count} 个企业微信客户交给${result.to}：企业微信后台删掉这个人之后自动提交继承，进度在客户继承页看`;
+      notice = [notice, `${result.count} 个企业微信客户交给${result.to}：企业微信后台删掉这个人之后自动提交继承，进度在客户继承页看`].filter(Boolean).join("；");
     } catch (error) {
       if (!(error instanceof WecomTransferError)) throw error;
-      notice = `账号已停用，企业微信客户没交接成：${error.message}，到客户继承页再安排`;
+      notice = [notice, `账号已停用，企业微信客户没交接成：${error.message}，到客户继承页再安排`].filter(Boolean).join("；");
     }
   }
   return { ...user, notice };

@@ -12,3 +12,8 @@ export const MAX_DB_ID = 2147483647;
 export function isDbId(n: number): boolean {
   return Number.isInteger(n) && n > 0 && n <= MAX_DB_ID;
 }
+
+/** 地址里的 id 文字 → 数字：只认纯数字（“0x10”“1e3”“ 16”都不算，不然会打开 16 号、1000 号单） */
+export function toDbId(raw: string): number {
+  return /^\d{1,10}$/.test(raw) ? Number(raw) : Number.NaN;
+}

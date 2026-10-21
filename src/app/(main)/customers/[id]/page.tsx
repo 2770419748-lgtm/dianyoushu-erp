@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { isDbId } from "@/lib/paging";
+import { isDbId, toDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { canSell } from "@/server/auth/permissions";
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 // 客户详情：基本信息、碎屏险和延保、买过的单。店员、店长、总部能看；别人开的单只给摘要（规则在服务层）。
 export default async function CustomerDetailPage({ params }: PageProps<"/customers/[id]">) {
   const { id } = await params;
-  const customerId = Number(id);
+  const customerId = toDbId(id);
   if (!isDbId(customerId)) notFound();
   const user = await requireUser();
   if (!canSell(user.role)) return <NoAccess />;

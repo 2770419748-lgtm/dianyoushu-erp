@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { isDbId } from "@/lib/paging";
+import { isDbId, toDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser } from "@/server/auth/current-user";
 import { canManagePurchase } from "@/server/auth/permissions";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 export default async function EditPurchasePage({ params }: PageProps<"/purchase/[id]/edit">) {
   const { id } = await params;
-  const orderId = Number(id);
+  const orderId = toDbId(id);
   if (!isDbId(orderId)) notFound();
 
   const user = await requireUser();

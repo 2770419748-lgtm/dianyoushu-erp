@@ -67,14 +67,28 @@ const CN_QUANTITY = /(?<![第\d])([零〇一二两三四五六七八九十百千
 /** 说不出准数的说法：几台、十几天、二十多台、三成、一半、两三台——出现就不算数，改用模板 */
 const CN_FUZZY = /[几数][十百千万]?[台个件天元块张份家人次周月年号倍条项单笔款]|[一二两三四五六七八九十]成|[十百千万][几多来余]|[一二两三四五六七八九][一二两三四五六七八九](?=[台个件天元块张份家人次周月年号倍条项单笔款十百千万])|一半|半数|大半|过半|近半/g;
 
-/** 文字里的数字：全角换半角、去掉千分位逗号，012 和 12 当成一样；带量词的中文数字换算成阿拉伯数字；百分号、单位不算 */
+/** “百分之三十”“百分之百”：换算成 30%、100% 再核对 */
+const CN_PERCENT = /百分之([零〇一二两三四五六七八九十百]+)/g;
+/** 不带单位、但明摆着是个数的中文数字：两个字以上、带“十”或“百”的（“完成率才六十”“一百二”）；“千万别”这种不算 */
+const CN_BARE = /(?<![第\d零〇一二两三四五六七八九十百千万])([零〇一二两三四五六七八九十百千万]*[十百][零〇一二两三四五六七八九十百千万]*)(?![零〇一二两三四五六七八九十百千万])/g;
+
+/** 文字里的数字：全角换半角、去掉千分位逗号，012 和 12 当成一样；带量词的、“百分之”后面的、不带单位但带十百的中文数字都换算成阿拉伯数字；百分号、单位不算 */
 export function extractNumbers(text: string): string[] {
-  const half = toHalfWidth(text);
+  const half = toHalfWidth(text).replace(CN_PERCENT, (_, n: string) => `${chineseToInt(n)}%`);
   const arabic = (half.match(/\d+(?:[,，]\d{3})*(?:\.\d+)?/g) ?? []).map((raw) => {
     const n = Number(raw.replace(/[,，]/g, ""));
     return Number.isFinite(n) ? String(n) : raw;
   });
-  const chinese = [...half.matchAll(CN_QUANTITY)].map((m) => String(chineseToInt(m[1]!)));
+  const seen = new Set<number>(); // 同一处中文数字只算一次
+  const chinese: string[] = [];
+  for (const re of [CN_QUANTITY, CN_BARE]) {
+    for (const m of half.matchAll(re)) {
+      if (re === CN_BARE && m[1]!.length < 2) continue;
+      if (seen.has(m.index!)) continue;
+      seen.add(m.index!);
+      chinese.push(String(chineseToInt(m[1]!)));
+    }
+  }
   return [...arabic, ...chinese];
 }
 

@@ -41,6 +41,12 @@ describe("数字校验", () => {
     expect(numberProblems(input, { summary: "", items: [{ ref: 1, text: "压了七十六台，最久八十八天" }] })).toEqual([]);
     expect(numberProblems(input, { summary: "", items: [{ ref: 1, text: "压了二十台" }] })).toEqual(["20"]);
     expect(numberProblems(input, { summary: "", items: [{ ref: 1, text: "压了 ７６ 台" }] })).toEqual([]);
+    // “百分之三十”换算成 30%；不带单位、带十百的（“完成率才六十”）也核；“千万别”“十分”不算数字
+    expect(extractNumbers("完成率百分之三十，还差百分之百")).toEqual(["30", "100"]);
+    expect(extractNumbers("完成率才六十，千万别松劲，十分要紧")).toEqual(["60"]);
+    expect(numberProblems(input, { summary: "", items: [{ ref: 2, text: "完成率百分之六十" }] })).toEqual([]);
+    expect(numberProblems(input, { summary: "", items: [{ ref: 2, text: "完成率百分之三十" }] })).toEqual(["30"]);
+    expect(numberProblems(input, { summary: "", items: [{ ref: 2, text: "完成率才四十五" }] })).toEqual(["45"]);
     for (const text of ["十几天没动了", "三成是 iPhone", "两三台", "一半以上", "几台", "二十多台"]) {
       expect(numberProblems(input, { summary: "", items: [{ ref: 1, text }] }).length, text).toBeGreaterThan(0);
     }

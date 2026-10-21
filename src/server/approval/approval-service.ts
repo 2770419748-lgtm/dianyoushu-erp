@@ -149,7 +149,36 @@ export async function createOaApprovalTx(
     },
   });
   await writeAudit({ userId: user.id, action: "approval.request", entity: "approval_request", entityId: created.id, detail: { requestNo, action: input.action, chain: input.chain } }, tx);
-  return { id: created.id, requestNo, approverRole: input.chain[0]! };
+  if (user.role === "HQ") {
+    // 第 17 节“总部做的都不用批”：总部本人的请假、报销提交就算通过（只有一个总部账号时也没人能批），审批单上记一笔
+    const result = await executorOf(input.action).execute(tx, user, input.payload);
+    await tx.approvalRequest.update({ where: { id: created.id }, data: { status: "EXECUTED", decidedById: user.id, decidedAt: new Date(), decisionNote: "总部本人，不用批（口径第 17 节）", resultId: result.id, resultNo: result.no } });
+    await writeAudit({ userId: user.id, action: "approval.auto", entity: "approval_request", entityId: created.id, detail: { requestNo, action: input.action } }, tx);
+    return { id: created.id, requestNo, approverRole: input.chain[0]!, autoApproved: true };
+  }
+  return { id: created.id, requestNo, approverRole: input.chain[0]!, autoApproved: false };
+}
+
+/**
+ * 调店、停用的时候，把这个人审批中的请假自动撤回（口径第 19 节，2026-10-21 复查后补）：
+ * 老店的审批人不该再批，两级的也不用转到总部才判“没做成”；调了店的人到新店重新提交。
+ * 报销不撤：钱已经垫出去了，算的是当时那家店，照原来的门店和审批链批下去、照常付款。
+ */
+export async function cancelPendingOaFor(db: Db, userId: number, reason: string): Promise<number> {
+  return withTx(db, async (tx) => {
+    const rows = await tx.approvalRequest.findMany({ where: { requestedById: userId, status: "PENDING", action: "LEAVE" }, select: { id: true } });
+    let count = 0;
+    for (const { id } of rows) {
+      if (!(await lockRow(tx, "approval_requests", id))) continue;
+      const request = await tx.approvalRequest.findUniqueOrThrow({ where: { id } });
+      if (request.status !== "PENDING") continue;
+      await closeWith(tx, request, "CANCELLED");
+      await tx.approvalRequest.update({ where: { id }, data: { status: "CANCELLED", decidedAt: new Date(), decisionNote: reason } });
+      await writeAudit({ userId: null, action: "approval.auto_cancel", entity: "approval_request", entityId: id, detail: { requestNo: request.requestNo, reason } }, tx);
+      count++;
+    }
+    return count;
+  });
 }
 
 // ---------- 审批 ----------
@@ -232,12 +261,14 @@ export async function approveRequest(user: CurrentUser, id: number, note?: unkno
     };
     const requester = await loadRequester(tx, request.requestedById);
     const oa = OA_ACTIONS.includes(request.action);
-    if (!requester) return fail(oa ? "发起人的账号已经停用，这张单不再生效" : "发起人的账号已经停用，这件事做不成，请别人重新发起");
-    if ((requester.role === "STAFF" || requester.role === "STORE_MANAGER") && requester.storeId !== request.storeId) return fail(oa ? "发起人已经调到别的店了，请他重新提交，由新门店审批" : "发起人已经调到别的店了，这件事做不成，请本店的人重新发起");
+    if (!executor.survivesRequesterLeaving) {
+      if (!requester) return fail(oa ? "发起人的账号已经停用，这张单不再生效" : "发起人的账号已经停用，这件事做不成，请别人重新发起");
+      if ((requester.role === "STAFF" || requester.role === "STORE_MANAGER") && requester.storeId !== request.storeId) return fail(oa ? "发起人已经调到别的店了，请他重新提交，由新门店审批" : "发起人已经调到别的店了，这件事做不成，请本店的人重新发起");
+    }
     await tx.$executeRaw`SAVEPOINT approval_execute`;
     let result: { id: number; no: string | null };
     try {
-      result = await executor.execute(tx, requester, payload);
+      result = await executor.execute(tx, requester ?? user, payload); // 报销这类发起人走了也照样批的，执行时不用发起人的身份
     } catch (error) {
       const message = businessMessage(executor, error);
       if (message === null) throw error;
@@ -300,11 +331,11 @@ function viewWhere(user: CurrentUser, view: ApprovalView, status?: ApprovalStatu
 }
 
 export async function listApprovals(user: CurrentUser, query: { view?: ApprovalView; status?: ApprovalStatus; page?: number }) {
-  // 店长、总部默认看待我审批；店员看我发起的；区域经理发起不了也批不了，只看全部（辖区只读）
+  // 店长、总部默认看待我审批；店员看我发起的；区域经理批不了，默认看全部（辖区只读），“我发起的”里是他自己的请假、报销（不挂门店，“全部”里没有）
   const canDecideAny = user.role === "STORE_MANAGER" || user.role === "HQ";
   const fallback: ApprovalView = canDecideAny ? "todo" : user.role === "REGIONAL_MANAGER" ? "all" : "mine";
   let view = query.view ?? fallback;
-  if ((view === "todo" && !canDecideAny) || (view === "mine" && user.role === "REGIONAL_MANAGER")) view = fallback;
+  if (view === "todo" && !canDecideAny) view = fallback;
   const page = clampPage(query.page);
   const where = viewWhere(user, view, query.status);
   const [rows, total, todoCount] = await Promise.all([

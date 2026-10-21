@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Input, Modal, Row, Segmented, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Input, Modal, Popconfirm, Row, Segmented, Select, Space, Table, Tag, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { SimpleList } from "@/components/simple-list";
@@ -47,7 +47,15 @@ export function AttendanceView({ today, stats, targets, detail, detailUserId, de
 
   const shift = today.day.shift;
   const columns: TableColumnsType<Row> = [
-    { title: "员工", render: (_, r) => <a onClick={() => go({ user: r.userId })}>{r.name}</a> },
+    {
+      title: "员工",
+      render: (_, r) => (
+        <Space size={4}>
+          <a onClick={() => go({ user: r.userId })}>{r.name}</a>
+          {r.note ? <Tag>{r.note}</Tag> : null}
+        </Space>
+      ),
+    },
     ...(stats.team ? [{ title: "门店", dataIndex: "store" }] : []),
     { title: "应出勤", align: "right", render: (_, r) => r.summary.scheduled },
     { title: "实际出勤", align: "right", render: (_, r) => r.summary.attended },
@@ -82,12 +90,20 @@ export function AttendanceView({ today, stats, targets, detail, detailUserId, de
                   </Button>
                 </Col>
                 <Col span={12}>
-                  <Button size="large" block loading={pending} onClick={() => act(() => punchAction("OUT"))} style={{ height: 64, fontSize: 18 }}>
-                    下班打卡
-                  </Button>
+                  {today.hasIn ? (
+                    <Button size="large" block loading={pending} onClick={() => act(() => punchAction("OUT"))} style={{ height: 64, fontSize: 18 }}>
+                      下班打卡
+                    </Button>
+                  ) : (
+                    <Popconfirm title="今天还没打上班卡，确定现在打下班卡？" description="早上来了要点“上班打卡”；上班卡之前的下班卡不算数。" okText="确定下班" onConfirm={() => act(() => punchAction("OUT"))}>
+                      <Button size="large" block loading={pending} style={{ height: 64, fontSize: 18 }}>
+                        下班打卡
+                      </Button>
+                    </Popconfirm>
+                  )}
                 </Col>
               </Row>
-              <Typography.Text type="secondary">按当天的班算：上班晚 5 分钟以上算迟到，下班早 5 分钟以上算早退；下班卡可以重复打，以最后一次为准。漏打了找店长补录。</Typography.Text>
+              <Typography.Text type="secondary">按当天的班、按整分钟算：上班晚 5 分钟以上算迟到（9:05 不算、9:06 算），下班早 5 分钟以上算早退；下班卡可以重复打，以上班卡之后最晚的一次为准。漏打了找店长补录。</Typography.Text>
             </Space>
           </Card>
         </Col>
@@ -129,7 +145,7 @@ export function AttendanceView({ today, stats, targets, detail, detailUserId, de
         </Space>
         <Table rowKey="userId" size="small" columns={columns} dataSource={stats.rows} pagination={{ pageSize: 50, hideOnSinglePage: true }} scroll={{ x: 900 }} locale={{ emptyText: "没有员工" }} />
         <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>
-          应出勤按排了上班（早、中、晚班）的天数算，本月只算到今天；排了班一次都没打算缺勤，只打了一次算缺卡；批了的请假不算缺勤；休息日打卡算加班，只记录不算钱。点名字看每天的明细。
+          应出勤按排了上班（早、中、晚班）的天数算，本月只算到今天；排了班一次都没打算缺勤，只打了一次算缺卡；批了的请假不算缺勤；休息日打卡算加班，只记录不算钱。按那天在哪家店算：调了店的人，每家店只算他在这家店的日子；停用、调走的人在他上过班的月份照样列出来。点名字看每天的明细。
         </Typography.Paragraph>
       </Card>
 

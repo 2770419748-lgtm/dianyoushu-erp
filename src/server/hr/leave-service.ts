@@ -59,7 +59,7 @@ export async function submitLeave(user: CurrentUser, input: { kind: unknown; sta
   return withTx(opts.db ?? prisma, async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LEAVE_LOCK_NS}::int, ${user.id}::int)`; // 同一个人同时提交两张，重叠检查不会都放过
     const overlap = await tx.leaveRequest.findFirst({ where: { userId: user.id, status: { in: ["PENDING", "APPROVED"] }, startDate: { lte: dateFromKey(end) }, endDate: { gte: dateFromKey(start) } } });
-    if (overlap) throw new LeaveError(`和已有的请假（${dateKeyOf(overlap.startDate)}～${dateKeyOf(overlap.endDate)}，${OA_STATUS_LABELS[overlap.status]}）重叠了`);
+    if (overlap) throw new LeaveError(`和已有的请假（${dateKeyOf(overlap.startDate)}～${dateKeyOf(overlap.endDate)}，${OA_STATUS_LABELS[overlap.status]}）重叠了${overlap.status === "PENDING" ? "；要改日期，先在请假页撤回那张" : ""}`);
     const leave = await tx.leaveRequest.create({ data: { userId: user.id, storeId: user.storeId, kind, startDate: dateFromKey(start), endDate: dateFromKey(end), days, reason } });
     const label = LEAVE_KIND_LABELS[kind];
     const approval = await createOaApprovalTx(tx, user, {
@@ -74,7 +74,7 @@ export async function submitLeave(user: CurrentUser, input: { kind: unknown; sta
     });
     await tx.leaveRequest.update({ where: { id: leave.id }, data: { approvalRequestId: approval.id } });
     await writeAudit({ userId: user.id, action: "leave.submit", entity: "leave_request", entityId: leave.id, detail: { kind, start, end, days, requestNo: approval.requestNo } }, tx);
-    return { id: leave.id, requestNo: approval.requestNo, approverRole: approval.approverRole, chain };
+    return { id: leave.id, requestNo: approval.requestNo, approverRole: approval.approverRole, chain, autoApproved: approval.autoApproved };
   });
 }
 

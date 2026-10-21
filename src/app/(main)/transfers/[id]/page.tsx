@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { isDbId } from "@/lib/paging";
+import { isDbId, toDbId } from "@/lib/paging";
 import { NoAccess } from "@/components/no-access";
 import { requireUser, type CurrentUser } from "@/server/auth/current-user";
 import { canManageTransfer } from "@/server/auth/permissions";
@@ -23,7 +23,7 @@ async function load(user: CurrentUser, id: number): Promise<Loaded> {
 
 export default async function TransferDetailPage({ params }: PageProps<"/transfers/[id]">) {
   const { id } = await params;
-  const orderId = Number(id);
+  const orderId = toDbId(id);
   if (!isDbId(orderId)) notFound();
   const user = await requireUser();
   const loaded = await load(user, orderId);

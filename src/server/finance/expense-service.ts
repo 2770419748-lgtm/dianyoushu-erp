@@ -96,7 +96,7 @@ export async function submitExpense(
     });
     await tx.expenseClaim.update({ where: { id: claim.id }, data: { approvalRequestId: approval.id } });
     await writeAudit({ userId: user.id, action: "expense.submit", entity: "expense_claim", entityId: claim.id, detail: { claimNo, category, amountFen, storeId, requestNo: approval.requestNo } }, tx);
-    return { id: claim.id, claimNo, requestNo: approval.requestNo, chain };
+    return { id: claim.id, claimNo, requestNo: approval.requestNo, chain, autoApproved: approval.autoApproved };
   });
 }
 

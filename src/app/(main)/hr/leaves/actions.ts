@@ -27,6 +27,7 @@ export async function submitLeaveAction(input: { kind: LeaveKindKey; startDate: 
   const user = await requireUser();
   return run(async () => {
     const r = await submitLeave(user, input);
+    if (r.autoApproved) return `已登记（审批单 ${r.requestNo}）：总部本人的请假不用批，已经生效`;
     return `已提交审批单 ${r.requestNo}：${r.chain.map((c) => APPROVER_ROLE_LABELS[c]).join("批完")}批`;
   });
 }

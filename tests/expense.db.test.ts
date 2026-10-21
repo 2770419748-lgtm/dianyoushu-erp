@@ -135,7 +135,7 @@ describe("费用报销（连本机库，事务回滚）", () => {
     });
   });
 
-  it("店长自己的直接总部批、不能批自己的；总部的人可以算某家店或者不挂门店；区域经理只能选辖区的店", async (ctx) => {
+  it("店长自己的直接总部批、不能批自己的；总部本人的不用批；不挂门店的只有本人和总部看得到；区域经理只能选辖区的店", async (ctx) => {
     if (!stores || !hq) return ctx.skip();
     const me = hq;
     await inRolledBackTx(async (tx) => {
@@ -146,11 +146,14 @@ describe("费用报销（连本机库，事务回滚）", () => {
       await expect(approveRequest(p.mgrA, ownApproval, "", tx)).rejects.toThrow("自己");
 
       const hqClaim = await submitExpense(p.hq2, claim(50000), { db: tx });
+      expect(hqClaim.autoApproved).toBe(true); // 总部本人的不用批（第 17 节）
       const hqRow = await tx.expenseClaim.findUniqueOrThrow({ where: { id: hqClaim.id } });
-      expect(hqRow.storeId).toBeNull();
-      expect((await tx.approvalRequest.findUniqueOrThrow({ where: { id: hqRow.approvalRequestId! } })).storeId).toBeNull();
-      await expect(getApproval(p.mgrA, hqRow.approvalRequestId!, tx)).rejects.toThrow("没有权限");
-      expect(await approveRequest(me, hqRow.approvalRequestId!, "", tx)).toMatchObject({ executed: true });
+      expect(hqRow).toMatchObject({ storeId: null, status: "APPROVED" });
+      const rmClaim = await submitExpense(p.regional, claim(50000), { db: tx }); // 区域经理不选门店：不挂门店，只有本人和总部看得到
+      const rmRow = await tx.expenseClaim.findUniqueOrThrow({ where: { id: rmClaim.id } });
+      expect((await tx.approvalRequest.findUniqueOrThrow({ where: { id: rmRow.approvalRequestId! } })).storeId).toBeNull();
+      await expect(getApproval(p.mgrA, rmRow.approvalRequestId!, tx)).rejects.toThrow("没有权限");
+      expect(await approveRequest(me, rmRow.approvalRequestId!, "", tx)).toMatchObject({ executed: true });
 
       const forStore = await submitExpense(p.hq2, claim(50000, { storeId: stores!.b.id }), { db: tx });
       expect((await tx.expenseClaim.findUniqueOrThrow({ where: { id: forStore.id } })).storeId).toBe(stores!.b.id);

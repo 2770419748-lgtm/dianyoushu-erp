@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { isDbId } from "@/lib/paging";
+import { isDbId, toDbId } from "@/lib/paging";
 import { requireUser } from "@/server/auth/current-user";
 import { NoAccess } from "@/components/no-access";
 import { dropStaleNotice, getNotice } from "@/server/notice/notice-service";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 // 公告详情：打开就算已读；发布人和总部看已读人数、谁还没读，能撤下。
 export default async function NoticePage({ params }: PageProps<"/notices/[id]">) {
-  const id = Number((await params).id);
+  const id = toDbId((await params).id);
   if (!isDbId(id)) notFound();
   const user = await requireUser();
   const notice = await getNotice(user, id);

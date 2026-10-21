@@ -21,5 +21,5 @@ export default async function ApprovalsPage({ searchParams }: PageProps<"/approv
     status: STATUSES.find((s) => s === one(params.status)),
     page: Number(one(params.page)) || 1,
   });
-  return <ApprovalsView data={data} status={STATUSES.find((s) => s === one(params.status))} canDecide={user.role === "STORE_MANAGER" || user.role === "HQ"} canInitiate={user.role !== "REGIONAL_MANAGER"} />;
+  return <ApprovalsView data={data} status={STATUSES.find((s) => s === one(params.status))} canDecide={user.role === "STORE_MANAGER" || user.role === "HQ"} />;
 }
