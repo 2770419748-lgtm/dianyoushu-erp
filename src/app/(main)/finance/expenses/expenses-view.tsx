@@ -22,7 +22,7 @@ import {
 } from "@/lib/expense";
 import { formatFen, yuanToFen } from "@/lib/format";
 import type { ExpenseList, ExpenseView } from "@/server/finance/expense-service";
-import { cancelExpenseAction, payExpenseAction, submitExpenseAction, type ExpenseActionResult } from "./actions";
+import { cancelExpenseAction, changePaymentAction, payExpenseAction, submitExpenseAction, type ExpenseActionResult } from "./actions";
 
 type Row = ExpenseList["rows"][number];
 
@@ -36,6 +36,10 @@ export function ExpensesView({ data, status, month, today, role }: { data: Expen
   const [form, setForm] = useState<{ category?: ExpenseCategoryKey; amount: number | null; occurredOn: string; description: string; storeId: number | null }>({ amount: null, occurredOn: today, description: "", storeId: null });
   const [paying, setPaying] = useState<Row | null>(null);
   const [pay, setPay] = useState<{ payMethod: ExpensePayMethodKey; paidOn: string; note: string }>({ payMethod: "BANK", paidOn: today, note: "" });
+  // 登记错了：改付款、撤销付款（只能改这个月付的）
+  const [changing, setChanging] = useState<{ row: Row; action: "EDIT" | "UNDO" } | null>(null);
+  const [change, setChange] = useState<{ payMethod: ExpensePayMethodKey; paidOn: string; note: string; reason: string }>({ payMethod: "BANK", paidOn: today, note: "", reason: "" });
+  const monthStart = `${today.slice(0, 7)}-01`;
   const pickStore = role === "HQ" || role === "REGIONAL_MANAGER";
 
   function go(next: { view?: ExpenseView; status?: ExpenseStatusKey | null; month?: string | null; store?: number | null; page?: number }) {
@@ -90,6 +94,12 @@ export function ExpensesView({ data, status, month, today, role }: { data: Expen
             <Popconfirm title="撤回这张报销？" onConfirm={() => act(() => cancelExpenseAction(r.id))}>
               <a>撤回</a>
             </Popconfirm>
+          ) : null}
+          {data.canPay && r.status === "PAID" && r.paid && r.paid.on >= monthStart ? (
+            <>
+              <a onClick={() => { setChange({ payMethod: r.paid!.method, paidOn: r.paid!.on, note: r.paid!.note ?? "", reason: "" }); setChanging({ row: r, action: "EDIT" }); }}>改付款</a>
+              <a onClick={() => { setChange({ payMethod: r.paid!.method, paidOn: r.paid!.on, note: "", reason: "" }); setChanging({ row: r, action: "UNDO" }); }}>撤销付款</a>
+            </>
           ) : null}
           {data.canPay && r.status === "APPROVED" ? (
             <Button size="small" type="primary" onClick={() => { setPay({ payMethod: "BANK", paidOn: today, note: "" }); setPaying(r); }}>
@@ -179,7 +189,32 @@ export function ExpensesView({ data, status, month, today, role }: { data: Expen
           <Segmented<ExpensePayMethodKey> value={pay.payMethod} options={EXPENSE_PAY_METHODS.map((m) => ({ value: m, label: EXPENSE_PAY_METHOD_LABELS[m] }))} onChange={(v) => setPay({ ...pay, payMethod: v })} />
           <DatePicker allowClear={false} value={dayjs(pay.paidOn)} disabledDate={(d) => d.format("YYYY-MM-DD") > today} onChange={(d) => d && setPay({ ...pay, paidOn: d.format("YYYY-MM-DD") })} />
           <Input placeholder="备注（可不填，比如转账流水号后四位）" maxLength={100} value={pay.note} onChange={(e) => setPay({ ...pay, note: e.target.value })} />
-          <Typography.Text type="secondary">按付款日期算进门店那个月的费用。</Typography.Text>
+          <Typography.Text type="secondary">按付款日期算进门店那个月的费用；付款日期不能早于批下来那天。</Typography.Text>
+        </Space>
+      </Modal>
+
+      <Modal
+        title={changing ? `${changing.action === "UNDO" ? "撤销付款" : "改付款"}：${changing.row.claimNo} ${changing.row.name} ${formatFen(changing.row.amountFen)} 元` : ""}
+        open={changing !== null}
+        confirmLoading={pending}
+        okText={changing?.action === "UNDO" ? "撤销，回到待付款" : "保存"}
+        okButtonProps={{ danger: changing?.action === "UNDO" }}
+        onCancel={() => setChanging(null)}
+        onOk={() => changing && act(() => changePaymentAction(changing.row.id, { action: changing.action, reason: change.reason, payMethod: change.payMethod, paidOn: change.paidOn, note: change.note }), () => setChanging(null))}
+        destroyOnHidden
+      >
+        <Space orientation="vertical" style={{ width: "100%" }}>
+          {changing?.action === "EDIT" ? (
+            <>
+              <Segmented<ExpensePayMethodKey> value={change.payMethod} options={EXPENSE_PAY_METHODS.map((m) => ({ value: m, label: EXPENSE_PAY_METHOD_LABELS[m] }))} onChange={(v) => setChange({ ...change, payMethod: v })} />
+              <DatePicker allowClear={false} value={dayjs(change.paidOn)} disabledDate={(d) => d.format("YYYY-MM-DD") > today || d.format("YYYY-MM-DD") < monthStart} onChange={(d) => d && setChange({ ...change, paidOn: d.format("YYYY-MM-DD") })} />
+              <Input placeholder="付款备注（可不填）" maxLength={100} value={change.note} onChange={(e) => setChange({ ...change, note: e.target.value })} />
+            </>
+          ) : (
+            <Typography.Text>撤销后这张回到“待付款”，这个月的门店费用里不再算它。</Typography.Text>
+          )}
+          <Input placeholder="为什么改（必填，记进操作日志）" maxLength={100} value={change.reason} onChange={(e) => setChange({ ...change, reason: e.target.value })} />
+          <Typography.Text type="secondary">只能改这个月付的款：过完的月份，门店费用的数字已经定了。</Typography.Text>
         </Space>
       </Modal>
     </Card>

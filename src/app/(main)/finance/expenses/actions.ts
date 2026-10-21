@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { APPROVER_ROLE_LABELS } from "@/lib/approval";
 import type { ExpenseCategoryKey, ExpensePayMethodKey } from "@/lib/expense";
 import { requireUser } from "@/server/auth/current-user";
-import { cancelExpense, ExpenseError, markExpensePaid, submitExpense } from "@/server/finance/expense-service";
+import { cancelExpense, changeExpensePayment, ExpenseError, markExpensePaid, submitExpense } from "@/server/finance/expense-service";
 
 // 费用报销（口径第 19 节）：提交、撤回自己的；总部登记付款。审批在“审批”里批。
 
@@ -37,6 +37,14 @@ export async function cancelExpenseAction(id: number) {
   return run(async () => {
     await cancelExpense(user, id);
     return "已撤回";
+  });
+}
+
+export async function changePaymentAction(id: number, input: { action: "EDIT" | "UNDO"; reason: string; payMethod?: ExpensePayMethodKey; paidOn?: string; note?: string }) {
+  const user = await requireUser();
+  return run(async () => {
+    await changeExpensePayment(user, id, input);
+    return input.action === "UNDO" ? "已撤销付款，回到待付款" : "已改好付款信息";
   });
 }
 

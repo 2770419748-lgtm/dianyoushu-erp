@@ -67,7 +67,8 @@ export async function submitExpense(
   const category = input.category as ExpenseCategoryKey;
   if (!EXPENSE_CATEGORIES.includes(category)) throw new ExpenseError("选一下费用类型");
   const amountFen = Number(input.amountFen);
-  if (!Number.isInteger(amountFen) || amountFen <= 0) throw new ExpenseError("金额要大于 0");
+  if (!Number.isFinite(amountFen) || amountFen <= 0) throw new ExpenseError("金额要大于 0");
+  if (!Number.isInteger(amountFen)) throw new ExpenseError("金额最小到分");
   if (amountFen > EXPENSE_MAX_FEN) throw new ExpenseError(`一张最多报 ${formatFen(EXPENSE_MAX_FEN)} 元，多的分开报`);
   if (!isDateKey(input.occurredOn)) throw new ExpenseError("选一下发生日期");
   const today = bjDateKey(opts.now ?? new Date());
@@ -113,22 +114,71 @@ export async function cancelExpense(user: CurrentUser, claimId: number, db: Db =
   }
 }
 
-/** 总部财务付完款点“已付款”：记付款方式、日期（不能早于发生日期、不能是以后的日子） */
-export async function markExpensePaid(user: CurrentUser, claimId: number, input: { payMethod: unknown; paidOn: unknown; note?: unknown }, opts: { db?: Db; now?: Date } = {}) {
-  if (!canPayExpense(user.role)) throw new ExpenseError("报销付款只有总部能登记");
+const NOT_PAYABLE: Partial<Record<ExpenseStatusKey, string>> = { PENDING: "还在审批中，批下来才能付款", REJECTED: "这张已经驳回了，不能付款", CANCELLED: "这张已经撤回了，不能付款", PAID: "已经付过款了" };
+
+function parsePayment(input: { payMethod: unknown; paidOn: unknown; note?: unknown }, now: Date) {
   const payMethod = input.payMethod as ExpensePayMethodKey;
   if (!EXPENSE_PAY_METHODS.includes(payMethod)) throw new ExpenseError("选一下付款方式");
   if (!isDateKey(input.paidOn)) throw new ExpenseError("选一下付款日期");
-  const paidOn = input.paidOn;
-  if (paidOn > bjDateKey(opts.now ?? new Date())) throw new ExpenseError("付款日期不能是以后的日子");
-  const note = text(input.note, 100) || null;
+  if (input.paidOn > bjDateKey(now)) throw new ExpenseError("付款日期不能是以后的日子");
+  return { payMethod, paidOn: input.paidOn, note: text(input.note, 100) || null };
+}
+
+/** 付款日期最早能写到哪天：批下来那天（北京时间），也不能早于费用发生日期 */
+async function earliestPayDate(tx: Prisma.TransactionClient, claim: { approvalRequestId: number | null; occurredOn: Date }): Promise<string> {
+  const approval = claim.approvalRequestId ? await tx.approvalRequest.findUnique({ where: { id: claim.approvalRequestId }, select: { decidedAt: true } }) : null;
+  const approvedOn = approval?.decidedAt ? bjDateKey(approval.decidedAt) : dateKeyOf(claim.occurredOn);
+  const occurred = dateKeyOf(claim.occurredOn);
+  return approvedOn > occurred ? approvedOn : occurred;
+}
+
+/** 总部财务付完款点“已付款”：记付款方式、日期（不早于批下来那天，不能是以后的日子） */
+export async function markExpensePaid(user: CurrentUser, claimId: number, input: { payMethod: unknown; paidOn: unknown; note?: unknown }, opts: { db?: Db; now?: Date } = {}) {
+  if (!canPayExpense(user.role)) throw new ExpenseError("报销付款只有总部能登记");
+  const { payMethod, paidOn, note } = parsePayment(input, opts.now ?? new Date());
   return withTx(opts.db ?? prisma, async (tx) => {
     if (!(await lockRow(tx, "expense_claims", claimId))) throw new ExpenseError("报销单不存在");
     const claim = await tx.expenseClaim.findUniqueOrThrow({ where: { id: claimId } });
-    if (claim.status !== "APPROVED") throw new ExpenseError(claim.status === "PAID" ? "已经付过款了" : "还没批下来，不能付款");
-    if (paidOn < dateKeyOf(claim.occurredOn)) throw new ExpenseError("付款日期不能早于费用发生日期");
+    if (claim.status !== "APPROVED") throw new ExpenseError(NOT_PAYABLE[claim.status] ?? "这张不能付款");
+    const earliest = await earliestPayDate(tx, claim);
+    if (paidOn < earliest) throw new ExpenseError(`付款日期不能早于 ${earliest}（批下来那天）`);
     await tx.expenseClaim.update({ where: { id: claimId }, data: { status: "PAID", paidOn: dateFromKey(paidOn), payMethod, payNote: note, paidById: user.id } });
     await writeAudit({ userId: user.id, action: "expense.pay", entity: "expense_claim", entityId: claimId, detail: { claimNo: claim.claimNo, amountFen: claim.amountFen, payMethod, paidOn } }, tx);
+  });
+}
+
+/**
+ * 登记错了：改付款（方式、日期、备注）或撤销付款（回到待付款），要写原因、记日志（原来 → 改成）。
+ * 只能改这个月付的：过完的月份费用数字就定了（门店收支按付款日期算），上个月的记错了在这个月另外处理。
+ */
+export async function changeExpensePayment(
+  user: CurrentUser,
+  claimId: number,
+  input: { action: "EDIT" | "UNDO"; reason: unknown; payMethod?: unknown; paidOn?: unknown; note?: unknown },
+  opts: { db?: Db; now?: Date } = {},
+) {
+  if (!canPayExpense(user.role)) throw new ExpenseError("报销付款只有总部能改");
+  const now = opts.now ?? new Date();
+  const reason = text(input.reason, 100);
+  if (!reason) throw new ExpenseError("写一下为什么改");
+  const monthStart = `${bjDateKey(now).slice(0, 7)}-01`;
+  const next = input.action === "EDIT" ? parsePayment({ payMethod: input.payMethod, paidOn: input.paidOn, note: input.note }, now) : null;
+  if (input.action !== "EDIT" && input.action !== "UNDO") throw new ExpenseError("操作不对");
+  return withTx(opts.db ?? prisma, async (tx) => {
+    if (!(await lockRow(tx, "expense_claims", claimId))) throw new ExpenseError("报销单不存在");
+    const claim = await tx.expenseClaim.findUniqueOrThrow({ where: { id: claimId } });
+    if (claim.status !== "PAID" || !claim.paidOn) throw new ExpenseError("这张还没登记付款");
+    const before = { paidOn: dateKeyOf(claim.paidOn), payMethod: claim.payMethod, note: claim.payNote };
+    if (before.paidOn < monthStart) throw new ExpenseError("上个月以前付的款不能改了（过完的月份费用数字已经定了）");
+    if (next) {
+      if (next.paidOn < monthStart) throw new ExpenseError(`只能改成这个月（${monthStart} 以后）的日期`);
+      const earliest = await earliestPayDate(tx, claim);
+      if (next.paidOn < earliest) throw new ExpenseError(`付款日期不能早于 ${earliest}（批下来那天）`);
+      await tx.expenseClaim.update({ where: { id: claimId }, data: { paidOn: dateFromKey(next.paidOn), payMethod: next.payMethod, payNote: next.note, paidById: user.id } });
+    } else {
+      await tx.expenseClaim.update({ where: { id: claimId }, data: { status: "APPROVED", paidOn: null, payMethod: null, payNote: null, paidById: null } });
+    }
+    await writeAudit({ userId: user.id, action: next ? "expense.pay_edit" : "expense.pay_undo", entity: "expense_claim", entityId: claimId, detail: { claimNo: claim.claimNo, reason, before, after: next ? { paidOn: next.paidOn, payMethod: next.payMethod, note: next.note } : null } }, tx);
   });
 }
 
@@ -216,6 +266,7 @@ export type ExpenseList = Awaited<ReturnType<typeof listExpenses>>;
 
 /** 门店某个月已付款的报销合计（门店收支和利润表用，按付款日期） */
 export async function paidExpensesByStore(db: Db, month: string): Promise<Map<number | null, number>> {
+  if (!isMonthKey(month)) throw new ExpenseError("月份不对，格式是 2026-10"); // 网址里取的月份可能是乱填的
   const rows = await db.expenseClaim.groupBy({
     by: ["storeId"],
     where: { status: "PAID", paidOn: { gte: dateFromKey(`${month}-01`), lte: dateFromKey(monthDates(month).at(-1)!) } },

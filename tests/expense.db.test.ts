@@ -6,7 +6,7 @@ import { addDays, bjDateKey } from "@/lib/attendance";
 import { expenseChain } from "@/lib/expense";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { approveRequest, getApproval, rejectRequest } from "@/server/approval/approval-service";
-import { cancelExpense, markExpensePaid, paidExpensesByStore, submitExpense } from "@/server/finance/expense-service";
+import { cancelExpense, changeExpensePayment, markExpensePaid, paidExpensesByStore, submitExpense } from "@/server/finance/expense-service";
 
 // 费用报销（口径第 19 节，连本机库，事务回滚不留数据）：要几级批、批了待付款、总部登记付款、撤回驳回、谁能报哪家的。
 // 测试用的人都在事务里新建，不碰演示数据。
@@ -90,20 +90,35 @@ describe("费用报销（连本机库，事务回滚）", () => {
       expect(r.claimNo).toMatch(/^BX\d{8}\d{4}$/);
       const row = await tx.expenseClaim.findUniqueOrThrow({ where: { id: r.id } });
       expect(row).toMatchObject({ storeId: stores!.a.id, status: "PENDING", amountFen: 18600 });
-      await expect(markExpensePaid(me, r.id, { payMethod: "BANK", paidOn: today }, { db: tx })).rejects.toThrow("还没批下来");
+      await expect(markExpensePaid(me, r.id, { payMethod: "BANK", paidOn: today }, { db: tx })).rejects.toThrow("还在审批中");
       await expect(approveRequest(p.mgrB, row.approvalRequestId!, "", tx)).rejects.toThrow(); // 别家店长
       expect(await approveRequest(p.mgrA, row.approvalRequestId!, "", tx)).toMatchObject({ executed: true, resultNo: r.claimNo });
       expect((await tx.expenseClaim.findUniqueOrThrow({ where: { id: r.id } })).status).toBe("APPROVED");
 
       await expect(markExpensePaid(p.mgrA, r.id, { payMethod: "BANK", paidOn: today }, { db: tx })).rejects.toThrow("只有总部");
       await expect(markExpensePaid(me, r.id, { payMethod: "BANK", paidOn: addDays(today, 1) }, { db: tx })).rejects.toThrow("以后的日子");
-      await expect(markExpensePaid(me, r.id, { payMethod: "BANK", paidOn: addDays(today, -5) }, { db: tx })).rejects.toThrow("早于费用发生日期");
+      await expect(markExpensePaid(me, r.id, { payMethod: "BANK", paidOn: addDays(today, -1) }, { db: tx })).rejects.toThrow("批下来那天"); // 今天才批的，不能写成昨天付的
       await expect(markExpensePaid(me, r.id, { payMethod: "CHEQUE", paidOn: today }, { db: tx })).rejects.toThrow("付款方式");
       const before = (await paidExpensesByStore(tx, today.slice(0, 7))).get(stores!.a.id) ?? 0;
       await markExpensePaid(me, r.id, { payMethod: "WECHAT", paidOn: today, note: "尾号 1234" }, { db: tx });
       expect(await tx.expenseClaim.findUniqueOrThrow({ where: { id: r.id } })).toMatchObject({ status: "PAID", payMethod: "WECHAT", paidById: me.id, payNote: "尾号 1234" });
       expect((await paidExpensesByStore(tx, today.slice(0, 7))).get(stores!.a.id)).toBe(before + 18600);
       await expect(markExpensePaid(me, r.id, { payMethod: "BANK", paidOn: today }, { db: tx })).rejects.toThrow("已经付过款");
+
+      // 登记错了：改付款、撤销付款，要写原因、记日志；只能改这个月付的
+      await expect(changeExpensePayment(me, r.id, { action: "UNDO", reason: "" }, { db: tx })).rejects.toThrow("为什么改");
+      await expect(changeExpensePayment(p.mgrA, r.id, { action: "UNDO", reason: "记错了" }, { db: tx })).rejects.toThrow("只有总部");
+      await changeExpensePayment(me, r.id, { action: "EDIT", reason: "方式记错了", payMethod: "BANK", paidOn: today, note: "" }, { db: tx });
+      expect(await tx.expenseClaim.findUniqueOrThrow({ where: { id: r.id } })).toMatchObject({ status: "PAID", payMethod: "BANK" });
+      expect((await tx.auditLog.findFirstOrThrow({ where: { action: "expense.pay_edit", entityId: String(r.id) } })).detail).toMatchObject({ reason: "方式记错了", before: { payMethod: "WECHAT" }, after: { payMethod: "BANK" } });
+      await changeExpensePayment(me, r.id, { action: "UNDO", reason: "还没真付" }, { db: tx });
+      expect(await tx.expenseClaim.findUniqueOrThrow({ where: { id: r.id } })).toMatchObject({ status: "APPROVED", paidOn: null, payMethod: null, paidById: null });
+      await markExpensePaid(me, r.id, { payMethod: "BANK", paidOn: today }, { db: tx });
+      const [y, m] = today.split("-").map(Number) as [number, number];
+      const lastMonth = new Date(Date.UTC(y, m - 2, 15)); // 当成上个月付的
+      await tx.expenseClaim.update({ where: { id: r.id }, data: { paidOn: lastMonth } });
+      await expect(changeExpensePayment(me, r.id, { action: "UNDO", reason: "记错了" }, { db: tx })).rejects.toThrow("上个月以前付的款不能改");
+      await expect(paidExpensesByStore(tx, "2026-13")).rejects.toThrow("月份不对");
     });
   });
 
@@ -132,6 +147,8 @@ describe("费用报销（连本机库，事务回滚）", () => {
       await cancelExpense(p.staffA, cancelled.id, tx);
       expect((await tx.expenseClaim.findUniqueOrThrow({ where: { id: cancelled.id } })).status).toBe("CANCELLED");
       await expect(cancelExpense(p.staffA, cancelled.id, tx)).rejects.toThrow("不能撤回");
+      await expect(markExpensePaid(me, cancelled.id, { payMethod: "BANK", paidOn: today }, { db: tx })).rejects.toThrow("已经撤回了");
+      await expect(markExpensePaid(me, rejected.id, { payMethod: "BANK", paidOn: today }, { db: tx })).rejects.toThrow("已经驳回了");
     });
   });
 
@@ -168,7 +185,7 @@ describe("费用报销（连本机库，事务回滚）", () => {
       const p = await people(tx);
       await expect(submitExpense(p.staffA, claim(100, { category: "FOOD" }), { db: tx })).rejects.toThrow("费用类型");
       await expect(submitExpense(p.staffA, claim(0), { db: tx })).rejects.toThrow("大于 0");
-      await expect(submitExpense(p.staffA, claim(10.5), { db: tx })).rejects.toThrow("大于 0");
+      await expect(submitExpense(p.staffA, claim(10.5), { db: tx })).rejects.toThrow("最小到分");
       await expect(submitExpense(p.staffA, claim(5000001), { db: tx })).rejects.toThrow("最多报");
       await expect(submitExpense(p.staffA, claim(100, { occurredOn: addDays(today, 1) }), { db: tx })).rejects.toThrow("以后的日子");
       await expect(submitExpense(p.staffA, claim(100, { occurredOn: addDays(today, -91) }), { db: tx })).rejects.toThrow("90 天以内");

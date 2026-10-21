@@ -24,7 +24,7 @@ import type { PrismaClient } from "../src/generated/prisma/client";
 //     驳回的要有原因；待审批、撤回的不该有审批人和结果。
 // 12. 企业微信（口径第 12 节第三步）：好友关系、客服会话认的客户，这个客户绑的微信要就是这个；接替完毕的继承，接手人名下要有这条好友关系；
 //     继承的原跟进关系要是这个客户的；客服会话里“客户发消息后回了几条”不超过 5。
-// 13. 人事 OA（口径第 19 节）：请假单、报销单和它的审批单对得上（审批中↔待审批，已批（待付款、已付款）↔已通过且做出来的就是这张单，驳回↔驳回，撤回↔撤回或批了没做成）；
+// 13. 人事 OA（口径第 19 节）：请假单、报销单和它的审批单对得上（金额、门店一致；已付款的有付款日期；审批中↔待审批，已批（待付款、已付款）↔已通过且做出来的就是这张单，驳回↔驳回，撤回↔撤回或批了没做成）；
 //     同一个人审批中、已批的假日期不重叠；两级审批还在批的，前面几级的记录条数 = 现在是第几级 − 1。
 
 export interface IntegrityResult {
@@ -200,6 +200,7 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
           WHERE a.status = 'PENDING' AND cardinality(a.chain) > 1 AND COALESCE(jsonb_array_length(a.step_log), 0) <> a.step - 1)
       + (SELECT COUNT(*) FROM expense_claims e LEFT JOIN approval_requests a ON a.id = e.approval_request_id
         WHERE a.id IS NULL OR a.action <> 'EXPENSE' OR (a.payload->>'claimId')::int IS DISTINCT FROM e.id OR a.amount_fen <> e.amount_fen
+          OR a.store_id IS DISTINCT FROM e.store_id OR (e.status = 'PAID' AND e.paid_on IS NULL)
           OR NOT ((e.status = 'PENDING' AND a.status = 'PENDING')
             OR (e.status IN ('APPROVED', 'PAID') AND a.status = 'EXECUTED' AND a.result_id = e.id)
             OR (e.status = 'REJECTED' AND a.status = 'REJECTED')
