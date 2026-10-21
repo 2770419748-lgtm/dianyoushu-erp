@@ -25,7 +25,11 @@ export async function generatePayrollAction(month: string) {
   const user = await requireUser();
   return run(async () => {
     const r = await generatePayroll(user, month);
-    return `已生成 ${r.slipCount} 张工资条，应发合计 ${formatFen(r.grossFen)} 元（草稿，核对完再发布）`;
+    const extra = [
+      r.carried ? `带上了上一份作废工资里的 ${r.carried} 笔奖惩` : null,
+      r.stale.length ? `${r.stale.slice(0, 5).join("、")}${r.stale.length > 5 ? " 等" : ""}账号在用、档案里却有离职日期（底薪按离职日期折算，离职日期在这个月以前的没生成工资条），到员工档案核对` : null,
+    ].filter(Boolean);
+    return `已生成 ${r.slipCount} 张工资条，应发合计 ${formatFen(r.grossFen)} 元（草稿，核对完再发布）${extra.length ? `；${extra.join("；")}` : ""}`;
   });
 }
 

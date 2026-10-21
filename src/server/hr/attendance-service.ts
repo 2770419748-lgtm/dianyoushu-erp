@@ -180,12 +180,16 @@ export async function userMonthStoreDays(db: Db, userId: number, month: string, 
   return (await monthSummaries(db, [userId], month, now)).get(userId)?.storeDays ?? new Map();
 }
 
-/** 一批人一个月的考勤汇总（按人整月）和每家店上了几天班（排了上班的日子按那天的排班门店数），生成工资条一次查完 */
-export async function monthSummaries(db: Db, userIds: number[], month: string, now = new Date()) {
+/**
+ * 一批人一个月的考勤汇总（按人整月）和每家店上了几天班（排了上班的日子按那天的排班门店数），生成工资条一次查完。
+ * windows 给了就只算在职那几天（入职日到离职日，含当天）：离职以后、入职以前排着的班不算缺勤、不算上班天数（底薪已经按在职天数折算过了）
+ */
+export async function monthSummaries(db: Db, userIds: number[], month: string, now = new Date(), windows?: Map<number, { from: string; to: string }>) {
   const all = await monthDays(db, userIds, month, now);
   const out = new Map<number, { summary: ReturnType<typeof summarizeMonth>; storeDays: Map<number, number> }>();
   for (const id of userIds) {
-    const days = all.get(id) ?? [];
+    const w = windows?.get(id);
+    const days = (all.get(id) ?? []).filter((d) => !w || (d.date >= w.from && d.date <= w.to));
     const storeDays = new Map<number, number>();
     for (const d of days) if (d.storeId !== null && d.shift && d.shift !== "OFF") storeDays.set(d.storeId, (storeDays.get(d.storeId) ?? 0) + 1);
     out.set(id, { summary: summarizeMonth(days), storeDays });

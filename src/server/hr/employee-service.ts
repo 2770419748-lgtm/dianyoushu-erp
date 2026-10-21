@@ -96,7 +96,10 @@ export async function saveEmployeeProfile(user: CurrentUser, userId: number, inp
   let commissionPlanId: number | null = null;
   if (input.commissionPlanId !== undefined && input.commissionPlanId !== null && input.commissionPlanId !== "") {
     commissionPlanId = Number(input.commissionPlanId);
-    if (!Number.isInteger(commissionPlanId) || !(await db.commissionPlan.findFirst({ where: { id: commissionPlanId, isActive: true }, select: { id: true } }))) throw new EmployeeError("提成方案不存在或已经停用");
+    // 方案没变就不管它停没停用（方案停用后，挂在上面的人只改电话也要能存）；换成别的方案才要求在用
+    const current = (await db.employeeProfile.findUnique({ where: { userId }, select: { commissionPlanId: true } }))?.commissionPlanId ?? null;
+    if (!Number.isInteger(commissionPlanId)) throw new EmployeeError("提成方案不对");
+    if (commissionPlanId !== current && !(await db.commissionPlan.findFirst({ where: { id: commissionPlanId, isActive: true }, select: { id: true } }))) throw new EmployeeError("提成方案不存在或已经停用");
   }
   const data = { hireDate, position: text(input.position, 20), phone: phone || null, baseSalaryFen: salary, leaveDate, note: text(input.note, 200), commissionPlanId };
   await db.employeeProfile.upsert({ where: { userId }, create: { userId, ...data }, update: data });

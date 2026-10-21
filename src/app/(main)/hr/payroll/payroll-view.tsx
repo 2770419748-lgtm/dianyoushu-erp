@@ -81,8 +81,17 @@ function ManageView({ data }: { data: Manage }) {
         }
       >
         <Typography.Paragraph type="secondary">
-          应发 = 基本工资（入职、离职当月按在职天数折算）+ 提成 − 缺勤扣款（缺勤一天扣 基本工资 ÷ 当月 {data.daysInMonth} 天）+ 其他奖惩。提成按员工档案里选的方案：销售额（按开单人，扣掉退货）× 比例 + 每台主机 + 每份碎屏险延保。社保、个税财务另算。草稿能改奖惩、重算；发布后员工能看自己的，数字锁定，要改只能整月作废重算。
+          应发 = 基本工资（入职、离职当月按在职天数折算）+ 提成 − 缺勤扣款（缺勤一天扣 基本工资 ÷ 当月 {data.daysInMonth} 天）+ 其他奖惩。提成按员工档案里选的方案：销售额（按开单人，扣掉退货）× 比例 + 每台主机 + 每份碎屏险延保。社保、个税财务另算。缺勤只算在职那几天（入职日到离职日），这个月一天都不在职的不生成。草稿能改奖惩、重算；月份过完（下月 1 号起）才能发布，发布后员工能看自己的，数字锁定，要改只能整月作废重算（奖惩会带到新草稿）。
         </Typography.Paragraph>
+        {data.staleLeave.length ? (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            title={`${data.staleLeave.map((u) => `${u.name}（${u.leaveDate}）`).join("、")} 账号在用，员工档案里却有离职日期`}
+            description="工资按离职日期折算，离职日期在这个月以前的不生成工资条。如果是重新回来上班，到员工档案把离职日期清掉再重新算。"
+          />
+        ) : null}
         {run ? (
           <Space wrap size="large" style={{ marginBottom: 12 }}>
             <Statistic title="状态" valueRender={() => <Tag color={PAYROLL_STATUS_COLORS[run.status]}>{PAYROLL_STATUS_LABELS[run.status]}</Tag>} />
@@ -99,7 +108,11 @@ function ManageView({ data }: { data: Manage }) {
               {run ? "重新算（奖惩保留）" : "生成工资条"}
             </Button>
           ) : null}
-          {run?.status === "DRAFT" ? (
+          {run?.status === "DRAFT" && data.month >= data.thisMonth ? (
+            <Button type="primary" disabled title="这个月还没过完，提成、考勤还会变">
+              下月 1 号起才能发布
+            </Button>
+          ) : run?.status === "DRAFT" ? (
             <Popconfirm title={`发布 ${data.month} 的工资条？发布后数字锁定，员工能看自己的。`} onConfirm={() => act(() => publishPayrollAction(run.id))}>
               <Button type="primary" loading={pending}>
                 发布

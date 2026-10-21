@@ -330,6 +330,11 @@ export async function voidSalesOrderTx(tx: Tx, user: CurrentUser, orderId: numbe
   if (order.status !== "COMPLETED") throw new SalesError("这张单已经作废了");
   if (order.dailyCloseId) throw new SalesError("当日已日结确认，不能作废");
   if (order._count.returnOrders > 0) throw new SalesError("这张单已经有退货记录，不能作废，剩下的继续走退货");
+  // 这个月的工资已经发布：作废会改掉已经发了的提成（口径第 19 节，2026-10-21 复查后定）；要退就走退货，记到退货当月冲回。
+  // FOR SHARE 和同时进行的发布排队：发布先拿到锁，这里等它提交后读到“已发布”；这里先拿到，发布等作废提交
+  const payMonth = order.bizDate.toISOString().slice(0, 7);
+  const payRuns = await tx.$queryRaw<{ status: string }[]>`SELECT status::text AS status FROM payroll_runs WHERE month = ${payMonth} AND status <> 'VOIDED' FOR SHARE`;
+  if (payRuns.some((r) => r.status === "PUBLISHED")) throw new SalesError(`${payMonth} 的工资已经发布了，作废会改掉已经发了的提成；要退就走退货`);
   if (await tx.serviceEntitlement.count({ where: { salesOrderId: orderId, status: "CLAIMED" } })) throw new SalesError("这张单上的碎屏险已经在维修单上理赔过了，不能作废");
   const voidReason = typeof reason === "string" ? reason.trim().slice(0, 200) || null : null;
   // 审批（口径第 17 节）：作废要批的，先存审批单；同一张单同时只能有一张待审批

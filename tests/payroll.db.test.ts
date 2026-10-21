@@ -4,7 +4,9 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import { bjDateKey, bjDateTime, dateFromKey } from "@/lib/attendance";
 import type { CurrentUser } from "@/server/auth/current-user";
+import { saveEmployeeProfile } from "@/server/hr/employee-service";
 import { generatePayroll, getPayrollPage, payrollCostByStore, publishPayroll, savePlan, setAdjustment, voidPayroll } from "@/server/hr/payroll-service";
+import { voidSalesOrderTx } from "@/server/sales/sales-service";
 import { runIntegrityChecks } from "../prisma/integrity-checks";
 
 // 提成和工资条（口径第 19 节，连本机库，事务回滚不留数据）：按考勤扣缺勤、按开单算提成、奖惩、发布锁定、作废重算、
@@ -19,6 +21,7 @@ const today = bjDateKey(new Date());
 const [ty, tm] = today.split("-").map(Number) as [number, number];
 const prev = new Date(Date.UTC(ty, tm - 2, 1)).toISOString().slice(0, 7); // 上个月，整月都过完了
 const day = (n: number) => `${prev}-${String(n).padStart(2, "0")}`;
+const beforePrev = new Date(Date.UTC(ty, tm - 2, 0)).toISOString().slice(0, 10); // 上上个月最后一天
 
 const asUser = (u: { id: number; username: string; name: string; role: CurrentUser["role"]; storeId: number | null; regionId: number | null; isActive: boolean }) => ({ ...u, store: null, region: null }) as CurrentUser;
 
@@ -133,12 +136,19 @@ describe("工资条（连本机库，事务回滚）", () => {
       const before = await getPayrollPage(staff, { month: prev }, new Date(), tx);
       expect(before.manage).toBe(false);
       if (!before.manage) expect(before.mine).toHaveLength(0); // 草稿员工看不到
+      const draftSlip = await tx.payrollSlip.findFirstOrThrow({ where: { runId: r.runId, userId: staff.id } });
+      await setAdjustment(b.hq, draftSlip.id, { adjustmentFen: -5000, note: "迟到罚款" }, tx);
+      // 月份还没过完不能发布（提成、考勤还会变）
+      await expect(publishPayroll(b.hq, r.runId, tx, new Date(`${day(28)}T04:00:00Z`))).rejects.toThrow("还没过完");
       await publishPayroll(b.hq, r.runId, tx);
       await expect(publishPayroll(b.hq, r.runId, tx)).rejects.toThrow("已经发布");
       const slip = await tx.payrollSlip.findFirstOrThrow({ where: { runId: r.runId, userId: staff.id } });
       await expect(setAdjustment(b.hq, slip.id, { adjustmentFen: 100, note: "x" }, tx)).rejects.toThrow("发布了的工资不能改");
       await expect(generatePayroll(b.hq, prev, { db: tx })).rejects.toThrow("已经发布");
       expect(await tx.notification.count({ where: { userId: staff.id, title: `工资条：${prev}` } })).toBe(1);
+      // 工资发布了，那个月的销售单不能再作废（会改掉已经发了的提成），要退走退货
+      const order2 = await tx.salesOrder.findFirstOrThrow({ where: { orderNo: "SO-PAYTEST-2" } });
+      await expect(voidSalesOrderTx(tx, b.hq, order2.id, "开错单")).rejects.toThrow("工资已经发布了");
 
       const mine = await getPayrollPage(staff, { month: prev }, new Date(), tx);
       if (mine.manage) throw new Error("店员不该是管理视图");
@@ -159,6 +169,58 @@ describe("工资条（连本机库，事务回滚）", () => {
       expect((await payrollCostByStore(tx, prev)).published).toBe(false);
       const r2 = await generatePayroll(b.hq, prev, { db: tx });
       expect(r2.runId).not.toBe(r.runId);
+      // 作废后重新生成，带上作废那份里的奖惩
+      expect(r2.carried).toBe(r.carried + 1); // r 自己也带了演示数据那份作废工资里的奖惩
+      expect(await tx.payrollSlip.findFirstOrThrow({ where: { runId: r2.runId, userId: staff.id } })).toMatchObject({ adjustmentFen: -5000, adjustmentNote: "迟到罚款" });
+    });
+  });
+
+  it("缺勤和分店天数只算在职那几天；这个月一天都不在职的不生成；账号在用却有离职日期会提醒；方案停用不卡没换方案的档案", async (ctx) => {
+    if (!base) return ctx.skip();
+    const b = base;
+    await inRolledBackTx(async (tx) => {
+      await tx.payrollRun.updateMany({ where: { month: prev, status: { not: "VOIDED" } }, data: { status: "VOIDED", voidedAt: new Date(), voidReason: "测试前清掉演示数据" } });
+      const { staff, manager, planId } = await setup(tx);
+      const mk = async (username: string, name: string, isActive: boolean, profile: { hireDate?: string; leaveDate?: string }) => {
+        const u = await tx.user.create({ data: { username, passwordHash: "x", name, role: "STAFF", storeId: b.a.id, isActive } });
+        await tx.employeeProfile.create({ data: { userId: u.id, baseSalaryFen: 300000, hireDate: profile.hireDate ? dateFromKey(profile.hireDate) : null, leaveDate: profile.leaveDate ? dateFromKey(profile.leaveDate) : null } });
+        return u;
+      };
+      // 11 号才入职：1～10 号排了班没打卡也不算缺勤，也不算在 A 店上班的天数
+      const newbie = await mk("paytest_n", "工资测试新人", true, { hireDate: day(11) });
+      for (let n = 1; n <= 15; n++) {
+        await tx.shiftSchedule.create({ data: { storeId: b.a.id, userId: newbie.id, date: dateFromKey(day(n)), shift: "MORNING", updatedById: manager.id } });
+        if (n < 11) continue;
+        await tx.attendancePunch.create({ data: { userId: newbie.id, storeId: b.a.id, date: dateFromKey(day(n)), kind: "IN", at: bjDateTime(day(n), 8 * 60 + 55), createdById: newbie.id } });
+        await tx.attendancePunch.create({ data: { userId: newbie.id, storeId: b.a.id, date: dateFromKey(day(n)), kind: "OUT", at: bjDateTime(day(n), 17 * 60 + 5), createdById: newbie.id } });
+      }
+      // 上上个月就走了、账号停用，这个月只剩一张开单记录：不生成
+      const gone = await mk("paytest_g", "工资测试已走", false, { leaveDate: beforePrev });
+      await tx.salesOrder.create({ data: { orderNo: "SO-PAYTEST-G", storeId: b.a.id, salespersonId: gone.id, bizDate: dateFromKey(day(3)), subtotalFen: 5000, totalFen: 5000 } });
+      // 账号在用、档案里有离职日期：一个在这个月中间（底薪折算），一个在上上个月（不生成）；都要提醒
+      const stale = await mk("paytest_t", "工资测试离职未清", true, { leaveDate: day(20) });
+      const stale2 = await mk("paytest_t2", "工资测试早已离职", true, { leaveDate: beforePrev });
+
+      const r = await generatePayroll(b.hq, prev, { db: tx });
+      const days = new Date(Date.UTC(ty, tm - 1, 0)).getUTCDate();
+      const slips = await tx.payrollSlip.findMany({ where: { runId: r.runId, userId: { in: [newbie.id, gone.id, stale.id, stale2.id] } } });
+      const of = (id: number) => slips.find((s) => s.userId === id);
+      expect(of(newbie.id)).toMatchObject({ employedDays: days - 10, absentDays: 0, absenceDeductionFen: 0, baseFen: Math.round((300000 * (days - 10)) / days), storeDays: { [String(b.a.id)]: 5 } });
+      expect(of(gone.id)).toBeUndefined();
+      expect(of(stale2.id)).toBeUndefined();
+      expect(of(stale.id)).toMatchObject({ employedDays: 20 });
+      expect(r.stale).toEqual(expect.arrayContaining(["工资测试离职未清", "工资测试早已离职"]));
+      expect(r.stale).not.toContain("工资测试已走");
+      const page = await getPayrollPage(b.hq, { month: prev }, new Date(), tx);
+      if (!page.manage) throw new Error("总部应该是管理视图");
+      expect(page.staleLeave.map((u) => u.id)).toEqual(expect.arrayContaining([stale.id, stale2.id]));
+
+      // 方案停用后，挂在上面的人改档案（方案没变）照样能存；换成停用的方案不行
+      await savePlan(b.hq, { id: planId, name: "测试店员方案", salesRateBp: 100, perDeviceFen: 2000, perServiceFen: 1500, isActive: false }, tx);
+      const off = await savePlan(b.hq, { name: "测试停用方案", salesRateBp: 50, perDeviceFen: 0, perServiceFen: 0, isActive: false }, tx);
+      await saveEmployeeProfile(b.hq, staff.id, { baseSalaryFen: 400000, commissionPlanId: planId, phone: "13800001111" }, tx);
+      await expect(saveEmployeeProfile(b.hq, newbie.id, { baseSalaryFen: 300000, hireDate: day(11), commissionPlanId: off }, tx)).rejects.toThrow("停用");
+      expect((await runIntegrityChecks(tx as never)).hr).toBe(0);
     });
   });
 });
