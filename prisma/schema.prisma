@@ -223,6 +223,15 @@ enum WecomEventStatus {
 }
 
 /// 客户标签从哪来
+/// 公告发给谁（口径第 19 节）
+enum NoticeScope {
+  ALL    // 全公司
+  REGION // 某个区域（区域经理和区域里各店的人）
+  STORE  // 某家门店
+
+  @@map("notice_scope")
+}
+
 /// 智能提醒的规则（口径第 18 节）
 enum AlertKind {
   STALE_DEVICES    // 滞销机器
@@ -531,6 +540,9 @@ model User {
   wecomTransfersTo      WecomTransfer[] @relation("WecomTransferTo")
   wecomTransfersCreated WecomTransfer[] @relation("WecomTransferCreatedBy")
   notifications         Notification[]
+  profile               EmployeeProfile?
+  noticesAuthored       Notice[]          @relation("NoticeAuthor")
+  noticeReads           NoticeRead[]
 
   @@index([storeId])
   @@index([regionId])
@@ -1664,6 +1676,57 @@ model WecomEvent {
   @@map("wecom_events")
 }
 
+/// 员工档案（口径第 19 节）：在员工账号上补的人事信息，一个账号一份。工资只有本人和总部能看
+model EmployeeProfile {
+  userId        Int       @id @map("user_id")
+  hireDate      DateTime? @map("hire_date") @db.Date
+  position      String? // 岗位（文字，如“店员”“收银”“维修”）
+  phone         String? // 联系电话，列表里脱敏
+  baseSalaryFen Int       @default(0) @map("base_salary_fen") // 基本工资（每月，分；数据库 CHECK 不为负）
+  leaveDate     DateTime? @map("leave_date") @db.Date // 离职日期（停用时填）
+  note          String?
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("employee_profiles")
+}
+
+/// 公告（口径第 19 节）：总部发全部、区域、门店，店长发本店；发布时给范围内的人发系统内消息
+model Notice {
+  id          Int         @id @default(autoincrement())
+  title       String
+  body        String
+  scope       NoticeScope
+  regionId    Int?        @map("region_id")
+  storeId     Int?        @map("store_id")
+  authorId    Int         @map("author_id")
+  recipients  Int         @default(0) // 发布时发给了多少人
+  withdrawnAt DateTime?   @map("withdrawn_at") // 撤下了（不删，大家看不到）
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  author        User           @relation("NoticeAuthor", fields: [authorId], references: [id])
+  reads         NoticeRead[]
+  notifications Notification[]
+
+  @@index([createdAt])
+  @@map("notices")
+}
+
+/// 公告谁读了
+model NoticeRead {
+  noticeId Int      @map("notice_id")
+  userId   Int      @map("user_id")
+  readAt   DateTime @default(now()) @map("read_at")
+
+  notice Notice @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@id([noticeId, userId])
+  @@map("notice_reads")
+}
+
 /// 智能提醒命中的一条（口径第 18 节）：同一天同一个范围同一类只有一条，再生成就更新
 model AlertItem {
   id        Int        @id @default(autoincrement())
@@ -1724,10 +1787,14 @@ model Notification {
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
+  noticeId  Int?      @map("notice_id") // 公告发的消息（口径第 19 节）
+
   user   User         @relation(fields: [userId], references: [id])
   digest AlertDigest? @relation(fields: [digestId], references: [id], onDelete: Cascade)
+  notice Notice?      @relation(fields: [noticeId], references: [id], onDelete: Cascade)
 
   @@unique([userId, digestId])
+  @@unique([userId, noticeId])
   @@index([userId, readAt])
   @@map("notifications")
 }

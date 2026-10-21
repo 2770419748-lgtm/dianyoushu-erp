@@ -37,6 +37,9 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/wecom/kf": "微信客服",
   "/wecom/transfers": "客户继承",
   "/alerts": "智能提醒",
+  "/notices": "公告",
+  "/hr": "人事",
+  "/hr/employees": "员工档案",
   "/sales": "销售单",
   "/sales/new": "开单",
   "/trade-ins": "回收单",
@@ -55,7 +58,7 @@ export const ROUTE_TITLES: Record<string, string> = {
 };
 
 /** 只是路径中间的一级、本身没有页面的地址：面包屑上显示文字但不做链接（点了会 404） */
-const NO_PAGE = new Set(["/stock/devices", "/m", "/reports"]);
+const NO_PAGE = new Set(["/stock/devices", "/m", "/reports", "/hr", "/finance"]);
 
 /** 路径里通用的最后一段（如 /sales/12/return） */
 const SEGMENT_TITLES: Record<string, string> = { return: "退货", edit: "编辑", new: "新建" };

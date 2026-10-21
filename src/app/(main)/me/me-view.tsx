@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import { Alert, App, Button, Card, Descriptions, Form, Input, Space } from "antd";
+import { formatDate, formatFen } from "@/lib/format";
 import { changePasswordAction } from "./actions";
 
 interface Values {
@@ -10,7 +11,9 @@ interface Values {
   confirm: string;
 }
 
-export function MeView({ info, isDemo }: { info: { username: string; name: string; role: string; scope: string }; isDemo: boolean }) {
+type Profile = { hireDate: Date | null; position: string | null; phone: string | null; baseSalaryFen: number; leaveDate: Date | null } | null;
+
+export function MeView({ info, isDemo, profile = null }: { info: { username: string; name: string; role: string; scope: string }; isDemo: boolean; profile?: Profile }) {
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [form] = Form.useForm<Values>();
@@ -27,6 +30,21 @@ export function MeView({ info, isDemo }: { info: { username: string; name: strin
             { key: "scope", label: "能看的范围", children: info.scope },
           ]}
         />
+      </Card>
+      <Card title="我的档案">
+        {profile ? (
+          <Descriptions
+            column={1}
+            items={[
+              { key: "position", label: "岗位", children: profile.position ?? "-" },
+              { key: "hire", label: "入职日期", children: profile.hireDate ? formatDate(profile.hireDate) : "-" },
+              { key: "phone", label: "联系电话", children: profile.phone ?? "-" },
+              { key: "salary", label: "基本工资", children: `${formatFen(profile.baseSalaryFen)} 元/月（只有你和总部能看）` },
+            ]}
+          />
+        ) : (
+          "总部还没给你建档案"
+        )}
       </Card>
       <Card title="改密码">
         {isDemo ? (

@@ -1129,8 +1129,58 @@ async function main() {
   buildCarrierDemo(stores.map((s) => s.id), users, hq.id, storeFactor);
 
   await write();
+  await writeHrDemo(users, stores, hq.id); // 人事 OA（口径第 19 节），放在写完业务数据之后
   await verify();
   await prisma.$disconnect();
+}
+
+/**
+ * 人事 OA 演示数据（口径第 19 节）：每个人一份员工档案（岗位、入职日期、电话、基本工资）；
+ * 五条公告（全公司、区域、门店），大部分人读过，最近两条演示账号还没读（右上角“消息”有未读）。
+ */
+async function writeHrDemo(users: { id: number; username: string; role: string; storeId: number | null; regionId: number | null; isActive: boolean }[], stores: { id: number; regionId: number }[], hqId: number) {
+  const roundTo = (n: number, step: number) => Math.round(n / step) * step;
+  const profiles = users.map((u) => {
+    const [lo, hi] = u.role === "STAFF" ? [350000, 480000] : u.role === "STORE_MANAGER" ? [650000, 800000] : u.role === "REGIONAL_MANAGER" ? [900000, 1100000] : [800000, 1200000];
+    const hire = at(bizDateOf(-between(70, 1300)), 9, 0);
+    return {
+      userId: u.id,
+      hireDate: new Date(hire.toISOString().slice(0, 10)),
+      position: u.role === "STAFF" ? pick(["店员", "店员", "店员", "收银", "维修"]) : u.role === "STORE_MANAGER" ? "店长" : u.role === "REGIONAL_MANAGER" ? "区域经理" : "总部运营",
+      phone: `1${pick(["3", "5", "7", "8"])}${String(between(100000000, 999999999))}`,
+      baseSalaryFen: roundTo(between(lo, hi), 10000),
+      note: null,
+    };
+  });
+  await prisma.employeeProfile.createMany({ data: profiles });
+
+  const storeRegion = new Map(stores.map((s) => [s.id, s.regionId]));
+  const active = users.filter((u) => u.isActive);
+  const firstStore = stores[0]!;
+  const manager1 = users.find((u) => u.role === "STORE_MANAGER" && u.storeId === firstStore.id);
+  const demoNames = new Set(["staff", "manager", "regional", "hq"]);
+  const notices: { title: string; body: string; scope: "ALL" | "REGION" | "STORE"; regionId?: number; storeId?: number; authorId: number; daysAgo: number; readRate: number; demoRead: boolean }[] = [
+    { title: "国庆后第一周的排班和盘点安排", body: "各门店：国庆后第一周客流回落，请店长按实际客流调整排班，每店至少保证早晚各两人在岗。\n周三前完成一次全盘，盘点单当天确认，盘亏超过 500 元的会走总部审批。", scope: "ALL", authorId: hqId, daysAgo: 18, readRate: 0.9, demoRead: true },
+    { title: "iPhone 17 系列到货和以旧换新政策", body: "iPhone 17 系列本周陆续到货。以旧换新按回收估价全额抵扣，回收机当天检测、7 天内转良品。\n碎屏险、延保继续主推，开单时提醒顾客扫店员企业微信，到期前系统会提醒。", scope: "ALL", authorId: hqId, daysAgo: 6, readRate: 0.7, demoRead: true },
+    { title: "华东区本月 KPI 冲刺", body: "华东区各店：本月销售额完成率落后时间进度，最后十天每家店每天多推两台主机。看板上的“日均差额”就是每天要补的数。", scope: "REGION", regionId: firstStore.regionId, authorId: users.find((u) => u.role === "REGIONAL_MANAGER" && u.regionId === firstStore.regionId)?.id ?? hqId, daysAgo: 3, readRate: 0.7, demoRead: true },
+    { title: "本周六店内盘点，请准时到店", body: "本周六早上 8:30 到店盘点，9:30 前结束不影响开门。盘点时手机开单暂停，盘完我来确认。", scope: "STORE", storeId: firstStore.id, authorId: manager1?.id ?? hqId, daysAgo: 1, readRate: 0.4, demoRead: false },
+    { title: "系统上线：智能提醒和员工档案", body: "ERP 新增“智能提醒”：每天早晚各一次把要处理的事整理成今日待办，右上角“消息”里能看到。员工档案、公告也上线了，个人信息页能看自己的档案。", scope: "ALL", authorId: hqId, daysAgo: 0, readRate: 0.1, demoRead: false },
+  ];
+  for (const n of notices) {
+    const recipients = active.filter((u) => (n.scope === "ALL" ? true : n.scope === "REGION" ? u.regionId === n.regionId || (u.storeId !== null && storeRegion.get(u.storeId) === n.regionId) : u.storeId === n.storeId));
+    const createdAt = n.daysAgo === 0 ? new Date(Date.now() - 2 * 3600000) : at(bizDateOf(-n.daysAgo), 9, between(0, 59));
+    const notice = await prisma.notice.create({ data: { title: n.title, body: n.body, scope: n.scope, regionId: n.regionId ?? null, storeId: n.storeId ?? null, authorId: n.authorId, recipients: recipients.length, createdAt } });
+    const readers = recipients.filter((u) => u.id !== n.authorId && (demoNames.has(u.username) ? n.demoRead : chance(n.readRate)));
+    const readAt = (u: { id: number }) => new Date(Math.min(createdAt.getTime() + ((u.id * 7919) % 36) * 3600000, Date.now() - 60000));
+    await prisma.noticeRead.createMany({ data: readers.map((u) => ({ noticeId: notice.id, userId: u.id, readAt: readAt(u) })) });
+    const readIds = new Set(readers.map((u) => u.id));
+    await prisma.notification.createMany({
+      data: recipients
+        .filter((u) => u.id !== n.authorId)
+        .map((u) => ({ userId: u.id, noticeId: notice.id, title: `公告：${n.title}`, body: n.body.replace(/\s+/g, " ").slice(0, 60), link: `/notices/${notice.id}`, readAt: readIds.has(u.id) ? readAt(u) : null, createdAt, updatedAt: createdAt })),
+    });
+  }
+  console.log(`人事 OA：${profiles.length} 份员工档案、${notices.length} 条公告`);
 }
 
 const accessoryRows: { storeId: number; skuId: number; qty: number }[] = [];
