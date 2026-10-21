@@ -1,6 +1,7 @@
 import "server-only";
 import { cancelPendingOaFor } from "@/server/approval/approval-service";
 import { pruneNoticeNotifications } from "@/server/notice/notice-service";
+import { removeFutureShiftsFor } from "@/server/hr/schedule-service";
 import { todayBizDate } from "@/server/stock/doc-no";
 import { prisma } from "@/lib/prisma";
 import type { Role } from "@/generated/prisma/enums";
@@ -269,8 +270,11 @@ export async function updateUser(actor: Actor, id: number, input: UserInput) {
   await pruneNoticeNotifications(prisma, id); // 调了店、换了区域：看不到的公告消息从小铃铛里清掉
   if (wecom?.changed) await writeAudit({ userId: actor.id, action: "wecom.user.bind_userid", entity: "user", entityId: id, detail: { wecomUserid: wecom.value, checked: wecom.checked } });
   // 调了店：审批中的请假自动撤回，到新店重新提交（报销不撤，照原来的门店批，口径第 19 节）
-  const cancelled = before && before.storeId !== user.storeId ? await cancelPendingOaFor(prisma, id, "调店了，审批中的单自动撤回，到新门店重新提交") : 0;
-  const notices = [wecom?.notice, cancelled > 0 ? `他审批中的 ${cancelled} 张请假已自动撤回，到新门店重新提交` : null].filter(Boolean);
+  const moved = before !== null && before.storeId !== user.storeId;
+  const cancelled = moved ? await cancelPendingOaFor(prisma, id, "调店了，审批中的单自动撤回，到新门店重新提交") : 0;
+  // 调了店：明天起在老店的班删掉（今天的留着），到新店重新排
+  const cleared = moved && before.storeId !== null ? await removeFutureShiftsFor(prisma, id, before.storeId, "调店了，老店明天起的班删掉，到新门店重新排", actor.id) : 0;
+  const notices = [wecom?.notice, cancelled > 0 ? `他审批中的 ${cancelled} 张请假已自动撤回，到新门店重新提交` : null, cleared > 0 ? `他在老店明天起的 ${cleared} 格排班已删掉，到新门店重新排` : null].filter(Boolean);
   return { ...user, notice: notices.length ? notices.join("；") : undefined };
 }
 
@@ -345,7 +349,8 @@ export async function setUserActive(actor: CurrentUser, id: number, isActive: bo
       if (cancelled.count > 0) notice = `他还在等删除成员的 ${cancelled.count} 个离职继承取消了`;
     } else {
       const cancelled = await cancelPendingOaFor(tx, id, "员工停用了，审批中的请假自动撤回");
-      if (cancelled > 0) notice = `他审批中的 ${cancelled} 张请假已自动撤回（报销照常审批、付款）`;
+      const cleared = await removeFutureShiftsFor(tx, id, null, "员工停用了，明天起的班删掉", actor.id);
+      notice = [cancelled > 0 ? `他审批中的 ${cancelled} 张请假已自动撤回（报销照常审批、付款）` : null, cleared > 0 ? `明天起的 ${cleared} 格排班已删掉` : null].filter(Boolean).join("；") || undefined;
     }
     return { user, notice };
   });

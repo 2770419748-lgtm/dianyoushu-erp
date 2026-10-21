@@ -227,7 +227,7 @@ export async function listExpenses(user: CurrentUser, query: { view?: ExpenseVie
   ]);
   const approvals = await prisma.approvalRequest.findMany({
     where: { id: { in: rows.map((r) => r.approvalRequestId).filter((id): id is number => id !== null) } },
-    select: { id: true, requestNo: true, approverRole: true, step: true, chain: true, status: true, decisionNote: true },
+    select: { id: true, requestNo: true, approverRole: true, step: true, chain: true, status: true, decisionNote: true, decidedAt: true },
   });
   return {
     view,
@@ -257,6 +257,8 @@ export async function listExpenses(user: CurrentUser, query: { view?: ExpenseVie
         paid: r.paidOn ? { on: dateKeyOf(r.paidOn), method: r.payMethod!, by: r.paidBy?.name ?? "", note: r.payNote } : null,
         mine: r.userId === user.id,
         approval: a ? { id: a.id, requestNo: a.requestNo, approverRole: a.approverRole, step: a.step, steps: Math.max(1, a.chain.length), note: a.status === "REJECTED" ? a.decisionNote : null } : null,
+        // 付款日期最早能填哪天：批下来那天（也不早于发生日期）
+        earliestPayOn: [dateKeyOf(r.occurredOn), a?.decidedAt ? bjDateKey(a.decidedAt) : ""].sort().at(-1)!,
       };
     }),
   };

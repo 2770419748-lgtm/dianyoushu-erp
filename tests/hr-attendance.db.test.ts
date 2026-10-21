@@ -8,7 +8,8 @@ import { approveRequest, cancelPendingOaFor, getApproval, rejectRequest } from "
 import { submitExpense } from "@/server/finance/expense-service";
 import { addManualPunch, monthStats, punch, userMonthDetail, userMonthSummary } from "@/server/hr/attendance-service";
 import { cancelLeave, submitLeave } from "@/server/hr/leave-service";
-import { copyLastWeek, saveSchedule } from "@/server/hr/schedule-service";
+import { copyLastWeek, removeFutureShiftsFor, saveSchedule } from "@/server/hr/schedule-service";
+import { setUserActive } from "@/server/org/org-service";
 
 // 排班、考勤、请假（口径第 19 节，连本机库，事务回滚不留数据）：请假走审批（一级、两级、驳回、撤回、发起人停用）、
 // 不挂门店的审批单谁能看能批；排班的范围；打卡、补卡的规则。测试用的人都在事务里新建，不碰演示数据。
@@ -341,6 +342,33 @@ describe("8b 复查后补（连本机库，事务回滚）", () => {
       const eApproval = (await tx.expenseClaim.findUniqueOrThrow({ where: { id: e.id } })).approvalRequestId!;
       expect(await approveRequest(p.mgrA, eApproval, "", tx)).toMatchObject({ executed: true });
       expect(await tx.expenseClaim.findUniqueOrThrow({ where: { id: e.id } })).toMatchObject({ status: "APPROVED", storeId: stores!.a.id });
+    });
+  });
+
+  it("调店、停用时删掉明天起在老店的班，今天的留着；改今天的格子也按格记日志", async (ctx) => {
+    if (!stores || !hq) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const p = await people(tx);
+      const { a, b } = stores!;
+      const mk = (userId: number, storeId: number, offset: number) => tx.shiftSchedule.create({ data: { storeId, userId, date: dateFromKey(addDays(today, offset)), shift: "MORNING", updatedById: p.mgrA.id } });
+      await mk(p.staffA1.id, a.id, 0);
+      await mk(p.staffA1.id, a.id, 1);
+      await mk(p.staffA1.id, a.id, 3);
+      await mk(p.staffA1.id, b.id, 2); // 已经在新店排好的不动
+      expect(await removeFutureShiftsFor(tx, p.staffA1.id, a.id, "调店了", p.mgrA.id)).toBe(2);
+      const left = await tx.shiftSchedule.findMany({ where: { userId: p.staffA1.id }, orderBy: { date: "asc" }, select: { storeId: true, date: true } });
+      expect(left.map((x) => [x.storeId, x.date.toISOString().slice(0, 10)])).toEqual([[a.id, today], [b.id, addDays(today, 2)]]);
+      expect(await tx.auditLog.count({ where: { action: "hr.schedule.auto_clear", entityId: String(p.staffA1.id) } })).toBe(1);
+
+      await mk(p.staffA2.id, a.id, 0);
+      await mk(p.staffA2.id, a.id, 5);
+      const r = await setUserActive(hq!, p.staffA2.id, false, { db: tx });
+      expect(r.notice).toContain("1 格排班已删掉");
+      expect(await tx.shiftSchedule.count({ where: { userId: p.staffA2.id } })).toBe(1);
+
+      // 今天的班改成休息（可能已经算了缺勤）：按格记日志
+      await saveSchedule(p.mgrA, { storeId: a.id, cells: [{ userId: p.staffA1.id, date: today, shift: "OFF" }] }, { db: tx });
+      expect((await tx.auditLog.findFirstOrThrow({ where: { action: "hr.schedule.change_past", entityId: String(p.staffA1.id) } })).detail).toMatchObject({ date: today, from: "早班", to: "休息" });
     });
   });
 });

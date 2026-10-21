@@ -40,22 +40,30 @@ export function toHalfWidth(text: string): string {
 const CN_DIGITS: Record<string, number> = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
 const CN_UNITS: Record<string, number> = { 十: 10, 百: 100, 千: 1000 };
 
-/** “二十”“十二”“一百零五”“两千”“三万”换成整数 */
+/** “二十”“十二”“一百零五”“两千”“三万”换成整数；“一百二”“两千五”“一万二”这种省掉了单位的按口语算（120、2500、12000） */
 export function chineseToInt(text: string): number {
   let total = 0;
   let section = 0;
   let num = 0;
+  let lastUnit = 0; // 上一个单位（十百千万），用来判断末尾省掉的单位
+  let zero = false; // 中间有“零”（一百零二）就不是省掉单位
   for (const ch of text) {
+    if (ch === "零" || ch === "〇") zero = true;
     if (ch in CN_DIGITS) num = CN_DIGITS[ch]!;
     else if (ch in CN_UNITS) {
       section += (num || 1) * CN_UNITS[ch]!;
+      lastUnit = CN_UNITS[ch]!;
       num = 0;
+      zero = false;
     } else if (ch === "万") {
       total += (section + num) * 10000;
       section = 0;
       num = 0;
+      lastUnit = 10000;
+      zero = false;
     }
   }
+  if (num && lastUnit >= 100 && !zero) num *= lastUnit / 10;
   return total + section + num;
 }
 
@@ -70,7 +78,7 @@ const CN_FUZZY = /[几数][十百千万]?[台个件天元块张份家人次周�
 /** “百分之三十”“百分之百”：换算成 30%、100% 再核对 */
 const CN_PERCENT = /百分之([零〇一二两三四五六七八九十百]+)/g;
 /** 不带单位、但明摆着是个数的中文数字：两个字以上、带“十”或“百”的（“完成率才六十”“一百二”）；“千万别”这种不算 */
-const CN_BARE = /(?<![第\d零〇一二两三四五六七八九十百千万])([零〇一二两三四五六七八九十百千万]*[十百][零〇一二两三四五六七八九十百千万]*)(?![零〇一二两三四五六七八九十百千万])/g;
+const CN_BARE = /(?<![第\d零〇一二两三四五六七八九十百千万])([零〇一二两三四五六七八九十百千万]*[十百][零〇一二两三四五六七八九十百千万]*)(?![零〇一二两三四五六七八九十百千万点号日时假节期])/g; // “十二点”“十一假期”这种是时间、节日，不算数量
 
 /** 文字里的数字：全角换半角、去掉千分位逗号，012 和 12 当成一样；带量词的、“百分之”后面的、不带单位但带十百的中文数字都换算成阿拉伯数字；百分号、单位不算 */
 export function extractNumbers(text: string): string[] {

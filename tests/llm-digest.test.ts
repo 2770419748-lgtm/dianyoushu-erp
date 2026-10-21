@@ -37,6 +37,11 @@ describe("数字校验", () => {
     expect(chineseToInt("十二")).toBe(12);
     expect(chineseToInt("一百零五")).toBe(105);
     expect(chineseToInt("三万")).toBe(30000);
+    expect(chineseToInt("一百二")).toBe(120); // 口语省掉单位
+    expect(chineseToInt("两千五")).toBe(2500);
+    expect(chineseToInt("一万二")).toBe(12000);
+    expect(chineseToInt("十二")).toBe(12);
+    expect(extractNumbers("十二点前做完，十一假期前补货")).toEqual([]); // 时间、节日不算数量
     expect(extractNumbers("压了二十台，等了两天，第一件事一起做")).toEqual(["20", "2"]); // “第一”“一起”不是数量
     expect(numberProblems(input, { summary: "", items: [{ ref: 1, text: "压了七十六台，最久八十八天" }] })).toEqual([]);
     expect(numberProblems(input, { summary: "", items: [{ ref: 1, text: "压了二十台" }] })).toEqual(["20"]);

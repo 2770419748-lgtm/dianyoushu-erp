@@ -187,7 +187,7 @@ export function ExpensesView({ data, status, month, today, role }: { data: Expen
       >
         <Space orientation="vertical" style={{ width: "100%" }}>
           <Segmented<ExpensePayMethodKey> value={pay.payMethod} options={EXPENSE_PAY_METHODS.map((m) => ({ value: m, label: EXPENSE_PAY_METHOD_LABELS[m] }))} onChange={(v) => setPay({ ...pay, payMethod: v })} />
-          <DatePicker allowClear={false} value={dayjs(pay.paidOn)} disabledDate={(d) => d.format("YYYY-MM-DD") > today} onChange={(d) => d && setPay({ ...pay, paidOn: d.format("YYYY-MM-DD") })} />
+          <DatePicker allowClear={false} value={dayjs(pay.paidOn)} disabledDate={(d) => d.format("YYYY-MM-DD") > today || (paying !== null && d.format("YYYY-MM-DD") < paying.earliestPayOn)} onChange={(d) => d && setPay({ ...pay, paidOn: d.format("YYYY-MM-DD") })} />
           <Input placeholder="备注（可不填，比如转账流水号后四位）" maxLength={100} value={pay.note} onChange={(e) => setPay({ ...pay, note: e.target.value })} />
           <Typography.Text type="secondary">按付款日期算进门店那个月的费用；付款日期不能早于批下来那天。</Typography.Text>
         </Space>
@@ -207,7 +207,7 @@ export function ExpensesView({ data, status, month, today, role }: { data: Expen
           {changing?.action === "EDIT" ? (
             <>
               <Segmented<ExpensePayMethodKey> value={change.payMethod} options={EXPENSE_PAY_METHODS.map((m) => ({ value: m, label: EXPENSE_PAY_METHOD_LABELS[m] }))} onChange={(v) => setChange({ ...change, payMethod: v })} />
-              <DatePicker allowClear={false} value={dayjs(change.paidOn)} disabledDate={(d) => d.format("YYYY-MM-DD") > today || d.format("YYYY-MM-DD") < monthStart} onChange={(d) => d && setChange({ ...change, paidOn: d.format("YYYY-MM-DD") })} />
+              <DatePicker allowClear={false} value={dayjs(change.paidOn)} disabledDate={(d) => d.format("YYYY-MM-DD") > today || d.format("YYYY-MM-DD") < monthStart || (changing !== null && d.format("YYYY-MM-DD") < changing.row.earliestPayOn)} onChange={(d) => d && setChange({ ...change, paidOn: d.format("YYYY-MM-DD") })} />
               <Input placeholder="付款备注（可不填）" maxLength={100} value={change.note} onChange={(e) => setChange({ ...change, note: e.target.value })} />
             </>
           ) : (

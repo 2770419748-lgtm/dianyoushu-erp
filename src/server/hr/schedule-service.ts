@@ -140,11 +140,11 @@ export async function saveSchedule(user: CurrentUser, input: { storeId: unknown;
       if (from === c.shift) continue;
       if (c.shift === null) await tx.shiftSchedule.deleteMany({ where: { userId: c.userId, date } });
       else await tx.shiftSchedule.upsert({ where: { userId_date: { userId: c.userId, date } }, create: { storeId, userId: c.userId, date, shift: c.shift, updatedById: user.id }, update: { storeId, shift: c.shift, updatedById: user.id } });
-      if (c.date < today) pastChanges.push({ userId: c.userId, date: c.date, from, to: c.shift });
+      if (c.date <= today) pastChanges.push({ userId: c.userId, date: c.date, from, to: c.shift }); // 今天的班可能已经过了、算了缺勤，一样按格记
     }
     const dates = cells.map((c) => c.date).sort();
     await writeAudit({ userId: user.id, action: "hr.schedule.save", entity: "store", entityId: storeId, detail: { cells: cells.length, from: dates[0], to: dates.at(-1) } }, tx);
-    // 改已经过去的日子会改掉考勤（缺勤、加班），按格记清楚
+    // 改今天和已经过去的日子会改掉考勤（缺勤、加班），按格记清楚
     for (const p of pastChanges) {
       const name = staff.find((x) => x.id === p.userId)?.name ?? "";
       await writeAudit({ userId: user.id, action: "hr.schedule.change_past", entity: "user", entityId: p.userId, detail: { name, date: p.date, from: p.from ? SHIFT_LABELS[p.from] : "没排班", to: p.to ? SHIFT_LABELS[p.to] : "没排班", storeId } }, tx);
@@ -182,6 +182,17 @@ export async function copyLastWeek(user: CurrentUser, input: { storeId: unknown;
     await writeAudit({ userId: user.id, action: "hr.schedule.copy", entity: "store", entityId: storeId, detail: { week: weekStart, cells: data.length } }, tx);
     return data.length;
   });
+}
+
+/**
+ * 调店、停用的时候，删掉这个人明天起在老店（停用就是所有店）的排班，今天和以前的留着（口径第 19 节，2026-10-21 快核后补）：
+ * 不然新店改不了（“在别的店上的班”）、老店也改不了（“不是这家店在职的员工”），到那天在新店打卡会记到老店、没打卡老店算他缺勤，工资跟着算错。
+ */
+export async function removeFutureShiftsFor(db: Db, userId: number, storeId: number | null, reason: string, actorId: number | null, now = new Date()): Promise<number> {
+  const tomorrow = dateFromKey(addDays(bjDateKey(now), 1));
+  const removed = await db.shiftSchedule.deleteMany({ where: { userId, date: { gte: tomorrow }, ...(storeId !== null ? { storeId } : {}) } });
+  if (removed.count > 0) await writeAudit({ userId: actorId, action: "hr.schedule.auto_clear", entity: "user", entityId: userId, detail: { storeId, from: addDays(bjDateKey(now), 1), cells: removed.count, reason } }, "$connect" in db ? undefined : db);
+  return removed.count;
 }
 
 /** 自己这一周的班（考勤打卡页、“我的”页） */
