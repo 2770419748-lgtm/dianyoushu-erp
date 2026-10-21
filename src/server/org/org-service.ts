@@ -59,7 +59,8 @@ function isUniqueViolation(error: unknown): boolean {
 
 // ---------- 查询 ----------
 
-export async function getOrgTree() {
+export async function getOrgTree(actor: Actor) {
+  assertCanManage(actor);
   const [regions, users] = await Promise.all([
     prisma.region.findMany({
       orderBy: { id: "asc" },

@@ -18,7 +18,7 @@ export function LoginForm({ notice, showDemoAccounts }: { notice?: string; showD
       <form action={formAction} style={{ marginTop: 24 }}>
         <Form layout="vertical" component={false}>
           <Form.Item label="账号">
-            <Input name="username" autoComplete="username" autoFocus size="large" />
+            <Input name="username" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoFocus size="large" />
           </Form.Item>
           <Form.Item label="密码">
             <Input.Password name="password" autoComplete="current-password" size="large" />

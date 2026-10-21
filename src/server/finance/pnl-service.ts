@@ -41,7 +41,7 @@ async function storeRevenue(db: Db, month: string, ids: number[]) {
     db.$queryRaw<{ store_id: number; v: bigint }[]>`SELECT o.store_id, SUM(i.cost_fen)::bigint AS v FROM sales_order_items i JOIN sales_orders o ON o.id = i.order_id WHERE o.status = 'COMPLETED' AND o.biz_date BETWEEN ${r.gte} AND ${r.lte} AND o.store_id = ANY(${ids}) GROUP BY 1`,
     // 退货：退款冲销售额、退回的成本冲销货成本（和看板一样按销售明细的成本快照分摊）
     db.$queryRaw<{ store_id: number; refund: bigint; cost: bigint }[]>`
-      SELECT t.store_id, SUM(ri.refund_fen)::bigint AS refund, SUM((si.cost_fen / si.qty) * ri.qty)::bigint AS cost
+      SELECT t.store_id, SUM(ri.refund_fen)::bigint AS refund, SUM(si.cost_fen * ri.qty / si.qty)::bigint AS cost
       FROM return_orders t JOIN return_order_items ri ON ri.return_order_id = t.id JOIN sales_order_items si ON si.id = ri.sales_item_id
       WHERE t.biz_date BETWEEN ${r.gte} AND ${r.lte} AND t.store_id = ANY(${ids}) GROUP BY 1`,
     db.$queryRaw<{ store_id: number; v: bigint }[]>`SELECT store_id, SUM(expected_commission_fen)::bigint AS v FROM carrier_business WHERE status NOT IN ('VOIDED', 'FAILED') AND biz_date BETWEEN ${r.gte} AND ${r.lte} AND store_id = ANY(${ids}) GROUP BY 1`,

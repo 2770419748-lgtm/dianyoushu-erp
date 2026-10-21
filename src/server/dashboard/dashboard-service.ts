@@ -37,7 +37,7 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
     FROM o LEFT JOIN i ON i.order_id = o.id GROUP BY 1, 2`;
   const returnRows = await prisma.$queryRaw<{ store_id: number; d: string; refund: bigint; loss: bigint; devices: number }[]>`
     SELECT r.store_id, to_char(r.biz_date, 'YYYY-MM-DD') AS d, SUM(ri.refund_fen)::bigint AS refund,
-           SUM(ri.refund_fen - (si.cost_fen / si.qty) * ri.qty)::bigint AS loss,
+           SUM(ri.refund_fen - si.cost_fen * ri.qty / si.qty)::bigint AS loss,
            SUM(CASE WHEN ri.device_id IS NOT NULL THEN ri.qty ELSE 0 END)::int AS devices
     FROM return_orders r JOIN return_order_items ri ON ri.return_order_id = r.id JOIN sales_order_items si ON si.id = ri.sales_item_id
     WHERE r.store_id = ANY(${ids}) AND r.biz_date >= ${toDate(from90)} GROUP BY 1, 2`;

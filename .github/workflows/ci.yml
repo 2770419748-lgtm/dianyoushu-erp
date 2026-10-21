@@ -1,4 +1,4 @@
-# 每次推送和每个 PR 都跑：lint、类型检查、生产构建、全部测试。
+# 每次推送和每个 PR 都跑：lint、类型检查、生产构建、全部测试，最后打生产镜像、起容器查健康检查。
 # 测试连一个临时的 PostgreSQL（GitHub 给每次运行起一个全新的），先建表、灌演示数据，
 # 所以连库测试、并发测试、会写库的回归测试（RUN_DESTRUCTIVE_TESTS=1）在 CI 上都会真跑，不会被跳过。
 name: CI
@@ -63,3 +63,33 @@ jobs:
 
       - name: 生产构建
         run: pnpm build
+
+      # 生产镜像（Dockerfile）：每次都打一遍，再连上面的临时库起一个容器，健康检查和登录页都要通。
+      # 服务器上的 compose、Caddy、备份要等有服务器再实跑（docs/部署.md）
+      - name: 打生产镜像
+        run: docker build -t dianyoushu-erp:ci .
+
+      - name: 起容器查健康检查
+        run: |
+          DB_PW=$(openssl rand -hex 16)
+          SECRET=$(openssl rand -base64 32)
+          echo "::add-mask::$DB_PW"
+          echo "::add-mask::$SECRET"
+          # 应用在生产模式下会拒绝默认密码 postgres，给容器单建一个随机密码的账号（临时库，跑完就没了）
+          PGPASSWORD=postgres psql -h localhost -U postgres -d ci -v ON_ERROR_STOP=1 -q -c "CREATE ROLE erp_ci LOGIN SUPERUSER PASSWORD '$DB_PW'"
+          docker run -d --name erp-ci --network host \
+            -e DATABASE_URL="postgresql://erp_ci:$DB_PW@localhost:5432/ci?schema=public" \
+            -e SESSION_SECRET="$SECRET" -e DEMO_MODE=1 \
+            dianyoushu-erp:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/api/health; then echo; break; fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/api/health
+          echo
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/login)" = "200"
+          echo "登录页 200"
+
+      - name: 容器日志（上一步失败时看）
+        if: failure()
+        run: docker logs erp-ci || true

@@ -10,6 +10,6 @@ export const dynamic = "force-dynamic";
 export default async function OrgPage() {
   const user = await requireUser();
   if (!canManageOrg(user.role)) return <NoAccess />;
-  const data = await getOrgTree();
+  const data = await getOrgTree(user);
   return <OrgView data={data} currentUserId={user.id} showWecom={wecomMode() !== "off"} />;
 }

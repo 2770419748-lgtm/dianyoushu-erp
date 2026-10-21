@@ -23,12 +23,13 @@ const ipLimiter = createLoginLimiter(undefined, IP_MAX_FAILURES);
 export type LoginResult = { ok: true; userId: number; sessionVersion: number } | { ok: false; error: string };
 
 export async function authenticate(usernameInput: string, password: string, ip: string): Promise<LoginResult> {
-  const username = usernameInput.trim();
+  // 账号建的时候只能是小写（组织管理里校验），这里转小写再查：手机输入法会把首字母自动变大写，输成 Staff 也能登
+  const username = usernameInput.trim().toLowerCase();
   if (!username || !password) return { ok: false, error: "请输入账号和密码" };
 
-  const limited = !isProtectedDemoAccount(username.toLowerCase());
+  const limited = !isProtectedDemoAccount(username);
   const byIp = TRUST_PROXY && ip !== "unknown";
-  const key = byIp ? `login:${username.toLowerCase()}@${ip}` : `login:${username.toLowerCase()}`;
+  const key = byIp ? `login:${username}@${ip}` : `login:${username}`;
   const ipKey = `login-ip:${ip}`;
   if (byIp) {
     const ipGate = ipLimiter.check(ipKey);

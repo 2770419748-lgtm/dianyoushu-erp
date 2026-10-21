@@ -21,7 +21,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" pnpm exec prisma generate
 ENV NEXT_TELEMETRY_DISABLED=1 BUILD_STANDALONE=1
-RUN pnpm build
+# 构建时收集路由配置会加载 src/lib/prisma.ts，它要求有 DATABASE_URL；构建不连库，给个占位串（运行时用 compose 里的真连接串）
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" pnpm build
 
 # 3. 运行
 FROM node:24-slim AS runner

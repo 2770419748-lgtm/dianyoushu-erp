@@ -7,7 +7,9 @@ test.use({ viewport: { width: 390, height: 844 } });
 
 test("手机开单：输串号加机器 → 提交 → 已售；作废后回到在库", async ({ page }) => {
   await page.goto("/login");
-  await page.locator('input[name="username"]').fill("manager");
+  // 手机输入法会把首字母自动变大写：账号框关掉自动大写，服务端也不分大小写，输成 Manager 照样能登
+  await expect(page.locator('input[name="username"]')).toHaveAttribute("autocapitalize", "none");
+  await page.locator('input[name="username"]').fill("Manager");
   await page.locator('input[name="password"]').fill("demo1234");
   await page.locator('button[type="submit"]').click();
   await page.waitForURL("/");
