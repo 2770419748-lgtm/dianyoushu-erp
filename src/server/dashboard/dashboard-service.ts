@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { formatDate } from "@/lib/format";
 import type { CurrentUser } from "@/server/auth/current-user";
+import type { Db } from "@/server/db-tx";
 import { listStoresInScope } from "@/server/org/store-query";
 import { GENERIC_TRADE_IN_SKU_NAME } from "@/server/tradein/trade-in-service";
 import { dailyGap, timeProgress, turnoverDays, type DayStoreRow } from "./metrics";
@@ -13,8 +14,8 @@ const DAY_MS = 86400000;
 const toDate = (s: string) => new Date(`${s}T00:00:00.000Z`);
 const n = (v: unknown) => Number(v ?? 0);
 
-export async function getDashboard(user: CurrentUser, storeFilter?: number) {
-  const scopeStores = await listStoresInScope(user);
+export async function getDashboard(user: CurrentUser, storeFilter?: number, db: Db = prisma) {
+  const scopeStores = await listStoresInScope(user, db);
   const stores = storeFilter ? scopeStores.filter((s) => s.id === storeFilter) : scopeStores;
   const ids = stores.map((s) => s.id);
   const today = formatDate(new Date());
@@ -24,7 +25,7 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
   if (ids.length === 0) return null;
 
   // 1. 门店 × 天：销售、毛利、单数、主机量（近 90 天）；旧机回收单独按回收单数
-  const salesRows = await prisma.$queryRaw<{ store_id: number; d: string; orders: number; sales: bigint; profit: bigint; devices: number }[]>`
+  const salesRows = await db.$queryRaw<{ store_id: number; d: string; orders: number; sales: bigint; profit: bigint; devices: number }[]>`
     WITH o AS (
       SELECT id, store_id, biz_date, total_fen, discount_fen, trade_in_order_id FROM sales_orders
       WHERE status = 'COMPLETED' AND store_id = ANY(${ids}) AND biz_date >= ${toDate(from90)}
@@ -35,14 +36,14 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
     SELECT o.store_id, to_char(o.biz_date, 'YYYY-MM-DD') AS d, COUNT(*)::int AS orders, SUM(o.total_fen)::bigint AS sales,
            SUM(COALESCE(i.g, 0) - o.discount_fen)::bigint AS profit, SUM(COALESCE(i.dev, 0))::int AS devices
     FROM o LEFT JOIN i ON i.order_id = o.id GROUP BY 1, 2`;
-  const returnRows = await prisma.$queryRaw<{ store_id: number; d: string; refund: bigint; loss: bigint; devices: number }[]>`
+  const returnRows = await db.$queryRaw<{ store_id: number; d: string; refund: bigint; loss: bigint; devices: number }[]>`
     SELECT r.store_id, to_char(r.biz_date, 'YYYY-MM-DD') AS d, SUM(ri.refund_fen)::bigint AS refund,
-           SUM(ri.refund_fen - si.cost_fen * ri.qty / si.qty)::bigint AS loss,
+           SUM(ri.refund_fen - si.cost_fen::bigint * ri.qty / si.qty)::bigint AS loss,
            SUM(CASE WHEN ri.device_id IS NOT NULL THEN ri.qty ELSE 0 END)::int AS devices
     FROM return_orders r JOIN return_order_items ri ON ri.return_order_id = r.id JOIN sales_order_items si ON si.id = ri.sales_item_id
     WHERE r.store_id = ANY(${ids}) AND r.biz_date >= ${toDate(from90)} GROUP BY 1, 2`;
   // 旧机回收（口径第 9 节）：按回收单的建单日期（北京时间）数台数，不管有没有被开单抵扣；作废的不算
-  const tradeInRows = await prisma.$queryRaw<{ store_id: number; d: string; n: number }[]>`
+  const tradeInRows = await db.$queryRaw<{ store_id: number; d: string; n: number }[]>`
     SELECT store_id, to_char((created_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS d, COUNT(*)::int AS n
     FROM trade_in_orders
     WHERE status = 'COMPLETED' AND store_id = ANY(${ids}) AND created_at >= ${toDate(from90)}
@@ -83,7 +84,7 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
   // 本月汇总与 KPI 完成率、日均差额
   const monthRows = dayRows.filter((r) => r.date >= monthStart);
   const [y, m] = today.split("-").map(Number) as [number, number];
-  const targets = await prisma.kpiTarget.findMany({ where: { storeId: { in: ids }, year: y, month: m } });
+  const targets = await db.kpiTarget.findMany({ where: { storeId: { in: ids }, year: y, month: m } });
   const progress = timeProgress(today);
   const kpi = stores.map((s) => {
     const rows = monthRows.filter((r) => r.storeId === s.id);
@@ -103,7 +104,7 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
   });
 
   // 员工业绩排名（本月，按销售额，前 10）
-  const staffRows = await prisma.$queryRaw<{ user_id: number; name: string; store: string; orders: number; sales: bigint; profit: bigint; devices: number }[]>`
+  const staffRows = await db.$queryRaw<{ user_id: number; name: string; store: string; orders: number; sales: bigint; profit: bigint; devices: number }[]>`
     WITH o AS (
       SELECT id, salesperson_id, store_id, total_fen, discount_fen FROM sales_orders
       WHERE status = 'COMPLETED' AND store_id = ANY(${ids}) AND biz_date >= ${toDate(monthStart)}
@@ -117,7 +118,7 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
     GROUP BY u.id, u.name, s.name ORDER BY SUM(o.total_fen) DESC LIMIT 10`;
 
   // 热销机型 TOP10（近 30 天，按台数；回收机不算）
-  const hotRows = await prisma.$queryRaw<{ model: string; qty: number; sales: bigint }[]>`
+  const hotRows = await db.$queryRaw<{ model: string; qty: number; sales: bigint }[]>`
     SELECT b.name || ' ' || m.name AS model, SUM(si.qty)::int AS qty, SUM(si.line_total_fen)::bigint AS sales
     FROM sales_order_items si
     JOIN sales_orders o ON o.id = si.order_id
@@ -126,14 +127,14 @@ export async function getDashboard(user: CurrentUser, storeFilter?: number) {
     GROUP BY 1 ORDER BY 2 DESC LIMIT 10`;
 
   // 库存周转和滞销预警：在库台数、近 30 天卖出台数、周转天数；在库超过 30 天的机器按型号列出
-  const stockRows = await prisma.$queryRaw<{ store_id: number; in_stock: number; stale: number; sold30: number }[]>`
+  const stockRows = await db.$queryRaw<{ store_id: number; in_stock: number; stale: number; sold30: number }[]>`
     SELECT s.id AS store_id,
       (SELECT COUNT(*)::int FROM devices d WHERE d.store_id = s.id AND d.status IN ('IN_STOCK', 'REFURBISHED')) AS in_stock,
       (SELECT COUNT(*)::int FROM devices d WHERE d.store_id = s.id AND d.status = 'IN_STOCK' AND d.created_at < now() - interval '30 days') AS stale,
       (SELECT COALESCE(SUM(si.qty), 0)::int FROM sales_order_items si JOIN sales_orders o ON o.id = si.order_id
          WHERE o.store_id = s.id AND o.status = 'COMPLETED' AND si.device_id IS NOT NULL AND o.biz_date >= ${toDate(from30)}) AS sold30
     FROM stores s WHERE s.id = ANY(${ids}) ORDER BY s.code`;
-  const staleRows = await prisma.$queryRaw<{ store: string; sku: string; qty: number; oldest_days: number; cost: bigint }[]>`
+  const staleRows = await db.$queryRaw<{ store: string; sku: string; qty: number; oldest_days: number; cost: bigint }[]>`
     SELECT st.code || ' ' || st.name AS store, k.name AS sku, COUNT(*)::int AS qty,
            MAX(EXTRACT(DAY FROM now() - d.created_at))::int AS oldest_days, SUM(d.cost_fen)::bigint AS cost
     FROM devices d JOIN skus k ON k.id = d.sku_id JOIN stores st ON st.id = d.store_id

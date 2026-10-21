@@ -1,12 +1,13 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import type { CurrentUser } from "@/server/auth/current-user";
+import type { Db } from "@/server/db-tx";
 import { assertStoreAccess, storeTableWhere } from "@/server/auth/scope";
 
 // 门店的只读查询，带数据范围：店员店长只有本店，区域经理是辖区，总部全部。
 
-export async function listStoresInScope(user: CurrentUser) {
-  return prisma.store.findMany({
+export async function listStoresInScope(user: CurrentUser, db: Db = prisma) {
+  return db.store.findMany({
     where: storeTableWhere(user),
     orderBy: { code: "asc" },
     select: {

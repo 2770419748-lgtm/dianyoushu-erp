@@ -4,6 +4,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import { bjDateKey, dateFromKey } from "@/lib/attendance";
 import type { CurrentUser } from "@/server/auth/current-user";
+import { getDashboard } from "@/server/dashboard/dashboard-service";
 import { getPnl, saveFixedExpenses } from "@/server/finance/pnl-service";
 
 // 门店收支和利润表（口径第 19 节，连本机库，事务回滚不留数据）：一家新开的测试店，上个月开单、退货、运营商业务、维修、报销、工资、固定支出各来一笔，
@@ -12,7 +13,7 @@ import { getPnl, saveFixedExpenses } from "@/server/finance/pnl-service";
 class Rollback extends Error {}
 
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL ?? "" }) });
-type Base = { regionId: number; otherRegionId: number | null; hq: CurrentUser; deviceSkuId: number };
+type Base = { regionId: number; otherRegionId: number | null; hq: CurrentUser; deviceSkuId: number; accessorySkuId: number | null };
 let base: Base | null = null;
 const today = bjDateKey(new Date());
 const [ty, tm] = today.split("-").map(Number) as [number, number];
@@ -40,7 +41,8 @@ beforeAll(async () => {
     const regions = await prisma.region.findMany({ where: { isActive: true }, orderBy: { id: "asc" }, take: 2 });
     const hq = await prisma.user.findFirst({ where: { role: "HQ", isActive: true }, orderBy: { id: "asc" } });
     const sku = await prisma.sku.findFirst({ where: { isActive: true, model: { category: { kind: "DEVICE" } } }, orderBy: { id: "asc" } });
-    if (regions[0] && hq && sku) base = { regionId: regions[0].id, otherRegionId: regions[1]?.id ?? null, hq: asUser(hq), deviceSkuId: sku.id };
+    const accessory = await prisma.sku.findFirst({ where: { isActive: true, isService: false, model: { category: { kind: { not: "DEVICE" } } } }, orderBy: { id: "asc" } });
+    if (regions[0] && hq && sku) base = { regionId: regions[0].id, otherRegionId: regions[1]?.id ?? null, hq: asUser(hq), deviceSkuId: sku.id, accessorySkuId: accessory?.id ?? null };
   } catch {
     base = null;
   }
@@ -126,6 +128,28 @@ describe("门店利润表（连本机库，事务回滚）", () => {
       expect(after.total!.profitFen).toBe(before.total!.profitFen);
       expect(after.stores.some((s) => s.id === store.id)).toBe(true);
       await expect(saveFixedExpenses(b.hq, { storeId: store.id, month: prev, items: [{ category: "RENT", amountFen: 1 }] }, { db: tx })).rejects.toThrow("门店不存在");
+    });
+  });
+
+  it("一行退几千件配件（成本 × 件数超过 21 亿）：看板和利润表照样打开，成本冲回一分不差", async (ctx) => {
+    if (!base?.accessorySkuId) return ctx.skip();
+    const b = base;
+    const skuId = b.accessorySkuId!;
+    await inRolledBackTx(async (tx) => {
+      const store = await tx.store.create({ data: { code: "ZT-PNL3", name: "大批退货测试店", regionId: b.regionId } });
+      const staff = await tx.user.create({ data: { username: "pnltest_s3", passwordHash: "x", name: "大批退货测试店员", role: "STAFF", storeId: store.id } });
+      const todayDate = dateFromKey(today);
+      // 3000 个充电器，单价 199 元、成本 120 元：成本快照 3000 × 12000 = 3600 万分，再乘退的 3000 件就超出 int
+      const qty = 3000;
+      const order = await tx.salesOrder.create({ data: { orderNo: "SO-PNLTEST-BIG", storeId: store.id, salespersonId: staff.id, bizDate: todayDate, subtotalFen: 19900 * qty, totalFen: 19900 * qty } });
+      const item = await tx.salesOrderItem.create({ data: { orderId: order.id, skuId, qty, unitPriceFen: 19900, lineTotalFen: 19900 * qty, costFen: 12000 * qty } });
+      const ret = await tx.returnOrder.create({ data: { orderNo: "RT-PNLTEST-BIG", storeId: store.id, salesOrderId: order.id, handledById: staff.id, bizDate: todayDate, refundFen: 19900 * qty } });
+      await tx.returnOrderItem.create({ data: { returnOrderId: ret.id, salesItemId: item.id, skuId, qty, refundFen: 19900 * qty } });
+
+      const pnl = await getPnl(b.hq, { month: today.slice(0, 7), storeId: store.id }, new Date(), tx);
+      expect(pnl.rows[0]!.numbers).toMatchObject({ salesFen: 0, goodsCostFen: 0 }); // 卖了又全退：销售额、成本都冲平
+      const dash = await getDashboard(b.hq, store.id, tx);
+      expect(dash).not.toBeNull();
     });
   });
 
