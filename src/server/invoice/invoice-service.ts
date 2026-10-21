@@ -173,7 +173,12 @@ async function resolveNumber(tx: Tx, raw: unknown, label: string): Promise<{ num
     return { number, source: "MANUAL" };
   }
   if (!isDemo()) throw new InvoiceError(`填电子税务局开好的${label}（没有对接开票接口）`);
-  return { number: await simulatedNumber(tx), source: "SIMULATED" };
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const number = await simulatedNumber(tx);
+    const taken = await tx.invoice.findFirst({ where: { OR: [{ invoiceNumber: number }, { redNumber: number }] }, select: { id: true } });
+    if (!taken) return { number, source: "SIMULATED" };
+  }
+  throw new InvoiceError("模拟号码连着被占用，换一个手填的号码");
 }
 
 /** 开具（总部）：演示里不填号码就模拟开一张；真用时填电子税务局开好的号码 */
@@ -237,7 +242,9 @@ export const invoiceActions = {
 /** 这张销售单已开票的发票号码（国补单提交审核时自动带出） */
 /** 这个号码是不是这张销售单上已经红冲掉的发票（国补重新提交时不能再用） */
 export async function isReddedOnOrder(db: Db, salesOrderId: number, invoiceNumber: string): Promise<boolean> {
-  return (await db.invoice.count({ where: { salesOrderId, invoiceNumber, status: "REDDED" } })) > 0;
+  // 发票号码登记时去掉了空格、横杠，比对前也一样规整，“2644-1020…”和“26441020…”是同一张
+  const normalized = invoiceNumber.replace(/[\s-]/g, "");
+  return (await db.invoice.count({ where: { salesOrderId, invoiceNumber: normalized, status: "REDDED" } })) > 0;
 }
 
 export async function issuedInvoiceNumber(db: Db, salesOrderId: number): Promise<string | null> {

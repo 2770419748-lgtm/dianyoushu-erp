@@ -11,7 +11,7 @@ import type { ApprovalRow, ApprovalView, listApprovals } from "@/server/approval
 
 type Data = Awaited<ReturnType<typeof listApprovals>>;
 
-export function ApprovalsView({ data, status, canDecide }: { data: Data; status?: ApprovalStatus; canDecide: boolean }) {
+export function ApprovalsView({ data, status, canDecide, canInitiate = true }: { data: Data; status?: ApprovalStatus; canDecide: boolean; canInitiate?: boolean }) {
   const router = useRouter();
 
   function navigate(next: { view?: ApprovalView; status?: ApprovalStatus | null; page?: number }) {
@@ -47,7 +47,7 @@ export function ApprovalsView({ data, status, canDecide }: { data: Data; status?
 
   const views: { value: ApprovalView; label: React.ReactNode }[] = [
     ...(canDecide ? [{ value: "todo" as const, label: <Badge count={data.todoCount} size="small" offset={[8, -2]}>待我审批</Badge> }] : []),
-    { value: "mine", label: "我发起的" },
+    ...(canInitiate ? [{ value: "mine" as const, label: "我发起的" }] : []),
     { value: "all", label: "全部" },
   ];
 

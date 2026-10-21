@@ -767,6 +767,27 @@ async function main() {
           ? { id: ++ids.entitlement, customerId: customerId!, storeId: store.id, salesOrderId: saleId, salesOrderItemId: service.item.id, skuId: service.item.skuId, deviceId: service.deviceId, ...entitlementPeriod(SERVICE_KIND_BY_SKU.get(service.item.skuId)!, bizDate, service.months), status: "ACTIVE", voidedAt: null, createdAt: plan.time, updatedAt: plan.time }
           : null;
         if (entitlement) out.entitlements.push(entitlement);
+        // 店员让利超过 5% 的单当时走过审批（演示规则打开了）；后来当天作废的单也留着这条审批记录
+        if (salesperson.role === "STAFF" && discountFen > 0 && discountFen * 10000 >= subtotalFen * 500) {
+          const asked = new Date(plan.time.getTime() - between(3, 12) * 60000);
+          pushApproval({
+            action: "SALE",
+            storeId: store.id,
+            requestedById: salesperson.id,
+            approverRole: "STORE_MANAGER",
+            status: "EXECUTED",
+            summary: `开单 ${items.length} 行，原价合计 ${fmtYuan(subtotalFen)} 元，应收 ${fmtYuan(totalFen)} 元（让利 ${fmtYuan(discountFen)} 元）`,
+            reasons: [{ kind: "SALE_DISCOUNT", text: `这单让利 ${fmtYuan(discountFen)} 元，占原价 ${((discountFen * 100) / subtotalFen).toFixed(1)}%，超过了 5%` }],
+            amountFen: discountFen,
+            payload: { action: "SALE", input: { storeId: store.id, customerId, items: items.map((i) => (i.deviceId ? { deviceId: i.deviceId, unitPriceFen: i.unitPriceFen } : { skuId: i.skuId, qty: i.qty, unitPriceFen: i.unitPriceFen })), discountFen }, details: [] },
+            createdAt: asked,
+            decidedById: manager.id,
+            decidedAt: new Date(plan.time.getTime() - 60000),
+            decisionNote: pick(["老客户，可以", "同意", "配件已经送了，优惠可以"]),
+            resultId: saleId,
+            resultNo: no,
+          });
+        }
 
         // 少量当天作废（不含以旧换新的单）：库存回来，收款不计入日结
         if (!tradeInId && chance(0.012)) {
@@ -803,26 +824,6 @@ async function main() {
         dayPayments.push(...pays.map((p) => ({ method: p.method, amountFen: p.amountFen })));
         daySaleIds.push(saleId);
         if (customerId && (claim || chance(0.2))) makeInvoice(sale, items, claim, salesperson.id, day);
-        if (salesperson.role === "STAFF" && discountFen > 0 && discountFen * 10000 >= subtotalFen * 500) {
-          const asked = new Date(plan.time.getTime() - between(3, 12) * 60000);
-          pushApproval({
-            action: "SALE",
-            storeId: store.id,
-            requestedById: salesperson.id,
-            approverRole: "STORE_MANAGER",
-            status: "EXECUTED",
-            summary: `开单 ${items.length} 行，原价合计 ${fmtYuan(subtotalFen)} 元，应收 ${fmtYuan(totalFen)} 元（让利 ${fmtYuan(discountFen)} 元）`,
-            reasons: [{ kind: "SALE_DISCOUNT", text: `这单让利 ${fmtYuan(discountFen)} 元，占原价 ${((discountFen * 100) / subtotalFen).toFixed(1)}%，超过了 5%` }],
-            amountFen: discountFen,
-            payload: { action: "SALE", input: { storeId: store.id, customerId, items: items.map((i) => (i.deviceId ? { deviceId: i.deviceId, unitPriceFen: i.unitPriceFen } : { skuId: i.skuId, qty: i.qty, unitPriceFen: i.unitPriceFen })), discountFen }, details: [] },
-            createdAt: asked,
-            decidedById: manager.id,
-            decidedAt: new Date(plan.time.getTime() - 60000),
-            decisionNote: pick(["老客户，可以", "同意", "配件已经送了，优惠可以"]),
-            resultId: saleId,
-            resultNo: no,
-          });
-        }
         for (const item of items) if (item.deviceId && !serviceSkuIds.has(item.skuId)) soldDevices.push({ deviceId: item.deviceId, saleId, bizDate, customerId });
         // 少量几天后退货
         if (chance(0.015)) {

@@ -10,7 +10,7 @@ import type { Db } from "@/server/db-tx";
 export class ApprovalRequiredError extends Error {
   constructor(
     readonly decision: ApprovalDecision,
-    readonly context: { action: ApprovalActionKey; storeId: number; summary: string; details: string[]; dedupeKey: string | null },
+    readonly context: { action: ApprovalActionKey; storeId: number; summary: string; details: string[]; dedupeKey: string | null; frozenInput?: unknown },
   ) {
     super(`要${APPROVER_ROLE_LABELS[decision.approverRole]}审批：${decision.reasons.map((r) => r.text).join("；")}`);
   }
@@ -31,7 +31,7 @@ export async function checkApproval(
   db: Db,
   user: CurrentUser,
   facts: ApprovalFacts,
-  context: { storeId: number; summary: string; details?: string[]; dedupeKey?: string | null },
+  context: { storeId: number; summary: string; details?: string[]; dedupeKey?: string | null; frozenInput?: unknown },
   options: ApprovalCheckOptions = {},
 ) {
   if (options.approved) return;
@@ -39,5 +39,5 @@ export async function checkApproval(
   if (rules.length === 0) return;
   const decision = decideApproval(rules, facts, user.role);
   if (!decision.required) return;
-  throw new ApprovalRequiredError(decision, { action: facts.action, storeId: context.storeId, summary: context.summary, details: context.details ?? [], dedupeKey: context.dedupeKey ?? null });
+  throw new ApprovalRequiredError(decision, { action: facts.action, storeId: context.storeId, summary: context.summary, details: context.details ?? [], dedupeKey: context.dedupeKey ?? null, frozenInput: context.frozenInput });
 }

@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
@@ -97,6 +98,10 @@ export async function saveRule(user: CurrentUser, input: { kind: unknown; enable
 /** Server Function 接住 ApprovalRequiredError 后调它：存一张待审批的单 */
 export async function createApprovalRequest(user: CurrentUser, error: ApprovalRequiredError, payload: ApprovalPayload, note?: unknown, db: Db = prisma) {
   const { decision, context } = error;
+  // 开单把单价写死了的，执行内容用写死的那份（审批期间改价不影响）
+  if (context.frozenInput !== undefined && "input" in payload) payload = { ...payload, input: context.frozenInput } as ApprovalPayload;
+  // 同一个人同样的内容提交两次（比如返回再点一次）：只留一张待审批的（部分唯一索引兜底）
+  const dedupeKey = context.dedupeKey ?? `${context.action}:${user.id}:${createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 32)}`;
   try {
     return await withTx(db, async (tx) => {
       const requestNo = await nextDocNo(tx, "SP");
@@ -112,14 +117,14 @@ export async function createApprovalRequest(user: CurrentUser, error: ApprovalRe
           amountFen: decision.amountFen,
           note: text(note, 200) || null,
           payload: { ...payload, details: context.details } as Prisma.InputJsonValue,
-          dedupeKey: context.dedupeKey,
+          dedupeKey,
         },
       });
       await writeAudit({ userId: user.id, action: "approval.request", entity: "approval_request", entityId: created.id, detail: { requestNo, action: context.action, reasons: decision.reasons.map((r) => r.kind) } }, tx);
       return { id: created.id, requestNo, approverRole: decision.approverRole };
     });
   } catch (e) {
-    if (isUniqueViolation(e)) throw new ApprovalError("这件事已经有一张待审批的了，等审批人处理");
+    if (isUniqueViolation(e)) throw new ApprovalError("一样的内容已经有一张待审批的了，等审批人处理，不用重复提交");
     throw e;
   }
 }
@@ -193,6 +198,7 @@ export async function approveRequest(user: CurrentUser, id: number, note?: unkno
     };
     const requester = await loadRequester(tx, request.requestedById);
     if (!requester) return fail("发起人的账号已经停用，这件事做不成，请别人重新发起");
+    if ((requester.role === "STAFF" || requester.role === "STORE_MANAGER") && requester.storeId !== request.storeId) return fail("发起人已经调到别的店了，这件事做不成，请本店的人重新发起");
     await tx.$executeRaw`SAVEPOINT approval_execute`;
     let result: { id: number; no: string | null };
     try {
@@ -251,7 +257,11 @@ function viewWhere(user: CurrentUser, view: ApprovalView, status?: ApprovalStatu
 }
 
 export async function listApprovals(user: CurrentUser, query: { view?: ApprovalView; status?: ApprovalStatus; page?: number }) {
-  const view = query.view ?? (user.role === "STORE_MANAGER" || user.role === "HQ" ? "todo" : "mine");
+  // 店长、总部默认看待我审批；店员看我发起的；区域经理发起不了也批不了，只看全部（辖区只读）
+  const canDecideAny = user.role === "STORE_MANAGER" || user.role === "HQ";
+  const fallback: ApprovalView = canDecideAny ? "todo" : user.role === "REGIONAL_MANAGER" ? "all" : "mine";
+  let view = query.view ?? fallback;
+  if ((view === "todo" && !canDecideAny) || (view === "mine" && user.role === "REGIONAL_MANAGER")) view = fallback;
   const page = clampPage(query.page);
   const where = viewWhere(user, view, query.status);
   const [rows, total, todoCount] = await Promise.all([

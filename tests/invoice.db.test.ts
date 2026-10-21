@@ -9,6 +9,8 @@ import { createReturnTx } from "@/server/sales/return-service";
 import { createSalesOrderTx, voidSalesOrderTx } from "@/server/sales/sales-service";
 import { receiveDevices } from "@/server/stock/stock-service";
 import { submitClaimTx } from "@/server/subsidy/subsidy-service";
+import { simulateInvoiceNumber } from "@/lib/invoice";
+import { todayBizDate, todayBizDateText } from "@/server/stock/doc-no";
 import { runIntegrityChecks } from "../prisma/integrity-checks";
 
 // 发票（口径第 16 节，连本机库，事务回滚不留数据）：申请、开具、撤回、红冲、纸质票到店；退货作废联动；国补带发票号；对账自检第 10 类。
@@ -201,6 +203,7 @@ describe("发票（连本机库，事务回滚）", () => {
       const again = await requestInvoiceTx(tx, f.staff, { salesOrderId: s.orderId, ...person, titleName: "改好的抬头" });
       const reissued = await issueInvoiceTx(tx, f.hq, again.id);
       await expect(submitClaimTx(tx, f.staff, claim.id, invoiceNumber)).rejects.toThrow("已经红冲了");
+      await expect(submitClaimTx(tx, f.staff, claim.id, `${invoiceNumber.slice(0, 4)}-${invoiceNumber.slice(4, 12)} ${invoiceNumber.slice(12)}`)).rejects.toThrow("已经红冲了"); // 带横杠空格也认得出
       await submitClaimTx(tx, f.staff, claim.id, "");
       expect((await tx.subsidyClaim.findUniqueOrThrow({ where: { id: claim.id } })).invoiceNo).toBe(reissued.invoiceNumber);
     });
@@ -239,5 +242,23 @@ describe("发票（连本机库，事务回滚）", () => {
     if (!other) return ctx.skip();
     await expect(getInvoice(fixture.staff, other.id)).rejects.toBeInstanceOf(PermissionError);
     await expect(getInvoice(fixture.hq, other.id)).resolves.toBeTruthy();
+  });
+  it("模拟开具：下一张模拟号码恰好被手工登记过，就跳过它", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const f = fixture;
+    await inRolledBackTx(async (tx) => {
+      await setSeller(tx);
+      const key = `FPNUM${todayBizDateText()}`;
+      const current = (await tx.docCounter.findUnique({ where: { key } }))?.value ?? 0;
+      const next = simulateInvoiceNumber(current + 1, todayBizDate());
+      const a = await sale(tx, 61);
+      const ra = await requestInvoiceTx(tx, f.staff, { salesOrderId: a.orderId, ...person });
+      await issueInvoiceTx(tx, f.hq, ra.id, { invoiceNumber: next });
+      const b = await sale(tx, 62);
+      const rb = await requestInvoiceTx(tx, f.staff, { salesOrderId: b.orderId, ...person });
+      const issued = await issueInvoiceTx(tx, f.hq, rb.id);
+      expect(issued.invoiceNumber).not.toBe(next);
+      expect(issued.invoiceNumber).toMatch(/^\d{20}$/);
+    });
   });
 });

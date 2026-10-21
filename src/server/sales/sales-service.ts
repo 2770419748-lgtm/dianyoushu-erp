@@ -192,17 +192,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
   }
   const subsidyFen = subsidy ? subsidy.picks.reduce((s, p) => s + p.subsidyFen, 0) : 0;
 
-  // 审批（口径第 17 节）：让利、低于成本卖触发了规则就先不开，存审批单，批了再开
-  const listFen = lines.reduce((s, l) => s + l.listPriceFen * l.qty, 0);
-  await checkApproval(
-    tx,
-    user,
-    { action: "SALE", listFen, totalFen, belowCostCount: lines.filter((l) => l.deviceId && l.unitPriceFen < l.costFen).length },
-    { storeId: data.storeId, summary: `开单 ${lines.length} 行，原价合计 ${yuan(listFen)} 元，应收 ${yuan(totalFen)} 元${listFen > totalFen ? `（让利 ${yuan(listFen - totalFen)} 元）` : ""}`, details: lineLabels },
-    options,
-  );
-
-  // 收款：抵扣 + 国补 + 手工收款，合计必须正好等于应收
+  // 收款：抵扣 + 国补 + 手工收款，合计必须正好等于应收（先校验再看审批：收款对不上的不该生成审批单）
   const manual = Array.isArray(input.payments)
     ? input.payments
     : input.paymentMethod
@@ -215,6 +205,20 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
     if (error instanceof PaymentError) throw new SalesError(error.message);
     throw error;
   }
+
+  // 审批（口径第 17 节）：让利、低于成本卖触发了规则就先不开，存审批单，批了再开。
+  // 每一行的单价写死进审批单（frozenInput）：审批期间门店改了售价，批出来还是申请时说好的价、应收不变
+  const listFen = lines.reduce((s, l) => s + l.listPriceFen * l.qty, 0);
+  let deviceIndex = 0;
+  let accessoryIndex = data.deviceLines.length;
+  const frozenInput: SalesOrderInput = { ...input, items: input.items.map((item) => ({ ...item, unitPriceFen: (item.deviceId ? lines[deviceIndex++] : lines[accessoryIndex++])!.unitPriceFen })) };
+  await checkApproval(
+    tx,
+    user,
+    { action: "SALE", listFen, totalFen, belowCostCount: lines.filter((l) => l.deviceId && l.unitPriceFen < l.costFen).length },
+    { storeId: data.storeId, summary: `开单 ${lines.length} 行，原价合计 ${yuan(listFen)} 元，应收 ${yuan(totalFen)} 元${listFen > totalFen ? `（让利 ${yuan(listFen - totalFen)} 元）` : ""}`, details: lineLabels, frozenInput },
+    options,
+  );
 
   const orderNo = await nextDocNo(tx, "SO");
   const order = await tx.salesOrder.create({

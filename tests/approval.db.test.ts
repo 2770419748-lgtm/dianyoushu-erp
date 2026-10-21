@@ -217,4 +217,40 @@ describe("审批（连本机库，事务回滚）", () => {
       await expect(submit(tx, f.manager, () => voidSalesOrderTx(tx, f.manager, sale.id, "开错单"), payload)).rejects.toThrow("已经有一张待审批");
     });
   });
+  it("复查后补：收款对不上当场拦；开单单价按申请时写死；发起人换店做不成；同样内容不重复提交", async (ctx) => {
+    if (!fixture) return ctx.skip();
+    const f = fixture;
+    await inRolledBackTx(async (tx) => {
+      await rules(tx, [{ kind: "SALE_DISCOUNT", thresholdBp: 500, approverRole: "STORE_MANAGER" }]);
+      // 收款对不上：不生成审批单，当场报错
+      const d0 = await device(tx, 61);
+      await expect(createSalesOrderTx(tx, f.staff, { ...discountSale(d0), payments: [{ method: "CASH", amountFen: 1000 }] })).rejects.toThrow("还差");
+
+      // 审批期间门店把售价降到一半：批出来还是申请时的价
+      const d1 = await device(tx, 62);
+      const input = discountSale(d1);
+      const req = await submit(tx, f.staff, () => createSalesOrderTx(tx, f.staff, input), { action: "SALE", input, details: [] });
+      await tx.storePrice.upsert({ where: { storeId_skuId: { storeId: f.storeId, skuId: f.skuId } }, create: { storeId: f.storeId, skuId: f.skuId, priceFen: Math.round(f.priceFen / 2) }, update: { priceFen: Math.round(f.priceFen / 2) } });
+      const r = await approveRequest(f.manager, req.id, "", tx);
+      expect(r.executed).toBe(true);
+      const done = await tx.approvalRequest.findUniqueOrThrow({ where: { id: req.id } });
+      expect((await tx.salesOrder.findUniqueOrThrow({ where: { id: done.resultId! } })).totalFen).toBe(f.priceFen - Math.round(f.priceFen / 10));
+      await tx.storePrice.deleteMany({ where: { storeId: f.storeId, skuId: f.skuId } }); // 价格改回来，后面的单按原价
+
+      // 发起人批之前调到了别的店
+      const d2 = await device(tx, 63);
+      const input2 = discountSale(d2);
+      const req2 = await submit(tx, f.staff, () => createSalesOrderTx(tx, f.staff, input2), { action: "SALE", input: input2, details: [] });
+      await tx.user.update({ where: { id: f.staff.id }, data: { storeId: f.otherStoreId } });
+      const r2 = await approveRequest(f.manager, req2.id, "", tx);
+      expect(r2).toMatchObject({ executed: false, error: expect.stringContaining("调到别的店") });
+      await tx.user.update({ where: { id: f.staff.id }, data: { storeId: f.storeId } });
+
+      // 同样内容再提交一次：被拦下（部分唯一索引兜底，这一步之后事务就不能用了，放最后）
+      const d3 = await device(tx, 64);
+      const input3 = discountSale(d3);
+      await submit(tx, f.staff, () => createSalesOrderTx(tx, f.staff, input3), { action: "SALE", input: input3, details: [] });
+      await expect(submit(tx, f.staff, () => createSalesOrderTx(tx, f.staff, input3), { action: "SALE", input: input3, details: [] })).rejects.toThrow("已经有一张待审批");
+    });
+  });
 });
