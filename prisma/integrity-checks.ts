@@ -24,7 +24,7 @@ import type { PrismaClient } from "../src/generated/prisma/client";
 //     驳回的要有原因；待审批、撤回的不该有审批人和结果。
 // 12. 企业微信（口径第 12 节第三步）：好友关系、客服会话认的客户，这个客户绑的微信要就是这个；接替完毕的继承，接手人名下要有这条好友关系；
 //     继承的原跟进关系要是这个客户的；客服会话里“客户发消息后回了几条”不超过 5。
-// 13. 人事 OA（口径第 19 节）：请假单和它的审批单对得上（审批中↔待审批，已批↔已通过且做出来的就是这张请假单，驳回↔驳回，撤回↔撤回或批了没做成）；
+// 13. 人事 OA（口径第 19 节）：请假单、报销单和它的审批单对得上（审批中↔待审批，已批（待付款、已付款）↔已通过且做出来的就是这张单，驳回↔驳回，撤回↔撤回或批了没做成）；
 //     同一个人审批中、已批的假日期不重叠；两级审批还在批的，前面几级的记录条数 = 现在是第几级 − 1。
 
 export interface IntegrityResult {
@@ -198,6 +198,12 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
           WHERE x.status IN ('PENDING', 'APPROVED') AND y.status IN ('PENDING', 'APPROVED') AND x.start_date <= y.end_date AND y.start_date <= x.end_date)
       + (SELECT COUNT(*) FROM approval_requests a
           WHERE a.status = 'PENDING' AND cardinality(a.chain) > 1 AND COALESCE(jsonb_array_length(a.step_log), 0) <> a.step - 1)
+      + (SELECT COUNT(*) FROM expense_claims e LEFT JOIN approval_requests a ON a.id = e.approval_request_id
+        WHERE a.id IS NULL OR a.action <> 'EXPENSE' OR (a.payload->>'claimId')::int IS DISTINCT FROM e.id OR a.amount_fen <> e.amount_fen
+          OR NOT ((e.status = 'PENDING' AND a.status = 'PENDING')
+            OR (e.status IN ('APPROVED', 'PAID') AND a.status = 'EXECUTED' AND a.result_id = e.id)
+            OR (e.status = 'REJECTED' AND a.status = 'REJECTED')
+            OR (e.status = 'CANCELLED' AND a.status IN ('CANCELLED', 'FAILED'))))
     )::bigint AS n`;
   return {
     accessory: Number(accessory!.n) + Number(accessoryLast!.n) + Number(accessoryOrphan!.n),
@@ -217,7 +223,7 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
 }
 
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假和审批对不上 ${r.hr} 处。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假报销和审批对不上 ${r.hr} 处。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {

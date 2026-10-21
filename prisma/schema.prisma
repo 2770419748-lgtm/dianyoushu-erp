@@ -393,6 +393,39 @@ enum OaStatus {
   @@map("oa_status")
 }
 
+/// 报销的费用类型（口径第 19 节）
+enum ExpenseCategory {
+  TRANSPORT     // 交通
+  OFFICE        // 办公用品
+  REPAIR_PARTS  // 维修耗材
+  ENTERTAINMENT // 招待
+  LOGISTICS     // 快递物流
+  OTHER         // 其他
+
+  @@map("expense_category")
+}
+
+/// 报销单的状态：审批中 → 待付款（批了）→ 已付款；驳回、撤回的不算费用
+enum ExpenseStatus {
+  PENDING   // 审批中
+  APPROVED  // 批了，待付款
+  PAID      // 已付款（按付款日期算进门店当月费用）
+  REJECTED  // 驳回
+  CANCELLED // 撤回（或者批的时候发起人停用、调店了）
+
+  @@map("expense_status")
+}
+
+/// 报销款怎么付的
+enum ExpensePayMethod {
+  CASH   // 现金
+  BANK   // 银行转账
+  WECHAT // 微信
+  ALIPAY // 支付宝
+
+  @@map("expense_pay_method")
+}
+
 enum ApprovalStatus {
   PENDING   // 待审批
   EXECUTED  // 已通过（已经做掉）
@@ -527,6 +560,7 @@ model Store {
   shifts          ShiftSchedule[]
   punches         AttendancePunch[]
   leaveRequests   LeaveRequest[]
+  expenseClaims   ExpenseClaim[]
 
   @@index([regionId])
   @@map("stores")
@@ -588,6 +622,8 @@ model User {
   punches               AttendancePunch[]  @relation("PunchUser")
   punchesCreated        AttendancePunch[]  @relation("PunchCreatedBy")
   leaveRequests         LeaveRequest[]
+  expenseClaims         ExpenseClaim[]     @relation("ExpenseUser")
+  expensesPaid          ExpenseClaim[]     @relation("ExpensePaidBy")
   noticesAuthored       Notice[]          @relation("NoticeAuthor")
   noticeReads           NoticeRead[]
 
@@ -1780,6 +1816,36 @@ model AttendancePunch {
   @@index([userId, date])
   @@index([storeId, date])
   @@map("attendance_punches")
+}
+
+/// 费用报销（口径第 19 节）：员工提交，走审批（2000 元以下店长批，2000 元及以上店长批完总部再批；总部的人直接总部批），
+/// 批了是“待付款”，总部财务付完点“已付款”，按付款日期算进门店当月的费用
+model ExpenseClaim {
+  id                Int               @id @default(autoincrement())
+  claimNo           String            @unique @map("claim_no") // BX + yyyyMMdd + 4 位
+  userId            Int               @map("user_id") // 谁报的
+  storeId           Int?              @map("store_id") // 算哪家门店的（空 = 总部的费用）
+  category          ExpenseCategory
+  amountFen         Int               @map("amount_fen")
+  occurredOn        DateTime          @map("occurred_on") @db.Date // 发生日期
+  description       String
+  status            ExpenseStatus     @default(PENDING)
+  approvalRequestId Int?              @unique @map("approval_request_id")
+  paidOn            DateTime?         @map("paid_on") @db.Date // 付款日期
+  payMethod         ExpensePayMethod? @map("pay_method")
+  payNote           String?           @map("pay_note")
+  paidById          Int?              @map("paid_by_id")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  user   User   @relation("ExpenseUser", fields: [userId], references: [id])
+  paidBy User?  @relation("ExpensePaidBy", fields: [paidById], references: [id])
+  store  Store? @relation(fields: [storeId], references: [id])
+
+  @@index([storeId, paidOn])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("expense_claims")
 }
 
 /// 请假（口径第 19 节）：员工发起，走审批（店长批，3 天以上再总部批）

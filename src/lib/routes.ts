@@ -43,6 +43,8 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/hr/schedules": "排班",
   "/hr/attendance": "考勤打卡",
   "/hr/leaves": "请假",
+  "/finance": "财务",
+  "/finance/expenses": "费用报销",
   "/sales": "销售单",
   "/sales/new": "开单",
   "/trade-ins": "回收单",

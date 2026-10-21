@@ -10,6 +10,7 @@ import { monthRange, reconcileStatement, type CarrierBizTypeKey, type CarrierKey
 import { lineBaseFen, subsidyFenOf, type SubsidyStatusKey } from "../src/lib/subsidy";
 import { KF_CLAIM_TEXT, KF_HUMAN_TEXT, KF_STORE_HOURS, KF_WARRANTY_TEXT } from "../src/lib/wecom-kf";
 import { bjMinuteOfDay, LEAVE_HQ_DAYS, LEAVE_KIND_LABELS, LEAVE_KINDS, leaveChain, SHIFT_TIMES, type LeaveKindKey, type ShiftKindKey, type WorkShiftKey } from "../src/lib/attendance";
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS, expenseChain, type ExpenseCategoryKey } from "../src/lib/expense";
 import { SIMULATED_KF_ID } from "../src/server/wecom/config";
 import { buildInvoiceLines, simulateInvoiceNumber, usccCheckChar, type InvoiceKindKey, type InvoiceStatusKey, type InvoiceTitleTypeKey } from "../src/lib/invoice";
 
@@ -1327,6 +1328,116 @@ async function writeAttendanceDemo(users: { id: number; username: string; role: 
     if (key.startsWith("SP")) await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
   }
   console.log(`排班考勤：${shifts.length} 格排班、${punches.length} 次打卡（补录 ${punches.filter((p) => p.manual).length} 次）、${leaves.length} 张请假单`);
+  await writeExpenseDemo(users, hqId);
+}
+
+/**
+ * 费用报销演示数据（口径第 19 节）：每家店上个月四五张（大多已付款，按付款日期算进门店费用）、这个月两三张（有已付款、待付款、审批中）；
+ * 演示账号的店里留一张等店长批、一张店长批完等总部批（2000 元以上）、一张待付款，店长自己的一张等总部批。
+ */
+async function writeExpenseDemo(users: { id: number; username: string; role: string; storeId: number | null; isActive: boolean }[], hqId: number) {
+  const todayKey = formatDate(new Date());
+  const [ty, tm] = todayKey.split("-").map(Number) as [number, number];
+  const dayOfMonth = Number(todayKey.slice(8));
+  const prevStart = -Math.round((Date.parse(`${todayKey}T00:00:00Z`) - Date.UTC(ty, tm - 2, 1)) / DAY_MS); // 上个月 1 号离今天几天（负数）
+  const thisStart = 1 - dayOfMonth;
+  const names = new Map((await prisma.user.findMany({ select: { id: true, name: true } })).map((u) => [u.id, u.name]));
+  const stores = await prisma.store.findMany({ where: { isActive: true }, orderBy: { id: "asc" }, select: { id: true, code: true, name: true } });
+  const demoStaff = users.find((u) => u.username === "staff")!;
+  const ranges: Record<ExpenseCategoryKey, [number, number]> = { TRANSPORT: [2000, 15000], OFFICE: [5000, 40000], REPAIR_PARTS: [8000, 80000], ENTERTAINMENT: [20000, 150000], LOGISTICS: [1500, 12000], OTHER: [5000, 60000] };
+  const texts: Record<ExpenseCategoryKey, string[]> = {
+    TRANSPORT: ["去仓库提货打车", "去区域开会的高铁票", "送维修机去售后点的车费"],
+    OFFICE: ["打印纸和收银小票纸", "价签和展示架贴纸", "订书机、笔、文件夹"],
+    REPAIR_PARTS: ["贴膜用的清洁套装", "维修台的螺丝刀套装", "屏幕胶和拆机片"],
+    ENTERTAINMENT: ["请运营商客户经理吃饭", "商场管理处节日拜访"],
+    LOGISTICS: ["给顾客寄发票的快递费", "调拨小件的同城跑腿"],
+    OTHER: ["门头灯箱小修", "店里的饮水机换桶"],
+  };
+  type Seed = { user: (typeof users)[number]; storeId: number; category: ExpenseCategoryKey; amountFen: number; occurred: number; status: "PENDING" | "APPROVED" | "PAID" | "REJECTED" | "CANCELLED"; step?: 1 | 2; description: string };
+  const seeds: Seed[] = [];
+  const mk = (user: (typeof users)[number], storeId: number, occurred: number, status: Seed["status"], forced?: { category?: ExpenseCategoryKey; amountFen?: number; step?: 1 | 2; description?: string }) => {
+    const category = forced?.category ?? pick(EXPENSE_CATEGORIES);
+    const [lo, hi] = ranges[category];
+    seeds.push({ user, storeId, category, amountFen: forced?.amountFen ?? Math.round(between(lo, hi) / 100) * 100, occurred, status, step: forced?.step, description: forced?.description ?? pick(texts[category]) });
+  };
+  for (const store of stores) {
+    const staff = users.filter((u) => u.isActive && u.storeId === store.id && u.role === "STAFF" && u.id !== demoStaff.id);
+    const manager = users.find((u) => u.isActive && u.storeId === store.id && u.role === "STORE_MANAGER");
+    const people = [...staff, ...(manager ? [manager] : [])];
+    if (people.length === 0) continue;
+    for (let i = 0; i < between(4, 5); i++) mk(pick(people), store.id, between(prevStart, thisStart - 1), chance(0.88) ? "PAID" : pick(["REJECTED", "CANCELLED"] as const));
+    for (let i = 0; i < between(2, 3) && dayOfMonth > 3; i++) {
+      const occurred = between(thisStart, -2);
+      mk(pick(people), store.id, occurred, occurred < thisStart + 5 ? "PAID" : pick(["APPROVED", "PENDING", "PAID"] as const));
+    }
+    if (store.id === demoStaff.storeId && staff.length >= 3) {
+      mk(staff[0]!, store.id, -1, "PENDING", { category: "OFFICE", amountFen: 18600, step: 1, description: "打印纸和收银小票纸" });
+      mk(staff[1]!, store.id, -2, "PENDING", { category: "ENTERTAINMENT", amountFen: 268000, step: 2, description: "请运营商客户经理吃饭，谈下月合约机名额" });
+      mk(staff[2]!, store.id, -3, "APPROVED", { category: "REPAIR_PARTS", amountFen: 45000, description: "维修台的螺丝刀套装和屏幕胶" });
+      if (manager) mk(manager, store.id, -1, "PENDING", { category: "TRANSPORT", amountFen: 9800, description: "去区域开会的高铁票" });
+    }
+  }
+  let paid = 0;
+  for (const s of seeds) {
+    const manager = users.find((u) => u.isActive && u.storeId === s.storeId && u.role === "STORE_MANAGER");
+    const chain = expenseChain(s.user.role as "STAFF" | "STORE_MANAGER", true, s.amountFen);
+    const createdOffset = Math.min(s.occurred + between(0, 2), 0);
+    const createdAt = createdOffset === 0 ? new Date(Date.now() - between(30, 180) * 60000) : at(bizDateOf(createdOffset), between(10, 20), between(0, 59));
+    const day = createdOffset === 0 ? bizDateOf(0) : bizDateOf(createdOffset);
+    const paidOffset = s.status === "PAID" ? Math.min(createdOffset + between(2, 8), -1) : null;
+    const claim = await prisma.expenseClaim.create({
+      data: {
+        claimNo: docNo("BX", day),
+        userId: s.user.id,
+        storeId: s.storeId,
+        category: s.category,
+        amountFen: s.amountFen,
+        occurredOn: bizDateOf(s.occurred),
+        description: s.description,
+        status: s.status,
+        ...(paidOffset !== null ? { paidOn: bizDateOf(Math.max(paidOffset, s.occurred)), payMethod: pick(["BANK", "WECHAT", "ALIPAY"] as const), paidById: hqId } : {}),
+        createdAt,
+        updatedAt: createdAt,
+      },
+    });
+    if (paidOffset !== null) paid++;
+    const twoLevel = chain.length > 1;
+    const step = s.status === "PENDING" ? Math.min(s.step ?? 1, chain.length) : chain.length;
+    const stepLog = twoLevel && (s.status === "APPROVED" || s.status === "PAID" || step === 2) && manager ? [{ step: 1, role: "STORE_MANAGER", userId: manager.id, name: names.get(manager.id) ?? "", at: new Date(createdAt.getTime() + 3600000).toISOString(), note: null }] : undefined;
+    const finalDecider = chain[chain.length - 1] === "HQ" ? hqId : (manager?.id ?? hqId);
+    const label = EXPENSE_CATEGORY_LABELS[s.category];
+    const store = stores.find((x) => x.id === s.storeId)!;
+    const yuan = (s.amountFen / 100).toFixed(2);
+    const occurredKey = bizDateOf(s.occurred).toISOString().slice(0, 10);
+    const approval = await prisma.approvalRequest.create({
+      data: {
+        requestNo: docNo("SP", day),
+        action: "EXPENSE",
+        storeId: s.storeId,
+        requestedById: s.user.id,
+        approverRole: s.status === "PENDING" ? chain[step - 1]! : chain[chain.length - 1]!,
+        chain,
+        step,
+        stepLog: stepLog ?? undefined,
+        status: s.status === "PENDING" ? "PENDING" : s.status === "REJECTED" ? "REJECTED" : s.status === "CANCELLED" ? "CANCELLED" : "EXECUTED",
+        summary: `${names.get(s.user.id) ?? ""} 报销${label} ${yuan} 元（${store.name}）`,
+        reasons: [{ kind: "EXPENSE", text: twoLevel ? `报销 ${yuan} 元（2000.00 元及以上），店长批完总部再批` : "报销要审批" }],
+        amountFen: s.amountFen,
+        payload: { action: "EXPENSE", claimId: claim.id, details: [`单号：${claim.claimNo}`, `类型：${label}`, `金额：${yuan} 元`, `发生日期：${occurredKey}`, `算哪家的：${store.code} ${store.name}`, `说明：${s.description}`] },
+        dedupeKey: `EXPENSE:${claim.id}`,
+        ...(s.status === "PENDING" || s.status === "CANCELLED"
+          ? {}
+          : { decidedById: s.status === "REJECTED" ? (manager?.id ?? hqId) : finalDecider, decidedAt: new Date(createdAt.getTime() + between(2, 20) * 3600000), decisionNote: s.status === "REJECTED" ? "这笔不在门店能报的范围，走总部采购" : null }),
+        ...(s.status === "APPROVED" || s.status === "PAID" ? { resultId: claim.id, resultNo: claim.claimNo } : {}),
+        createdAt,
+      },
+    });
+    await prisma.expenseClaim.update({ where: { id: claim.id }, data: { approvalRequestId: approval.id } });
+  }
+  for (const [key, value] of docCounters) {
+    if (key.startsWith("SP") || key.startsWith("BX")) await prisma.docCounter.upsert({ where: { key }, update: { value }, create: { key, value } });
+  }
+  console.log(`费用报销：${seeds.length} 张（已付款 ${paid} 张）`);
 }
 
 const accessoryRows: { storeId: number; skuId: number; qty: number }[] = [];

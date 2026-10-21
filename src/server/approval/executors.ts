@@ -2,6 +2,7 @@ import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ApprovalActionKey } from "@/lib/approval";
 import type { CurrentUser } from "@/server/auth/current-user";
+import { approveExpenseTx, closeExpenseTx, ExpenseError } from "@/server/finance/expense-executor";
 import { approveLeaveTx, closeLeaveTx, LeaveError } from "@/server/hr/leave-executor";
 import { createReturnTx, ReturnError, type ReturnInput } from "@/server/sales/return-service";
 import { createSalesOrderTx, SalesError, voidSalesOrderTx, type SalesOrderInput } from "@/server/sales/sales-service";
@@ -22,7 +23,8 @@ export type ApprovalPayload =
   | { action: "SALE_VOID"; orderId: number; reason: string; details: string[] }
   | { action: "TRANSFER"; input: TransferInput; details: string[] }
   | { action: "STOCKTAKE"; stocktakeId: number; details: string[] }
-  | { action: "LEAVE"; leaveId: number; details: string[] };
+  | { action: "LEAVE"; leaveId: number; details: string[] }
+  | { action: "EXPENSE"; claimId: number; details: string[] };
 
 export type ClosedStatus = "REJECTED" | "CANCELLED" | "FAILED";
 
@@ -86,6 +88,12 @@ const EXECUTORS: Registry = {
     onClosed: (tx, p, status) => closeLeaveTx(tx, p.leaveId, status),
     resultHref: () => "/hr/leaves",
     businessErrors: [LeaveError],
+  },
+  EXPENSE: {
+    execute: (tx, _requester, p) => approveExpenseTx(tx, p.claimId),
+    onClosed: (tx, p, status) => closeExpenseTx(tx, p.claimId, status),
+    resultHref: () => "/finance/expenses",
+    businessErrors: [ExpenseError],
   },
 };
 
