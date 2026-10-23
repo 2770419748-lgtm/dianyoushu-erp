@@ -2,14 +2,15 @@ import "server-only";
 import writeXlsxFile from "write-excel-file/node";
 import type { SheetData } from "write-excel-file/node";
 import { IMPORT_COLUMNS, IMPORT_KIND_LABELS, type ImportKindKey } from "@/lib/import/specs";
+import { MAX_IMPORT_ROWS } from "@/lib/import/table";
 
-// 导入模板（口径第 22 节）：第一张表“导入”只有表头，下面 1000 行里码、编码、手机号这些列先设成文本格式
+// 导入模板（口径第 22 节）：第一张表“导入”只有表头，下面 5000 行里码、编码、手机号这些列先设成文本格式
 // （不然 Excel 把 15 位串号显示成科学计数法，存的时候后几位就丢了）；第二张表“说明”写每列填什么、例子。
 // 示例不放在“导入”表里，免得忘了删被当成数据导进来。
 
 /** 要设成文本格式的列：码、编码、账号、手机号 */
 const TEXT_COLUMNS = new Set(["code", "storeCode", "barcode", "sn", "imei1", "imei2", "phone", "username", "wecomUserid"]);
-const PREFORMATTED_ROWS = 1000;
+const PREFORMATTED_ROWS = MAX_IMPORT_ROWS; // 一个文件最多这么多行，全设上（复查顺手修：以前只设了前 1000 行）
 
 export async function templateXlsx(kind: ImportKindKey): Promise<Buffer> {
   const columns = IMPORT_COLUMNS[kind];

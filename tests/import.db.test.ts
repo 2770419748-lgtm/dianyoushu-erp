@@ -5,9 +5,10 @@ import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { verifyPassword } from "@/server/auth/password";
 import { commitImport, ImportError, precheckImport, revokeImport } from "@/server/import/import-service";
-import { decryptPii } from "@/server/pii/crypto";
+import { decryptPii, phoneColumns } from "@/server/pii/crypto";
 import { changeAccessoryStock, revokeOpeningStock, StockError } from "@/server/stock/stock-service";
 import { importProblems } from "../prisma/integrity-checks";
+import { findReferences } from "@/server/db-refs";
 
 // 数据导入（口径第 22 节，连本机库，事务回滚）：预检把问题一次列全、有问题整批不进；确认导入写库、建导入记录；
 // 期初入库单的机器、配件能撤销（没动过时），动过的撤不了；系统里开过销售单就不能整批撤销。
@@ -100,6 +101,10 @@ describe("数据导入", () => {
       ]);
       const result = await commitImport(fx.hq, "STORES", csv(`区域,门店编码,门店名称\n华东区,${fx.store.code},重复的`), {}, tx);
       expect(result.ok).toBe(false);
+      // 停用的区域不往里建门店
+      await tx.region.create({ data: { name: "停用测试区", isActive: false } });
+      const inactive = await precheckImport(fx.hq, "STORES", csv("区域,门店编码,门店名称\n停用测试区,IMP-09,停用区的店"), tx);
+      expect(inactive.problems.map((p) => p.message)).toEqual([expect.stringContaining("已停用")]);
       const ok = await commitImport(fx.hq, "STORES", csv("区域,门店编码,门店名称,地址\n导入测试区,IMP-01,导入一店,人民路 1 号\n导入测试区,imp-02,导入二店,"), {}, tx);
       if (!ok.ok) throw new Error(JSON.stringify(ok.check.problems));
       expect(ok.done.batchNo).toMatch(/^DR\d{12}$/);
@@ -214,7 +219,18 @@ describe("数据导入", () => {
       await tx.importBatch.update({ where: { id: ok.done.batchId }, data: { createdCount: 2 } });
       // 系统里开过销售单（演示数据）：不能整批撤销
       await expect(revokeImport(fx.hq, ok.done.batchId, tx)).rejects.toThrow(/开过销售单/);
-      // 库存层：动过的机器撤不了，没动过的能撤
+      // 库存层（复查第 72 条）：这家店有进行中的盘点、待审批的单，都不撤；机器用在盘点单里（不写流水）也不撤
+      await tx.stocktake.updateMany({ where: { storeId: fx.store.id, status: "IN_PROGRESS" }, data: { status: "VOIDED", voidedAt: new Date() } });
+      await tx.approvalRequest.updateMany({ where: { storeId: fx.store.id, status: "PENDING" }, data: { status: "CANCELLED" } });
+      const st = await tx.stocktake.create({ data: { stocktakeNo: "ST-IMPORT-TEST", storeId: fx.store.id, createdById: fx.hq.id } });
+      await tx.stocktakeItem.create({ data: { stocktakeId: st.id, skuId: fx.deviceSku.id, deviceId: devices[0]!.id, expectedQty: 1 } });
+      await expect(revokeOpeningStock(tx, ok.done.batchNo)).rejects.toThrow(/进行中的盘点/);
+      await tx.stocktake.update({ where: { id: st.id }, data: { status: "VOIDED", voidedAt: new Date() } });
+      await expect(revokeOpeningStock(tx, ok.done.batchNo)).rejects.toThrow(/用在盘点单里/);
+      await tx.stocktakeItem.deleteMany({ where: { stocktakeId: st.id } });
+      // 大件不能按数量进出（机器号被清空的盘点行曾把手机记成了配件数量）
+      await expect(changeAccessoryStock(tx, { storeId: fx.store.id, skuId: fx.deviceSku.id, qtyDelta: 2, docType: "STOCKTAKE_GAIN", docNo: "ST-IMPORT-TEST", operatorId: fx.hq.id })).rejects.toThrow(/大件/);
+      // 动过的机器撤不了，没动过的能撤
       await tx.device.update({ where: { id: devices[0]!.id }, data: { status: "LOCKED" } });
       await expect(revokeOpeningStock(tx, ok.done.batchNo)).rejects.toThrow(StockError);
       await tx.device.update({ where: { id: devices[0]!.id }, data: { status: "IN_STOCK" } });
@@ -243,6 +259,14 @@ describe("数据导入", () => {
       expect(await qty()).toBe(before + 7);
       const ledger = await tx.stockLedger.findFirstOrThrow({ where: { docNo: ok.done.batchNo } });
       expect(ledger).toMatchObject({ docType: "OPENING", qtyDelta: 7, balanceAfter: before + 7 });
+      // 同一个文件再导一次：数量不能翻倍，预检就报出来（复查第 73 条）
+      const again = await commitImport(fx.hq, "ACCESSORIES", csv(`${head}${fx.store.code},${fx.accessorySku.barcode},7\n`), {}, tx);
+      expect(again.ok).toBe(false);
+      expect(!again.ok && again.check.problems[0]!.message).toContain("已经期初入库过 7 件");
+      expect(await qty()).toBe(before + 7);
+      // 演示数据里这家店可能有待审批的单、进行中的盘点：先清掉（事务回滚，不影响库），只看“之后有进出”这一条
+      await tx.stocktake.updateMany({ where: { storeId: fx.store.id, status: "IN_PROGRESS" }, data: { status: "VOIDED", voidedAt: new Date() } });
+      await tx.approvalRequest.updateMany({ where: { storeId: fx.store.id, status: "PENDING" }, data: { status: "CANCELLED" } });
       await changeAccessoryStock(tx, { storeId: fx.store.id, skuId: fx.accessorySku.id, qtyDelta: -1, docType: "SALE", docNo: "SO-IMPORT-TEST", operatorId: fx.hq.id });
       await expect(revokeOpeningStock(tx, ok.done.batchNo)).rejects.toThrow(/别的进出记录/);
     });
@@ -268,6 +292,20 @@ describe("数据导入", () => {
         ["导入甲", "13900000001", "139****0001", "VIP"],
         ["导入乙", "13900000002", "139****0002", null],
       ]);
+    });
+  });
+});
+
+describe("撤销前查单据引用（复查第 72 条）", () => {
+  it("用过的客户、机器查得出用在哪；没用过的查不出", async (ctx) => {
+    if (!f) return ctx.skip();
+    await inRolledBackTx(async (tx) => {
+      const used = await tx.salesOrder.findFirstOrThrow({ where: { customerId: { not: null } }, select: { customerId: true } });
+      expect(await findReferences(tx, "customers", [used.customerId!])).not.toBeNull(); // 维修单、销售单……查到哪张算哪张
+      const fresh = await tx.customer.create({ data: { name: "引用测试", ...phoneColumns(`139${String(Date.now()).slice(-8)}`) } });
+      expect(await findReferences(tx, "customers", [fresh.id])).toBeNull();
+      const sold = await tx.salesOrderItem.findFirstOrThrow({ where: { deviceId: { not: null } }, select: { deviceId: true } });
+      expect(await findReferences(tx, "devices", [sold.deviceId!], ["stock_ledgers"])).not.toBeNull();
     });
   });
 });

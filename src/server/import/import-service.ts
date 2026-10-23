@@ -11,6 +11,7 @@ import {
   DEVICE_COLUMNS,
   IMPORT_COLUMNS,
   IMPORT_KIND_LABELS,
+  IMPORT_KIND_ORDER,
   OPENING_KINDS,
   PRODUCT_COLUMNS,
   REVOCABLE_KINDS,
@@ -30,6 +31,7 @@ import { nextDocNo } from "@/server/stock/doc-no";
 import { isValidImei, isValidSn } from "@/server/stock/imei";
 import { changeAccessoryStock, openingReceiveDevices, revokeOpeningStock, StockError } from "@/server/stock/stock-service";
 import { WECOM_USERID_PATTERN } from "@/server/wecom/config";
+import { findReferences } from "@/server/db-refs";
 import { readUpload } from "./read-file";
 
 // 数据导入（口径第 22 节）：上传 → 预检（不写库，所有问题一次列出来）→ 确认导入（事务里再查一遍，有问题整批不进）。
@@ -152,13 +154,14 @@ function countBy<T>(items: T[], key: (t: T) => string): string {
 async function analyzeStores(rows: TableRow<(typeof STORE_COLUMNS)[number]["key"]>[], db: Db): Promise<Analysis> {
   const p = new Collector();
   const dup = dupChecker(p, "门店编码");
-  const [regions, stores] = await Promise.all([db.region.findMany({ select: { id: true, name: true } }), db.store.findMany({ select: { code: true, name: true } })]);
+  const [regions, stores] = await Promise.all([db.region.findMany({ select: { id: true, name: true, isActive: true } }), db.store.findMany({ select: { code: true, name: true } })]);
   const regionByName = new Map(regions.map((r) => [norm(r.name), r]));
   const storeByCode = new Map(stores.map((s) => [s.code, s]));
   const plan: { line: number; region: string; code: string; name: string; address: string | null }[] = [];
   for (const row of rows) {
     const before = p.count;
     const region = checkLength(p, row, "region", "区域", 50, true);
+    if (region && regionByName.get(norm(region))?.isActive === false) p.add(row.line, "区域", `区域“${region}”已停用：先在组织管理里启用，或者换一个区域`);
     const rawCode = checkLength(p, row, "code", "门店编码", 20, true);
     const code = rawCode?.toUpperCase() ?? null;
     if (code && !/^[A-Z0-9-]+$/.test(code)) p.add(row.line, "门店编码", "只能用字母、数字和横线，如 S001");
@@ -515,10 +518,15 @@ async function analyzeAccessories(rows: TableRow<(typeof ACCESSORY_COLUMNS)[numb
   const dup = dupChecker(p, "商品");
   const [findStore, findSku] = await Promise.all([storeResolver(db), skuResolver(db)]);
   const plan: { storeId: number; storeName: string; skuId: number; qty: number }[] = [];
+  // 已经期初入库过的（期初流水都属于没撤销的期初入库单，撤销时流水一起删）：同一个文件再导一次数量会翻倍（2026-10-23 复查第 73 条）
+  const opened = new Map(
+    (await db.stockLedger.groupBy({ by: ["storeId", "skuId"], where: { docType: "OPENING", deviceId: null }, _sum: { qtyDelta: true } })).map((g) => [`${g.storeId}|${g.skuId}`, g._sum.qtyDelta ?? 0]),
+  );
   for (const row of rows) {
     const before = p.count;
     const store = findStore(p, row);
     const sku = findSku(p, row, "ACCESSORY");
+    if (store && sku && opened.has(`${store.id}|${sku.id}`)) p.add(row.line, "商品", `${store.name}的“${sku.name}”已经期初入库过 ${opened.get(`${store.id}|${sku.id}`)} 件，不能再导；数量不对走盘点，导错了先撤销那张期初入库单`);
     const qty = positiveInt(row.values.qty);
     if (qty === null) p.add(row.line, "数量", "没填");
     else if (Number.isNaN(qty)) p.add(row.line, "数量", `“${row.values.qty}”要填正整数`);
@@ -660,6 +668,7 @@ export async function commitImport(
     }
   }
   const run = async (tx: Db) => {
+    await lockImportKind(tx, kind); // 同一类导入排队：同时传两次，后一个等前一个提交了再预检（复查第 73、74 条）
     if (kind === "STORES") await lockStoreQuota(tx); // 门店数上限：和组织管理建门店排队（复查第 68 条）
     const a = await analyze(kind, cells, tx);
     if (a.problems.length > 0) return { ok: false as const, check: toCheck(kind, rowCount, a) };
@@ -683,6 +692,13 @@ export async function commitImport(
   };
   if (db) return run(db);
   return prisma.$transaction(run, { timeout: 300_000, maxWait: 10_000 });
+}
+
+const IMPORT_LOCK_NS = -82; // 咨询锁命名空间（列表见 attendance-service.ts）：同一类导入排队
+
+/** 同一类导入排队；商品导入和“从机型库添加”共用商品这把（都在建商品） */
+export async function lockImportKind(tx: Db, kind: ImportKindKey): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${IMPORT_LOCK_NS}::int, ${IMPORT_KIND_ORDER.indexOf(kind)}::int)`;
 }
 
 /** 12 位初始密码：去掉容易看错的 0 O 1 l I（和开户脚本一样） */
@@ -745,12 +761,11 @@ export async function revokeImport(user: CurrentUser, id: number, db?: Db): Prom
     if (claimed.count !== 1) throw new ImportError("这次导入已经撤销过了");
     let detail: Record<string, number>;
     if (batch.kind === "CUSTOMERS") {
-      try {
-        detail = { customers: (await tx.customer.deleteMany({ where: { importBatchId: id } })).count };
-      } catch (error) {
-        if ((error as { code?: string }).code === "P2003") throw new ImportError("这批客户有的已经被单据用过（回收、维修、运营商业务……），不能整批撤销");
-        throw error;
-      }
+      // 外键多数是“删了就置空”，删了回收单、企业微信好友上的客户会被悄悄清空：先逐张表查（2026-10-23 复查第 72 条）
+      const ids = (await tx.customer.findMany({ where: { importBatchId: id }, select: { id: true } })).map((c) => c.id);
+      const usedBy = await findReferences(tx, "customers", ids);
+      if (usedBy) throw new ImportError(`这批客户有的已经用在${usedBy}里了，不能整批撤销`);
+      detail = { customers: (await tx.customer.deleteMany({ where: { importBatchId: id } })).count };
     } else {
       try {
         detail = await revokeOpeningStock(tx, batch.batchNo);

@@ -4,7 +4,8 @@ import { decryptPii, maskIdCard, piiFingerprint } from "../src/server/pii/crypto
 import { checkDataKeys } from "../src/server/pii/key-check";
 
 // 对账自检：账对得上，数字才可信。模拟数据生成完会跑一遍；上线后每天跑一遍（pnpm db:check），对不上要告警。
-// 1. 配件余额 = 这家店这个配件所有流水的累计（余额永远能从流水算出来），也等于最后一条流水记的变动后余额；有流水就要有余额行
+// 1. 配件余额 = 这家店这个配件所有流水的累计（余额永远能从流水算出来），也等于最后一条流水记的变动后余额；有流水就要有余额行；
+//    大件、服务商品不能出现在配件余额和不带机器的流水里（2026-10-23 复查第 72 条：机器号被清空的盘点行曾把手机记成了配件数量）
 // 2. 每家店在库机器数 = 机器流水的累计（在库、良品、回收、锁定都算在店里；在途的已经从发出店减掉）
 // 3. 每张销售单的收款合计 = 应收（作废的单收款也还在，合计照样相等）
 // 4. 已确认的日结，每种收款方式的系统数 = 当天这家店的收款汇总（销售收款 + 退货退款）
@@ -98,6 +99,13 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
   const [accessoryOrphan] = await prisma.$queryRaw<{ n: bigint }[]>`
     SELECT COUNT(*)::bigint AS n FROM (SELECT DISTINCT store_id, sku_id FROM stock_ledgers WHERE device_id IS NULL) l
     WHERE NOT EXISTS (SELECT 1 FROM accessory_stocks a WHERE a.store_id = l.store_id AND a.sku_id = l.sku_id)`;
+  const [accessoryKind] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT (
+      (SELECT COUNT(*) FROM accessory_stocks a JOIN skus s ON s.id = a.sku_id JOIN product_models m ON m.id = s.model_id JOIN categories c ON c.id = m.category_id
+        WHERE c.kind <> 'ACCESSORY' OR s.is_service)
+      + (SELECT COUNT(*) FROM stock_ledgers l JOIN skus s ON s.id = l.sku_id JOIN product_models m ON m.id = s.model_id JOIN categories c ON c.id = m.category_id
+        WHERE l.device_id IS NULL AND (c.kind <> 'ACCESSORY' OR s.is_service))
+    )::bigint AS n`;
   const [device] = await prisma.$queryRaw<{ n: bigint }[]>`
     SELECT COUNT(*)::bigint AS n FROM (
       SELECT store_id, COUNT(*) AS c FROM devices WHERE status IN ('IN_STOCK','REFURBISHED','RECYCLED','LOCKED') GROUP BY store_id
@@ -253,7 +261,7 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
             OR r.gross_fen <> (SELECT COALESCE(SUM(s.gross_fen), 0) FROM payroll_slips s WHERE s.run_id = r.id))
     )::bigint AS n`;
   return {
-    accessory: Number(accessory!.n) + Number(accessoryLast!.n) + Number(accessoryOrphan!.n),
+    accessory: Number(accessory!.n) + Number(accessoryLast!.n) + Number(accessoryOrphan!.n) + Number(accessoryKind!.n),
     device: Number(device!.n),
     payment: Number(payment!.n),
     dailyClose: closeRows.length,

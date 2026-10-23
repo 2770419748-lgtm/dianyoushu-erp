@@ -34,7 +34,7 @@ import { approvedLeaves, editableRange } from "./schedule-service";
 
 export class AttendanceError extends Error {}
 
-const PUNCH_LOCK_NS = -77; // 咨询锁命名空间：-73 维修串号、-74 国补客户、-75 运营商结算、-76 发票号码、-77 打卡、-78 请假、-79 智能提醒、-80 工资、-81 门店数上限
+const PUNCH_LOCK_NS = -77; // 咨询锁命名空间：-73 维修串号、-74 国补客户、-75 运营商结算、-76 发票号码、-77 打卡、-78 请假、-79 智能提醒、-80 工资、-81 门店数上限、-82 数据导入
 const PUNCH_KINDS: PunchKindKey[] = ["IN", "OUT"];
 
 /** 某人某天的班 */

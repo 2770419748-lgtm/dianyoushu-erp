@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import writeXlsxFile from "write-excel-file/node";
 import { decodeText, looksLikeScientific, MAX_IMPORT_ROWS, parseCsv, positiveInt, TableError, toRecords, yuanToFen } from "@/lib/import/table";
 import { DEVICE_COLUMNS, nameKey, skuDisplayName } from "@/lib/import/specs";
-import { readUpload, zipUnpackedSize } from "@/server/import/read-file";
+import { readUpload, safeRezip } from "@/server/import/read-file";
+import { unzipSync, zipSync } from "fflate";
 import { templateXlsx } from "@/server/import/templates";
 
 // 数据导入的表格读取（口径第 22 节）：CSV 的编码和拆分、表头认列、格子格式，.xlsx 模板写出去再读回来。
@@ -87,11 +88,25 @@ describe(".xlsx", () => {
     ]);
   });
 
-  it("老的 .xls、空文件、坏文件给明白提示；解压后的大小按目录算", async () => {
+  it("老的 .xls、空文件、坏文件给明白提示", async () => {
     await expect(readUpload(new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0]), "旧.xls")).rejects.toThrow(/另存为/);
     await expect(readUpload(new Uint8Array(), "空.xlsx")).rejects.toThrow(/空的/);
     await expect(readUpload(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]), "坏.xlsx")).rejects.toThrow(/打不开|读不出/);
-    const template = await templateXlsx("CUSTOMERS");
-    expect(zipUnpackedSize(new Uint8Array(template))).toBeGreaterThan(template.length);
+  });
+
+  it("压缩炸弹：单个、总量、个数超上限拒绝；目录里写小了也只解到写的那么大（复查第 75 条）", () => {
+    const limits = { maxEntries: 3, maxEntryBytes: 1024, maxTotalBytes: 1500 };
+    expect(() => safeRezip(zipSync({ a: new Uint8Array(2000) }), limits)).toThrow(/太大/);
+    expect(() => safeRezip(zipSync({ a: new Uint8Array(800), b: new Uint8Array(800) }), limits)).toThrow(/太大/);
+    expect(() => safeRezip(zipSync({ a: new Uint8Array(1), b: new Uint8Array(1), c: new Uint8Array(1), d: new Uint8Array(1) }), limits)).toThrow(/太多/);
+    // 做一个“目录里写 100 字节、实际能解出 1 MB”的文件：只解出 100 字节
+    const zip = zipSync({ a: new Uint8Array(1024 * 1024) });
+    const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    let cd = zip.length - 22;
+    while (view.getUint32(cd, true) !== 0x06054b50) cd--;
+    const dir = view.getUint32(cd + 16, true);
+    view.setUint32(dir + 24, 100, true); // 中央目录里的“解开后大小”
+    const out = unzipSync(safeRezip(zip, { maxEntries: 10, maxEntryBytes: 1000, maxTotalBytes: 1000 }));
+    expect(out.a!.length).toBeLessThanOrEqual(100);
   });
 });

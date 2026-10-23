@@ -1,4 +1,5 @@
 import "server-only";
+import { unzipSync, zipSync, type Unzipped } from "fflate";
 import { readSheet } from "read-excel-file/node";
 import { decodeText, parseCsv, TableError } from "@/lib/import/table";
 
@@ -7,8 +8,15 @@ import { decodeText, parseCsv, TableError } from "@/lib/import/table";
 
 /** 上传文件大小上限：5000 行的 .xlsx 远小于它 */
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
-/** .xlsx 解压后的总大小上限（防“压缩炸弹”：几 MB 的文件解开几个 G） */
-const MAX_UNZIPPED_BYTES = 100 * 1024 * 1024;
+
+export interface UnzipLimits {
+  maxEntries: number;
+  maxEntryBytes: number;
+  maxTotalBytes: number;
+}
+
+/** .xlsx 解压的上限（防“压缩炸弹”：几 MB 的文件解开几个 G） */
+const UNZIP_LIMITS: UnzipLimits = { maxEntries: 500, maxEntryBytes: 50 * 1024 * 1024, maxTotalBytes: 100 * 1024 * 1024 };
 
 function isZip(bytes: Uint8Array): boolean {
   return bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
@@ -19,30 +27,29 @@ function isOldXls(bytes: Uint8Array): boolean {
 }
 
 /**
- * 按 ZIP 的中央目录把每个文件解压后的大小加起来（只读目录，不解压）。
- * 认不出目录、用了 ZIP64（单个文件超过 4G 才用）都当作不合格。
+ * 自己控制解压（2026-10-23 复查第 75 条）：按中央目录逐个文件解开，先看目录里写的解开后大小，单个、总量、个数都设上限；
+ * 解压时按目录写的大小开内存，数据比写的多也只解到这么多（不会越解越大）。解开以后再原样打成一个“干净”的 zip
+ * （每个文件的头和目录一致）交给 read-excel-file——它是按每段文件头流式解压的，直接给它原文件，目录里的大小就管不住它。
  */
-export function zipUnpackedSize(bytes: Uint8Array): number {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let eocd = -1;
-  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
-    if (view.getUint32(i, true) === 0x06054b50) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd < 0) throw new TableError("文件不完整，打不开（在 Excel 里重新另存一份 .xlsx）");
-  const count = view.getUint16(eocd + 10, true);
-  let at = view.getUint32(eocd + 16, true);
+export function safeRezip(bytes: Uint8Array, limits: UnzipLimits = UNZIP_LIMITS): Uint8Array {
+  let count = 0;
   let total = 0;
-  for (let n = 0; n < count; n++) {
-    if (at + 46 > bytes.length || view.getUint32(at, true) !== 0x02014b50) throw new TableError("文件不完整，打不开（在 Excel 里重新另存一份 .xlsx）");
-    const size = view.getUint32(at + 24, true);
-    if (size === 0xffffffff) throw new TableError("文件太大了");
-    total += size;
-    at += 46 + view.getUint16(at + 28, true) + view.getUint16(at + 30, true) + view.getUint16(at + 32, true);
+  let files: Unzipped;
+  try {
+    files = unzipSync(bytes, {
+      filter: (file) => {
+        count += 1;
+        total += file.originalSize;
+        if (count > limits.maxEntries) throw new TableError("文件里的东西太多了，不像 Excel 文件");
+        if (file.originalSize > limits.maxEntryBytes || total > limits.maxTotalBytes) throw new TableError("文件解开以后太大了，分成几个文件导");
+        return true;
+      },
+    });
+  } catch (error) {
+    if (error instanceof TableError) throw error;
+    throw new TableError("文件不完整，打不开（在 Excel 里重新另存一份 .xlsx）");
   }
-  return total;
+  return zipSync(files, { level: 0 });
 }
 
 function cellText(value: unknown): string {
@@ -57,10 +64,10 @@ export async function readUpload(bytes: Uint8Array, fileName: string): Promise<{
   if (bytes.length > MAX_UPLOAD_BYTES) throw new TableError(`文件太大了（最大 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB），分成几个文件导`);
   if (isOldXls(bytes)) throw new TableError("这是老的 .xls 格式：在 Excel 里“另存为”选 .xlsx（Excel 工作簿）再上传");
   if (isZip(bytes)) {
-    if (zipUnpackedSize(bytes) > MAX_UNZIPPED_BYTES) throw new TableError("文件解开以后太大了，分成几个文件导");
+    const clean = safeRezip(bytes);
     let data: unknown[][];
     try {
-      data = (await readSheet(Buffer.from(bytes), 1, { parseNumber: (s: string) => s, trim: true })) as unknown[][];
+      data = (await readSheet(Buffer.from(clean), 1, { parseNumber: (s: string) => s, trim: true })) as unknown[][];
     } catch {
       throw new TableError("读不出这个 Excel 文件：在 Excel 里重新另存一份 .xlsx 再上传");
     }

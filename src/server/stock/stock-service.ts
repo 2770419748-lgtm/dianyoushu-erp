@@ -2,6 +2,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { LedgerDocType } from "@/generated/prisma/enums";
 import { ACTION_QTY_DELTA, nextDeviceStatus, type DeviceAction } from "./device-state";
 import { isUniqueViolation } from "@/server/db-errors";
+import { findReferences } from "@/server/db-refs";
 import { isValidImei, isValidSn, primaryCode, type DeviceCodes } from "./imei";
 
 // 库存服务层：全系统唯一能改库存的地方。
@@ -173,6 +174,10 @@ export interface AccessoryDeltaInput {
  */
 export async function changeAccessoryStock(tx: Prisma.TransactionClient, input: AccessoryDeltaInput): Promise<number> {
   if (!Number.isInteger(input.qtyDelta) || input.qtyDelta === 0) throw new StockError("数量必须是非 0 整数");
+  // 大件按台管、服务没有库存：哪条路进来都不能按数量记（2026-10-23 复查第 72 条：机器号被清空的盘点行曾把手机记成了配件数量）
+  const sku = await tx.sku.findUnique({ where: { id: input.skuId }, select: { name: true, isService: true, model: { select: { category: { select: { kind: true } } } } } });
+  if (!sku) throw new StockError("商品不存在");
+  if (sku.model.category.kind !== "ACCESSORY" || sku.isService) throw new StockError(`“${sku.name}”是${sku.isService ? "服务商品，没有库存" : "大件，要按台（串号）管"}，不能按数量进出`);
   const key = { storeId_skuId: { storeId: input.storeId, skuId: input.skuId } };
   let after: number;
   if (input.qtyDelta < 0) {
@@ -292,14 +297,22 @@ export async function openingReceiveDevices(tx: Prisma.TransactionClient, input:
 
 /**
  * 撤销一张期初入库单的库存（口径第 22 节，调用方先确认系统里还没开过销售单）：
- * - 机器：都还在原店在库、除了这条期初流水没有别的流水，才删掉机器和流水；
+ * - 这几家店有进行中的盘点、有待审批的开单退货调拨盘点，都不撤（盘点按开单时的数量对，审批批下来要用这些机器）；
+ * - 机器：都还在原店在库、除了这条期初流水没有别的流水、也没有别的单据用着（盘点明细、维修单……不写流水的也算），才删掉机器和流水；
  * - 配件：这家店这个商品在期初之后没有别的流水，才把数量减回去、删掉期初流水。
- * 有一条不满足就整张不撤，报出是哪台、哪个商品。
+ * 有一条不满足就整张不撤，报出是哪台、哪个商品（2026-10-23 复查第 72 条补了盘点、审批和单据引用）。
  */
 export async function revokeOpeningStock(tx: Prisma.TransactionClient, docNo: string): Promise<{ devices: number; accessories: number }> {
   const ledgers = await tx.stockLedger.findMany({ where: { docNo, docType: "OPENING" }, select: { id: true, storeId: true, skuId: true, deviceId: true, qtyDelta: true } });
+  const storeIds = [...new Set(ledgers.map((l) => l.storeId))];
+  const stocktake = await tx.stocktake.findFirst({ where: { storeId: { in: storeIds }, status: "IN_PROGRESS" }, select: { stocktakeNo: true, store: { select: { name: true } } } });
+  if (stocktake) throw new StockError(`${stocktake.store.name}有进行中的盘点（${stocktake.stocktakeNo}），先确认或作废盘点再撤销`);
+  const pending = await tx.approvalRequest.findFirst({ where: { storeId: { in: storeIds }, status: "PENDING", action: { notIn: ["LEAVE", "EXPENSE"] } }, select: { id: true } });
+  if (pending) throw new StockError("这几家店还有待审批的开单、退货、调拨或盘点，先批完或撤回再撤销");
   const deviceIds = ledgers.flatMap((l) => (l.deviceId === null ? [] : [l.deviceId]));
   if (deviceIds.length > 0) {
+    const usedBy = await findReferences(tx, "devices", deviceIds, ["stock_ledgers"]);
+    if (usedBy) throw new StockError(`这张单进来的机器已经用在${usedBy}里了，不能撤销`);
     const moved = await tx.device.findFirst({
       where: { id: { in: deviceIds }, OR: [{ status: { not: "IN_STOCK" } }, { ledgers: { some: { NOT: { docNo, docType: "OPENING" } } } }] },
       select: { code: true },

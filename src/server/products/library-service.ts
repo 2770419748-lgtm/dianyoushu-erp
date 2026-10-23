@@ -7,7 +7,7 @@ import { libraryKey, MODEL_LIBRARY } from "@/lib/model-library";
 import { canManageProducts } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
-import { createSkus } from "@/server/import/import-service";
+import { createSkus, lockImportKind } from "@/server/import/import-service";
 import { ProductError } from "./product-service";
 
 // 从内置机型库添加商品（口径第 22 节）：总部勾型号、颜色、容量，改指导价，一次建好。
@@ -56,6 +56,7 @@ export async function addFromLibrary(user: CurrentUser, picks: unknown, db?: Pri
   if (items.length > MAX_SKUS_PER_ADD) throw new ProductError(`一次最多添加 ${MAX_SKUS_PER_ADD} 个商品，分几次加`);
 
   const run = async (tx: Prisma.TransactionClient) => {
+    await lockImportKind(tx, "PRODUCTS"); // 和商品导入共用一把锁：同时点两次不建出重复商品（复查第 74 条）
     const categories = await tx.category.findMany({ where: { name: { in: ["手机", "平板"] }, isActive: true }, select: { id: true, name: true, kind: true } });
     const categoryId = new Map(categories.filter((c) => c.kind === "DEVICE").map((c) => [c.name, c.id]));
     for (const c of new Set(items.map((i) => i.category))) {
