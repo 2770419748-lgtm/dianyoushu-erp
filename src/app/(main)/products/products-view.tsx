@@ -174,6 +174,9 @@ export function ProductsView({
             <Link href="/products/catalog">
               <Button>品类 / 品牌 / 型号</Button>
             </Link>
+            <Link href="/products/library">
+              <Button>从机型库添加</Button>
+            </Link>
             <Button type="primary" onClick={() => openModal()}>
               新增商品
             </Button>

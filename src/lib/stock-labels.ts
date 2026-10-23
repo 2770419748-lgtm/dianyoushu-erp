@@ -61,6 +61,7 @@ export const LEDGER_DOC_TYPE_LABELS: Record<LedgerDocType, string> = {
   RETURN: "退货入库",
   TRADE_IN: "回收入库",
   REFURBISH: "转良品",
+  OPENING: "期初入库",
 };
 
 export const PURCHASE_STATUS_LABELS: Record<PurchaseOrderStatus, string> = {

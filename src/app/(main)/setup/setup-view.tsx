@@ -134,11 +134,16 @@ export function SetupView({
 
       <Card title="2 区域和门店　3 员工账号">
         <Typography.Paragraph>
-          现在有在用门店 {counts.stores} 家、员工账号 {counts.users} 个（不算总部）。在组织管理里先建区域、门店，再给每家店建店长、店员账号；新账号第一次登录要先改密码。
+          现在有在用门店 {counts.stores} 家、员工账号 {counts.users} 个（不算总部）。在组织管理里先建区域、门店，再给每家店建店长、店员账号；店多、人多的用 Excel 一次导进来。新账号第一次登录要先改密码。
         </Typography.Paragraph>
-        <Link href="/org">
-          <Button>去组织管理</Button>
-        </Link>
+        <Space wrap>
+          <Link href="/org">
+            <Button>去组织管理</Button>
+          </Link>
+          <Link href="/setup/import">
+            <Button>用 Excel 导入门店、员工</Button>
+          </Link>
+        </Space>
       </Card>
 
       <Card title="4 收款方式">
@@ -164,10 +169,17 @@ export function SetupView({
       </Card>
 
       <Card title="6 商品和期初库存">
-        <Typography.Paragraph>现在有商品 {counts.products} 个（不算服务和回收用的“其他机型”）。在商品页从机型库里勾选要卖的机型，再把在库的机器、配件数量导进来。</Typography.Paragraph>
-        <Link href="/products">
-          <Button>去商品</Button>
-        </Link>
+        <Typography.Paragraph>
+          现在有商品 {counts.products} 个（不算服务和回收用的“其他机型”）。先从机型库里勾选要卖的机型（或者用 Excel 导商品），再把在库的机器、配件数量导进来，生成期初入库单；客户名单也可以导。
+        </Typography.Paragraph>
+        <Space wrap>
+          <Link href="/products/library">
+            <Button>从机型库添加商品</Button>
+          </Link>
+          <Link href="/setup/import">
+            <Button type="primary">数据导入</Button>
+          </Link>
+        </Space>
       </Card>
     </Space>
   );

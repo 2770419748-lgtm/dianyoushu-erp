@@ -252,3 +252,75 @@ export async function applyDeviceAction(tx: Prisma.TransactionClient, input: Dev
   });
   return updated;
 }
+
+// ---------- 期初入库（数据导入，口径第 22 节）----------
+
+export interface OpeningDevice {
+  storeId: number;
+  skuId: number;
+  codes: DeviceCodes; // 导入预检已经查过格式和重复
+  costFen: number;
+}
+
+/**
+ * 期初入库一批机器：直接“在库”，一台一条期初流水（单号 = 期初入库单号）。
+ * 一批可能几千台，按 1000 台一组批量写；码在预检时查过重复，这里撞上唯一约束说明同一时间有人入了同一台。
+ */
+export async function openingReceiveDevices(tx: Prisma.TransactionClient, input: { docNo: string; operatorId: number; devices: OpeningDevice[] }): Promise<number> {
+  const status = nextDeviceStatus("RECEIVE", null);
+  let created = 0;
+  for (let i = 0; i < input.devices.length; i += 1000) {
+    const chunk = input.devices.slice(i, i + 1000).map((d) => {
+      const code = primaryCode(d.codes);
+      if (!code) throw new StockError("SN、IMEI1、IMEI2 至少填一个");
+      return { code, sn: d.codes.sn, imei1: d.codes.imei1, imei2: d.codes.imei2, skuId: d.skuId, storeId: d.storeId, status, costFen: d.costFen };
+    });
+    let rows: { id: number; storeId: number; skuId: number }[];
+    try {
+      rows = await tx.device.createManyAndReturn({ data: chunk, select: { id: true, storeId: true, skuId: true } });
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new StockError("有机器的码刚被别人入库了，重新上传预检一次");
+      throw error;
+    }
+    await tx.stockLedger.createMany({
+      data: rows.map((r) => ({ docType: "OPENING" as const, docNo: input.docNo, storeId: r.storeId, skuId: r.skuId, deviceId: r.id, qtyDelta: 1, statusBefore: null, statusAfter: status, operatorId: input.operatorId })),
+    });
+    created += rows.length;
+  }
+  return created;
+}
+
+/**
+ * 撤销一张期初入库单的库存（口径第 22 节，调用方先确认系统里还没开过销售单）：
+ * - 机器：都还在原店在库、除了这条期初流水没有别的流水，才删掉机器和流水；
+ * - 配件：这家店这个商品在期初之后没有别的流水，才把数量减回去、删掉期初流水。
+ * 有一条不满足就整张不撤，报出是哪台、哪个商品。
+ */
+export async function revokeOpeningStock(tx: Prisma.TransactionClient, docNo: string): Promise<{ devices: number; accessories: number }> {
+  const ledgers = await tx.stockLedger.findMany({ where: { docNo, docType: "OPENING" }, select: { id: true, storeId: true, skuId: true, deviceId: true, qtyDelta: true } });
+  const deviceIds = ledgers.flatMap((l) => (l.deviceId === null ? [] : [l.deviceId]));
+  if (deviceIds.length > 0) {
+    const moved = await tx.device.findFirst({
+      where: { id: { in: deviceIds }, OR: [{ status: { not: "IN_STOCK" } }, { ledgers: { some: { NOT: { docNo, docType: "OPENING" } } } }] },
+      select: { code: true },
+    });
+    if (moved) throw new StockError(`机器 ${moved.code} 已经有别的进出记录（卖了、调了、盘了），这张期初入库单不能撤销`);
+    const storeChanged = await tx.$queryRaw<{ code: string }[]>`
+      SELECT d.code FROM devices d JOIN stock_ledgers l ON l.device_id = d.id
+      WHERE l.doc_no = ${docNo} AND l.doc_type = 'OPENING' AND d.store_id <> l.store_id LIMIT 1`;
+    if (storeChanged.length > 0) throw new StockError(`机器 ${storeChanged[0]!.code} 已经不在原来的门店，这张期初入库单不能撤销`);
+  }
+  const accessoryRows = ledgers.filter((l) => l.deviceId === null);
+  for (const row of accessoryRows) {
+    const later = await tx.stockLedger.findFirst({ where: { storeId: row.storeId, skuId: row.skuId, id: { gt: row.id } }, select: { id: true } });
+    if (later) {
+      const sku = await tx.sku.findUnique({ where: { id: row.skuId }, select: { name: true } });
+      throw new StockError(`配件“${sku?.name ?? row.skuId}”在期初之后有别的进出记录，这张期初入库单不能撤销`);
+    }
+    const changed = await tx.accessoryStock.updateMany({ where: { storeId: row.storeId, skuId: row.skuId, qty: { gte: row.qtyDelta } }, data: { qty: { decrement: row.qtyDelta } } });
+    if (changed.count !== 1) throw new StockError("配件数量对不上，这张期初入库单不能撤销");
+  }
+  await tx.stockLedger.deleteMany({ where: { docNo, docType: "OPENING" } });
+  if (deviceIds.length > 0) await tx.device.deleteMany({ where: { id: { in: deviceIds } } });
+  return { devices: deviceIds.length, accessories: accessoryRows.length };
+}

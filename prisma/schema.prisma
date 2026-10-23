@@ -17,17 +17,17 @@ datasource db {
 
 /// 角色：店员、店长、区域经理、总部
 enum Role {
-  STAFF            // 店员
-  STORE_MANAGER    // 店长
+  STAFF // 店员
+  STORE_MANAGER // 店长
   REGIONAL_MANAGER // 区域经理
-  HQ               // 总部
+  HQ // 总部
 
   @@map("role")
 }
 
 /// 商品管理方式：大件按串号一机一码，小件按数量
 enum SkuKind {
-  DEVICE    // 大件：手机、平板、电脑
+  DEVICE // 大件：手机、平板、电脑
   ACCESSORY // 小件：配件、号卡
 
   @@map("sku_kind")
@@ -35,61 +35,61 @@ enum SkuKind {
 
 /// 串号机器状态（口径第 4 节状态机）
 enum DeviceStatus {
-  IN_TRANSIT  // 在途：调拨已发出未收货
-  IN_STOCK    // 在库：可开单
-  SOLD        // 已售
-  RECYCLED    // 回收：以旧换新收回的旧机，未检测
+  IN_TRANSIT // 在途：调拨已发出未收货
+  IN_STOCK // 在库：可开单
+  SOLD // 已售
+  RECYCLED // 回收：以旧换新收回的旧机，未检测
   REFURBISHED // 良品：回收机检测合格，可开单
-  LOCKED      // 锁定：调拨已申请未发出
-  LOST        // 盘亏：盘点确认少了
+  LOCKED // 锁定：调拨已申请未发出
+  LOST // 盘亏：盘点确认少了
 
   @@map("device_status")
 }
 
 enum PurchaseOrderStatus {
-  DRAFT     // 草稿
+  DRAFT // 草稿
   SUBMITTED // 已提交
-  RECEIVED  // 已到货（全部到齐）
-  VOIDED    // 已作废
+  RECEIVED // 已到货（全部到齐）
+  VOIDED // 已作废
 
   @@map("purchase_order_status")
 }
 
 enum TransferStatus {
   REQUESTED // 申请
-  SHIPPED   // 已发出
-  RECEIVED  // 已收货
-  VOIDED    // 已作废
+  SHIPPED // 已发出
+  RECEIVED // 已收货
+  VOIDED // 已作废
 
   @@map("transfer_status")
 }
 
 enum StocktakeStatus {
   IN_PROGRESS // 进行中
-  CONFIRMED   // 已确认
-  VOIDED      // 已作废
+  CONFIRMED // 已确认
+  VOIDED // 已作废
 
   @@map("stocktake_status")
 }
 
 enum SalesOrderStatus {
   COMPLETED // 已完成
-  VOIDED    // 已作废
+  VOIDED // 已作废
 
   @@map("sales_order_status")
 }
 
 enum TradeInStatus {
   COMPLETED // 已完成
-  VOIDED    // 已作废
+  VOIDED // 已作废
 
   @@map("trade_in_status")
 }
 
 /// 服务权益状态（口径第 12 节）：过没过期按到期日算，不单独存
 enum EntitlementStatus {
-  ACTIVE  // 有效
-  VOIDED  // 失效：退货退掉了服务，或销售单作废
+  ACTIVE // 有效
+  VOIDED // 失效：退货退掉了服务，或销售单作废
   CLAIMED // 已理赔：碎屏险在维修单上用掉了（口径第 13 节，只能用一次）
 
   @@map("entitlement_status")
@@ -97,30 +97,30 @@ enum EntitlementStatus {
 
 /// 服务类商品的种类（口径第 13 节）：决定维修时能不能用、能用几次
 enum ServiceKind {
-  SCREEN_INSURANCE  // 碎屏险：屏幕故障，理赔一次
+  SCREEN_INSURANCE // 碎屏险：屏幕故障，理赔一次
   EXTENDED_WARRANTY // 延保：非人为故障，期内不限次数
-  OTHER             // 其他：不能用来维修
+  OTHER // 其他：不能用来维修
 
   @@map("service_kind")
 }
 
 /// 维修单状态（口径第 13 节）
 enum RepairStatus {
-  RECEIVED  // 已接件
-  QUOTED    // 已报价，等客户确认
+  RECEIVED // 已接件
+  QUOTED // 已报价，等客户确认
   REPAIRING // 维修中
-  READY     // 待取机（修好了，或客户不修、修不好）
-  CLOSED    // 已完结（客户取走、结清）
-  VOIDED    // 已作废
+  READY // 待取机（修好了，或客户不修、修不好）
+  CLOSED // 已完结（客户取走、结清）
+  VOIDED // 已作废
 
   @@map("repair_status")
 }
 
 /// 维修谁来付
 enum RepairPayer {
-  CUSTOMER          // 客户自费
-  WARRANTY          // 保修（本店卖出 12 个月内，非屏幕、进水）
-  SCREEN_INSURANCE  // 碎屏险理赔
+  CUSTOMER // 客户自费
+  WARRANTY // 保修（本店卖出 12 个月内，非屏幕、进水）
+  SCREEN_INSURANCE // 碎屏险理赔
   EXTENDED_WARRANTY // 延保
 
   @@map("repair_payer")
@@ -128,7 +128,7 @@ enum RepairPayer {
 
 /// 维修结果
 enum RepairOutcome {
-  REPAIRED     // 修好了
+  REPAIRED // 修好了
   NOT_REPAIRED // 客户不修，或修不好
 
   @@map("repair_outcome")
@@ -139,37 +139,37 @@ enum Carrier {
   CMCC // 中国移动
   CUCC // 中国联通
   CTCC // 中国电信
-  CBN  // 中国广电
+  CBN // 中国广电
 
   @@map("carrier")
 }
 
 /// 运营商业务类型
 enum CarrierBizType {
-  NEW_LINE       // 新号入网
-  PORT_IN        // 携号转入
+  NEW_LINE // 新号入网
+  PORT_IN // 携号转入
   CONTRACT_PHONE // 合约机（购机送话费）
-  BROADBAND      // 宽带
-  PLAN_UPGRADE   // 套餐升级
+  BROADBAND // 宽带
+  PLAN_UPGRADE // 套餐升级
 
   @@map("carrier_biz_type")
 }
 
 /// 运营商业务单状态
 enum CarrierBizStatus {
-  SUBMITTED   // 已登记
-  ACTIVATED   // 已开通
-  FAILED      // 办理失败
-  SETTLED     // 已结算（收到佣金）
+  SUBMITTED // 已登记
+  ACTIVATED // 已开通
+  FAILED // 办理失败
+  SETTLED // 已结算（收到佣金）
   CLAWED_BACK // 已返销（佣金被扣回）
-  VOIDED      // 已作废
+  VOIDED // 已作废
 
   @@map("carrier_biz_status")
 }
 
 /// 运营商结算单从哪来
 enum CarrierSettlementSource {
-  FILE      // 导入运营商渠道系统导出的 CSV
+  FILE // 导入运营商渠道系统导出的 CSV
   SIMULATED // 演示里生成的模拟结算单
 
   @@map("carrier_settlement_source")
@@ -177,8 +177,8 @@ enum CarrierSettlementSource {
 
 /// 结算单一行的对账结果
 enum CarrierLineResult {
-  MATCHED   // 对上了，金额也一样
-  DIFF      // 对上了，佣金和预计的不一样
+  MATCHED // 对上了，金额也一样
+  DIFF // 对上了，佣金和预计的不一样
   UNMATCHED // 运营商有、我们没登记
 
   @@map("carrier_line_result")
@@ -186,13 +186,13 @@ enum CarrierLineResult {
 
 /// 故障类型
 enum FaultCategory {
-  SCREEN   // 屏幕
-  BATTERY  // 电池
-  BOARD    // 主板
-  CAMERA   // 摄像头
-  WATER    // 进水
+  SCREEN // 屏幕
+  BATTERY // 电池
+  BOARD // 主板
+  CAMERA // 摄像头
+  WATER // 进水
   SOFTWARE // 软件
-  OTHER    // 其他
+  OTHER // 其他
 
   @@map("fault_category")
 }
@@ -200,14 +200,14 @@ enum FaultCategory {
 /// 到期提醒的档位：剩 8～30 天一档、剩 0～7 天一档，每档对同一条权益只提醒一次
 enum ReminderStage {
   T30 // 剩 8～30 天
-  T7  // 剩 0～7 天
+  T7 // 剩 0～7 天
 
   @@map("reminder_stage")
 }
 
 /// 企业微信跟进关系状态（口径第 12 节）
 enum WecomFollowStatus {
-  ACTIVE  // 正常跟进中
+  ACTIVE // 正常跟进中
   DELETED // 删了：员工删了客户（del_external_contact）或客户删了员工（del_follow_user），见 deletedBy
 
   @@map("wecom_follow_status")
@@ -215,9 +215,9 @@ enum WecomFollowStatus {
 
 /// 企业微信回调事件的处理状态
 enum WecomEventStatus {
-  PENDING   // 刚落库，还没处理完
+  PENDING // 刚落库，还没处理完
   PROCESSED // 处理完了（没有对应处理的事件也算处理完）
-  FAILED    // 处理出错，error 里有原因，每日脚本重放
+  FAILED // 处理出错，error 里有原因，每日脚本重放
 
   @@map("wecom_event_status")
 }
@@ -225,50 +225,50 @@ enum WecomEventStatus {
 /// 客户标签从哪来
 /// 公告发给谁（口径第 19 节）
 enum NoticeScope {
-  ALL    // 全公司
+  ALL // 全公司
   REGION // 某个区域（区域经理和区域里各店的人）
-  STORE  // 某家门店
+  STORE // 某家门店
 
   @@map("notice_scope")
 }
 
 /// 智能提醒的规则（口径第 18 节）
 enum AlertKind {
-  STALE_DEVICES    // 滞销机器
-  LOW_ACCESSORY    // 配件缺货
-  KPI_BEHIND       // KPI 落后
-  DAILY_CLOSE      // 日结没做完
+  STALE_DEVICES // 滞销机器
+  LOW_ACCESSORY // 配件缺货
+  KPI_BEHIND // KPI 落后
+  DAILY_CLOSE // 日结没做完
   TRANSFER_PENDING // 调拨没收货
-  STOCKTAKE_OPEN   // 盘点没确认
-  TRADE_IN_IDLE    // 回收机没处理
+  STOCKTAKE_OPEN // 盘点没确认
+  TRADE_IN_IDLE // 回收机没处理
   APPROVAL_PENDING // 待审批
   TRANSFER_SUGGEST // 调拨建议
-  INTEGRITY        // 对账自检
+  INTEGRITY // 对账自检
 
   @@map("alert_kind")
 }
 
 /// 提醒和今日待办是给谁的
 enum AlertScope {
-  STORE  // 门店（店长、店员）
+  STORE // 门店（店长、店员）
   REGION // 区域（区域经理）
-  HQ     // 总部
+  HQ // 总部
 
   @@map("alert_scope")
 }
 
 /// 今日待办是谁写的
 enum AlertDigestSource {
-  MODEL     // 真大模型
+  MODEL // 真大模型
   SIMULATED // 模拟模型（演示站没配模型时）
-  TEMPLATE  // 模板（没开模型，或模型出错、超额、写了清单外的数字）
+  TEMPLATE // 模板（没开模型，或模型出错、超额、写了清单外的数字）
 
   @@map("alert_digest_source")
 }
 
 /// 企业微信客户继承的种类（口径第 12 节第三步）
 enum WecomTransferKind {
-  ON_JOB   // 在职转接：店长、总部把一个员工的客户转给另一个员工
+  ON_JOB // 在职转接：店长、总部把一个员工的客户转给另一个员工
   RESIGNED // 离职继承：员工离职，客户交给接手人（要先在企业微信后台删掉这个成员）
 
   @@map("wecom_transfer_kind")
@@ -277,17 +277,17 @@ enum WecomTransferKind {
 /// 企业微信客户继承的进度
 enum WecomTransferStatus {
   WAITING_DELETE // 离职继承：等企业微信后台删除这个成员，删了才能提交
-  SUBMITTED      // 已提交，等客户接替（客户 24 小时内可以拒绝）
-  DONE           // 接替完毕：跟进关系转到接手人名下
-  REFUSED        // 客户拒绝了
-  FAILED         // 其他原因没成（接手人客户数到上限、企业微信报错……），error 里写原因
+  SUBMITTED // 已提交，等客户接替（客户 24 小时内可以拒绝）
+  DONE // 接替完毕：跟进关系转到接手人名下
+  REFUSED // 客户拒绝了
+  FAILED // 其他原因没成（接手人客户数到上限、企业微信报错……），error 里写原因
 
   @@map("wecom_transfer_status")
 }
 
 /// 微信客服会话现在谁在接（口径第 12 节第三步）
 enum WecomKfSessionState {
-  AUTO  // 自动答复
+  AUTO // 自动答复
   HUMAN // 转人工了，不再自动答复，等人工会话结束
 
   @@map("wecom_kf_session_state")
@@ -295,22 +295,41 @@ enum WecomKfSessionState {
 
 /// 微信客服消息的方向
 enum WecomKfDirection {
-  IN  // 客户发来的
+  IN // 客户发来的
   OUT // 发给客户的（自动答复，或者人工在企业微信里回的）
 
   @@map("wecom_kf_direction")
 }
 
 enum WecomTagSource {
-  AUTO   // 系统规则打的（这一版没做自动规则）
+  AUTO // 系统规则打的（这一版没做自动规则）
   MANUAL // 员工在 ERP 里打的
-  WECOM  // 企业微信那边打的，同步回来
+  WECOM // 企业微信那边打的，同步回来
 
   @@map("wecom_tag_source")
 }
 
+/// 数据导入的种类（口径第 22 节）
+enum ImportKind {
+  STORES // 门店
+  USERS // 员工
+  PRODUCTS // 商品
+  DEVICES // 在库机器（期初入库单）
+  ACCESSORIES // 配件期初（期初入库单）
+  CUSTOMERS // 客户
+
+  @@map("import_kind")
+}
+
+enum ImportStatus {
+  DONE // 已导入
+  REVOKED // 已撤销（还没开过销售单之前整批撤销）
+
+  @@map("import_status")
+}
+
 enum DailyCloseStatus {
-  PENDING   // 未确认
+  PENDING // 未确认
   CONFIRMED // 已确认
 
   @@map("daily_close_status")
@@ -318,39 +337,39 @@ enum DailyCloseStatus {
 
 /// 支付方式（口径第 6 节）
 enum PaymentMethod {
-  CASH        // 现金
-  WECHAT      // 微信
-  ALIPAY      // 支付宝
-  CARD        // 刷卡
+  CASH // 现金
+  WECHAT // 微信
+  ALIPAY // 支付宝
+  CARD // 刷卡
   INSTALLMENT // 分期
-  TRADE_IN    // 以旧换新抵扣
-  OTHER       // 其他
-  SUBSIDY     // 国补立减（口径第 15 节，系统按政策算，不能手选）
+  TRADE_IN // 以旧换新抵扣
+  OTHER // 其他
+  SUBSIDY // 国补立减（口径第 15 节，系统按政策算，不能手选）
 
   @@map("payment_method")
 }
 
 /// 审批规则的场景（口径第 17 节）
 enum ApprovalRuleKind {
-  SALE_DISCOUNT   // 开单让利
+  SALE_DISCOUNT // 开单让利
   SALE_BELOW_COST // 低于成本卖
-  RETURN_REFUND   // 退货退款
-  SALE_VOID       // 作废销售单
-  TRANSFER        // 调拨
-  STOCKTAKE_LOSS  // 盘点盘亏
+  RETURN_REFUND // 退货退款
+  SALE_VOID // 作废销售单
+  TRANSFER // 调拨
+  STOCKTAKE_LOSS // 盘点盘亏
 
   @@map("approval_rule_kind")
 }
 
 /// 审批单要做的事
 enum ApprovalAction {
-  SALE      // 开单
-  RETURN    // 退货
+  SALE // 开单
+  RETURN // 退货
   SALE_VOID // 作废销售单
-  TRANSFER  // 调拨申请
+  TRANSFER // 调拨申请
   STOCKTAKE // 盘点确认
-  LEAVE     // 请假（口径第 19 节，OA 事项：提交就要批）
-  EXPENSE   // 费用报销（口径第 19 节，OA 事项）
+  LEAVE // 请假（口径第 19 节，OA 事项：提交就要批）
+  EXPENSE // 费用报销（口径第 19 节，OA 事项）
 
   @@map("approval_action")
 }
@@ -375,9 +394,9 @@ enum PunchKind {
 
 /// 请假类型
 enum LeaveKind {
-  PERSONAL     // 事假
-  SICK         // 病假
-  ANNUAL       // 年假
+  PERSONAL // 事假
+  SICK // 病假
+  ANNUAL // 年假
   COMPENSATORY // 调休
 
   @@map("leave_kind")
@@ -385,9 +404,9 @@ enum LeaveKind {
 
 /// 请假、报销这类 OA 单据的状态（跟着审批单走）
 enum OaStatus {
-  PENDING   // 审批中
-  APPROVED  // 批了
-  REJECTED  // 驳回
+  PENDING // 审批中
+  APPROVED // 批了
+  REJECTED // 驳回
   CANCELLED // 撤回
 
   @@map("oa_status")
@@ -395,22 +414,22 @@ enum OaStatus {
 
 /// 报销的费用类型（口径第 19 节）
 enum ExpenseCategory {
-  TRANSPORT     // 交通
-  OFFICE        // 办公用品
-  REPAIR_PARTS  // 维修耗材
+  TRANSPORT // 交通
+  OFFICE // 办公用品
+  REPAIR_PARTS // 维修耗材
   ENTERTAINMENT // 招待
-  LOGISTICS     // 快递物流
-  OTHER         // 其他
+  LOGISTICS // 快递物流
+  OTHER // 其他
 
   @@map("expense_category")
 }
 
 /// 报销单的状态：审批中 → 待付款（批了）→ 已付款；驳回、撤回的不算费用
 enum ExpenseStatus {
-  PENDING   // 审批中
-  APPROVED  // 批了，待付款
-  PAID      // 已付款（按付款日期算进门店当月费用）
-  REJECTED  // 驳回
+  PENDING // 审批中
+  APPROVED // 批了，待付款
+  PAID // 已付款（按付款日期算进门店当月费用）
+  REJECTED // 驳回
   CANCELLED // 撤回（或者批的时候发起人停用、调店了）
 
   @@map("expense_status")
@@ -418,8 +437,8 @@ enum ExpenseStatus {
 
 /// 报销款怎么付的
 enum ExpensePayMethod {
-  CASH   // 现金
-  BANK   // 银行转账
+  CASH // 现金
+  BANK // 银行转账
   WECHAT // 微信
   ALIPAY // 支付宝
 
@@ -428,28 +447,28 @@ enum ExpensePayMethod {
 
 /// 一个月工资的状态：草稿（能改奖惩、重算）→ 已发布（数字锁定、员工能看自己的）；发布后要改只能整月作废重算
 enum PayrollStatus {
-  DRAFT     // 草稿
+  DRAFT // 草稿
   PUBLISHED // 已发布
-  VOIDED    // 已作废
+  VOIDED // 已作废
 
   @@map("payroll_status")
 }
 
 /// 门店固定支出的类别（口径第 19 节）
 enum FixedExpenseCategory {
-  RENT      // 房租
+  RENT // 房租
   UTILITIES // 水电
-  PROPERTY  // 物业
-  OTHER     // 其他（网费、保洁……）
+  PROPERTY // 物业
+  OTHER // 其他（网费、保洁……）
 
   @@map("fixed_expense_category")
 }
 
 enum ApprovalStatus {
-  PENDING   // 待审批
-  EXECUTED  // 已通过（已经做掉）
-  FAILED    // 批了，但这时候做不成了
-  REJECTED  // 已驳回
+  PENDING // 待审批
+  EXECUTED // 已通过（已经做掉）
+  FAILED // 批了，但这时候做不成了
+  REJECTED // 已驳回
   CANCELLED // 发起人撤回
 
   @@map("approval_status")
@@ -457,8 +476,8 @@ enum ApprovalStatus {
 
 /// 发票种类（口径第 16 节）
 enum InvoiceKind {
-  E_NORMAL     // 电子普票
-  E_SPECIAL    // 电子专票
+  E_NORMAL // 电子普票
+  E_SPECIAL // 电子专票
   PAPER_NORMAL // 纸质普票
 
   @@map("invoice_kind")
@@ -466,18 +485,18 @@ enum InvoiceKind {
 
 enum InvoiceTitleType {
   PERSONAL // 个人
-  COMPANY  // 企业
+  COMPANY // 企业
 
   @@map("invoice_title_type")
 }
 
 /// 发票状态（口径第 16 节）
 enum InvoiceStatus {
-  REQUESTED   // 待开票
-  ISSUED      // 已开票
+  REQUESTED // 待开票
+  ISSUED // 已开票
   RED_PENDING // 需红冲：开了之后退货、作废
-  REDDED      // 已红冲
-  CANCELLED   // 已撤回
+  REDDED // 已红冲
+  CANCELLED // 已撤回
 
   @@map("invoice_status")
 }
@@ -492,14 +511,14 @@ enum InvoiceIssueSource {
 
 /// 国补单状态（口径第 15 节）
 enum SubsidyClaimStatus {
-  PENDING    // 待提交：开单时生成，要补资料
-  SUBMITTED  // 审核中：已提交平台审核
-  APPROVED   // 待到账：平台审核通过
-  SETTLED    // 已到账
-  REJECTED   // 被驳回
-  CANCELLED  // 已撤销：没到账时作废、退货
+  PENDING // 待提交：开单时生成，要补资料
+  SUBMITTED // 审核中：已提交平台审核
+  APPROVED // 待到账：平台审核通过
+  SETTLED // 已到账
+  REJECTED // 被驳回
+  CANCELLED // 已撤销：没到账时作废、退货
   RETURN_DUE // 需退回：已到账后退货
-  RETURNED   // 已退回给平台
+  RETURNED // 已退回给平台
 
   @@map("subsidy_claim_status")
 }
@@ -507,17 +526,18 @@ enum SubsidyClaimStatus {
 /// 库存流水的单据类型
 enum LedgerDocType {
   PURCHASE_RECEIPT // 采购入库 +
-  TRANSFER_LOCK    // 调拨申请锁定（数量不变，只记状态）
-  TRANSFER_UNLOCK  // 调拨作废解锁（数量不变）
-  TRANSFER_OUT     // 调拨发出 −
-  TRANSFER_IN      // 调拨收货 +
-  STOCKTAKE_GAIN   // 盘盈 +
-  STOCKTAKE_LOSS   // 盘亏 −
-  SALE             // 销售出库 −
-  SALE_VOID        // 销售作废恢复 +
-  RETURN           // 退货入库 +
-  TRADE_IN         // 回收入库 +
-  REFURBISH        // 回收转良品（数量不变，只记状态）
+  TRANSFER_LOCK // 调拨申请锁定（数量不变，只记状态）
+  TRANSFER_UNLOCK // 调拨作废解锁（数量不变）
+  TRANSFER_OUT // 调拨发出 −
+  TRANSFER_IN // 调拨收货 +
+  STOCKTAKE_GAIN // 盘盈 +
+  STOCKTAKE_LOSS // 盘亏 −
+  SALE // 销售出库 −
+  SALE_VOID // 销售作废恢复 +
+  RETURN // 退货入库 +
+  TRADE_IN // 回收入库 +
+  REFURBISH // 回收转良品（数量不变，只记状态）
+  OPENING // 期初入库 +（数据导入，口径第 22 节）
 
   @@map("ledger_doc_type")
 }
@@ -542,15 +562,15 @@ model Region {
 
 /// 门店
 model Store {
-  id        Int      @id @default(autoincrement())
-  code      String   @unique // 门店编码，如 S001
-  name      String
-  regionId  Int      @map("region_id")
-  address   String?
-  wecomWebhookUrl String? @map("wecom_webhook_url") // 企业微信门店群机器人地址（带密钥，页面只显示有没有填；智能提醒推送用，口径第 18 节）
-  isActive  Boolean  @default(true) @map("is_active") // 停用不删
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id              Int      @id @default(autoincrement())
+  code            String   @unique // 门店编码，如 S001
+  name            String
+  regionId        Int      @map("region_id")
+  address         String?
+  wecomWebhookUrl String?  @map("wecom_webhook_url") // 企业微信门店群机器人地址（带密钥，页面只显示有没有填；智能提醒推送用，口径第 18 节）
+  isActive        Boolean  @default(true) @map("is_active") // 停用不删
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
   region Region @relation(fields: [regionId], references: [id])
 
@@ -561,8 +581,8 @@ model Store {
   ledgers         StockLedger[]
   purchaseOrders  PurchaseOrder[]
   goodsReceipts   GoodsReceipt[]
-  transfersOut    TransferOrder[]  @relation("TransferFromStore")
-  transfersIn     TransferOrder[]  @relation("TransferToStore")
+  transfersOut    TransferOrder[]      @relation("TransferFromStore")
+  transfersIn     TransferOrder[]      @relation("TransferToStore")
   stocktakes      Stocktake[]
   salesOrders     SalesOrder[]
   returnOrders    ReturnOrder[]
@@ -589,69 +609,71 @@ model Store {
 
 /// 员工即登录用户
 model User {
-  id           Int      @id @default(autoincrement())
-  username     String   @unique // 登录账号
-  passwordHash String   @map("password_hash") // bcrypt 哈希，永远不存明文
-  sessionVersion Int    @default(0) @map("session_version") // 会话版本号：改密码、停用、启用时 +1，之前签发的登录令牌立刻作废
+  id                 Int       @id @default(autoincrement())
+  username           String    @unique // 登录账号
+  passwordHash       String    @map("password_hash") // bcrypt 哈希，永远不存明文
+  sessionVersion     Int       @default(0) @map("session_version") // 会话版本号：改密码、停用、启用时 +1，之前签发的登录令牌立刻作废
   // 二次验证（口径第 20 节）：验证器 App 的密钥加密存；绑定确认后才记开启时间；上次用过的时间窗防重放
-  mfaSecretEnc   String?   @map("mfa_secret_enc")
-  mfaEnabledAt   DateTime? @map("mfa_enabled_at")
-  mfaLastStep    Int?      @map("mfa_last_step")
-  mustChangePassword Boolean @default(false) @map("must_change_password") // 开户的管理员、总部新建或重置过密码的人：下次登录先改密码（口径第 21 节）
-  wecomUserid    String? @unique @map("wecom_userid") // 员工在企业微信里的账号（userid），组织管理里填
-  name         String // 姓名
-  role         Role
-  storeId      Int?     @map("store_id") // 店员、店长必填；区域经理、总部为空
-  regionId     Int?     @map("region_id") // 区域经理所辖区域
-  isActive     Boolean  @default(true) @map("is_active") // 离职/停用不删
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  mfaSecretEnc       String?   @map("mfa_secret_enc")
+  mfaEnabledAt       DateTime? @map("mfa_enabled_at")
+  mfaLastStep        Int?      @map("mfa_last_step")
+  mustChangePassword Boolean   @default(false) @map("must_change_password") // 开户的管理员、总部新建或重置过密码的人：下次登录先改密码（口径第 21 节）
+  wecomUserid        String?   @unique @map("wecom_userid") // 员工在企业微信里的账号（userid），组织管理里填
+  name               String // 姓名
+  role               Role
+  storeId            Int?      @map("store_id") // 店员、店长必填；区域经理、总部为空
+  regionId           Int?      @map("region_id") // 区域经理所辖区域
+  isActive           Boolean   @default(true) @map("is_active") // 离职/停用不删
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
   store  Store?  @relation(fields: [storeId], references: [id])
   region Region? @relation(fields: [regionId], references: [id])
 
   purchaseOrdersCreated PurchaseOrder[]
   goodsReceipts         GoodsReceipt[]
-  transfersRequested    TransferOrder[] @relation("TransferRequestedBy")
-  transfersShipped      TransferOrder[] @relation("TransferShippedBy")
-  transfersReceived     TransferOrder[] @relation("TransferReceivedBy")
-  stocktakesCreated     Stocktake[]     @relation("StocktakeCreatedBy")
-  stocktakesConfirmed   Stocktake[]     @relation("StocktakeConfirmedBy")
-  salesOrders           SalesOrder[]    @relation("SalesOrderSalesperson")
-  salesOrdersVoided     SalesOrder[]    @relation("SalesOrderVoidedBy")
+  transfersRequested    TransferOrder[]       @relation("TransferRequestedBy")
+  transfersShipped      TransferOrder[]       @relation("TransferShippedBy")
+  transfersReceived     TransferOrder[]       @relation("TransferReceivedBy")
+  stocktakesCreated     Stocktake[]           @relation("StocktakeCreatedBy")
+  stocktakesConfirmed   Stocktake[]           @relation("StocktakeConfirmedBy")
+  salesOrders           SalesOrder[]          @relation("SalesOrderSalesperson")
+  salesOrdersVoided     SalesOrder[]          @relation("SalesOrderVoidedBy")
   returnOrders          ReturnOrder[]
-  tradeInOrders         TradeInOrder[]  @relation("TradeInHandledBy")
-  tradeInOrdersVoided   TradeInOrder[]  @relation("TradeInVoidedBy")
+  tradeInOrders         TradeInOrder[]        @relation("TradeInHandledBy")
+  tradeInOrdersVoided   TradeInOrder[]        @relation("TradeInVoidedBy")
   dailyClosesConfirmed  DailyClose[]
   ledgers               StockLedger[]
   auditLogs             AuditLog[]
   remindersContacted    EntitlementReminder[]
-  repairsReceived       RepairOrder[] @relation("RepairReceivedBy")
-  repairsClosed         RepairOrder[] @relation("RepairClosedBy")
-  repairsVoided         RepairOrder[] @relation("RepairVoidedBy")
-  carrierHandled        CarrierBusiness[] @relation("CarrierHandledBy")
-  carrierVoided         CarrierBusiness[] @relation("CarrierVoidedBy")
-  invoicesRequested     Invoice[]         @relation("InvoiceRequestedBy")
-  invoicesIssued        Invoice[]         @relation("InvoiceIssuedBy")
-  invoicesRedded        Invoice[]         @relation("InvoiceRedBy")
-  approvalsRequested    ApprovalRequest[] @relation("ApprovalRequestedBy")
-  approvalsDecided      ApprovalRequest[] @relation("ApprovalDecidedBy")
+  repairsReceived       RepairOrder[]         @relation("RepairReceivedBy")
+  repairsClosed         RepairOrder[]         @relation("RepairClosedBy")
+  repairsVoided         RepairOrder[]         @relation("RepairVoidedBy")
+  carrierHandled        CarrierBusiness[]     @relation("CarrierHandledBy")
+  carrierVoided         CarrierBusiness[]     @relation("CarrierVoidedBy")
+  invoicesRequested     Invoice[]             @relation("InvoiceRequestedBy")
+  invoicesIssued        Invoice[]             @relation("InvoiceIssuedBy")
+  invoicesRedded        Invoice[]             @relation("InvoiceRedBy")
+  approvalsRequested    ApprovalRequest[]     @relation("ApprovalRequestedBy")
+  approvalsDecided      ApprovalRequest[]     @relation("ApprovalDecidedBy")
   carrierSettlements    CarrierSettlement[]
   wecomFollows          WecomFollow[]
   wecomBindCodes        WecomBindCode[]
-  wecomTransfersFrom    WecomTransfer[] @relation("WecomTransferFrom")
-  wecomTransfersTo      WecomTransfer[] @relation("WecomTransferTo")
-  wecomTransfersCreated WecomTransfer[] @relation("WecomTransferCreatedBy")
+  importsCreated        ImportBatch[]         @relation("ImportCreatedBy")
+  importsRevoked        ImportBatch[]         @relation("ImportRevokedBy")
+  wecomTransfersFrom    WecomTransfer[]       @relation("WecomTransferFrom")
+  wecomTransfersTo      WecomTransfer[]       @relation("WecomTransferTo")
+  wecomTransfersCreated WecomTransfer[]       @relation("WecomTransferCreatedBy")
   notifications         Notification[]
   profile               EmployeeProfile?
   shifts                ShiftSchedule[]
-  punches               AttendancePunch[]  @relation("PunchUser")
-  punchesCreated        AttendancePunch[]  @relation("PunchCreatedBy")
+  punches               AttendancePunch[]     @relation("PunchUser")
+  punchesCreated        AttendancePunch[]     @relation("PunchCreatedBy")
   leaveRequests         LeaveRequest[]
-  expenseClaims         ExpenseClaim[]     @relation("ExpenseUser")
-  expensesPaid          ExpenseClaim[]     @relation("ExpensePaidBy")
+  expenseClaims         ExpenseClaim[]        @relation("ExpenseUser")
+  expensesPaid          ExpenseClaim[]        @relation("ExpensePaidBy")
   payrollSlips          PayrollSlip[]
-  noticesAuthored       Notice[]          @relation("NoticeAuthor")
+  noticesAuthored       Notice[]              @relation("NoticeAuthor")
   noticeReads           NoticeRead[]
 
   @@index([storeId])
@@ -665,11 +687,11 @@ model User {
 
 /// 品类：一级，带大件/小件标记
 model Category {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
+  id        Int     @id @default(autoincrement())
+  name      String  @unique
   kind      SkuKind
-  sortOrder Int      @default(0) @map("sort_order")
-  isActive  Boolean  @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
 
   models          ProductModel[]
   subsidyPolicies SubsidyPolicy[]
@@ -710,21 +732,21 @@ model ProductModel {
 
 /// SKU = 型号 + 颜色 + 容量
 model Sku {
-  id            Int      @id @default(autoincrement())
-  modelId       Int      @map("model_id")
+  id            Int          @id @default(autoincrement())
+  modelId       Int          @map("model_id")
   name          String // 显示名，如 "Mate 70 12GB+256GB 曜金黑"
   color         String?
   storage       String? // 容量，如 "12GB+256GB"
-  barcode       String?  @unique
-  guidePriceFen Int      @map("guide_price_fen") // 指导价
-  costPriceFen  Int      @default(0) @map("cost_price_fen") // 参考成本（小件按它算毛利）
-  safetyQty     Int      @default(0) @map("safety_qty") // 小件安全库存：门店数量低于它标红；0 = 不预警
-  isService     Boolean  @default(false) @map("is_service") // 服务类商品（碎屏险、延保）：开单生成权益，不管库存
-  serviceMonths Int?     @map("service_months") // 服务期限（月），服务类必填 1～120（数据库 CHECK）
+  barcode       String?      @unique
+  guidePriceFen Int          @map("guide_price_fen") // 指导价
+  costPriceFen  Int          @default(0) @map("cost_price_fen") // 参考成本（小件按它算毛利）
+  safetyQty     Int          @default(0) @map("safety_qty") // 小件安全库存：门店数量低于它标红；0 = 不预警
+  isService     Boolean      @default(false) @map("is_service") // 服务类商品（碎屏险、延保）：开单生成权益，不管库存
+  serviceMonths Int?         @map("service_months") // 服务期限（月），服务类必填 1～120（数据库 CHECK）
   serviceKind   ServiceKind? @map("service_kind") // 服务种类：碎屏险 / 延保 / 其他（维修核销用，口径第 13 节）
-  isActive      Boolean  @default(true) @map("is_active")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  isActive      Boolean      @default(true) @map("is_active")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
 
   model ProductModel @relation(fields: [modelId], references: [id])
 
@@ -1024,34 +1046,37 @@ model StocktakeItem {
 
 /// 客户
 model Customer {
-  id        Int      @id @default(autoincrement())
-  name      String
+  id                  Int       @id @default(autoincrement())
+  name                String
   // 手机号加密存（口径第 20 节）：密文、指纹（整号查找、全公司唯一）、打码号码（显示、尾号搜索）
-  phoneEnc    String @map("phone_enc")
-  phoneFp     String @unique @map("phone_fp")
-  phoneMasked String @map("phone_masked")
-  note      String?
+  phoneEnc            String    @map("phone_enc")
+  phoneFp             String    @unique @map("phone_fp")
+  phoneMasked         String    @map("phone_masked")
+  note                String?
   wecomExternalUserid String?   @unique @map("wecom_external_userid") // 企业微信外部联系人 id，开单绑定码加微后写入；不按手机号自动匹配
   wecomNickname       String?   @map("wecom_nickname") // 加微时的微信昵称（快照）
   wecomAvatarUrl      String?   @map("wecom_avatar_url")
   wecomBoundAt        DateTime? @map("wecom_bound_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
-  salesOrders   SalesOrder[]
-  returnOrders  ReturnOrder[]
-  tradeInOrders TradeInOrder[]
-  entitlements  ServiceEntitlement[]
-  repairOrders  RepairOrder[]
+  salesOrders     SalesOrder[]
+  returnOrders    ReturnOrder[]
+  tradeInOrders   TradeInOrder[]
+  entitlements    ServiceEntitlement[]
+  repairOrders    RepairOrder[]
   carrierBusiness CarrierBusiness[]
-  subsidyClaims SubsidyClaim[]
-  invoices      Invoice[]
-  wecomFollows  WecomFollow[]
-  wecomTags     WecomCustomerTag[]
-  wecomBindCodes WecomBindCode[]
+  subsidyClaims   SubsidyClaim[]
+  invoices        Invoice[]
+  wecomFollows    WecomFollow[]
+  wecomTags       WecomCustomerTag[]
+  wecomBindCodes  WecomBindCode[]
   wecomKfSessions WecomKfSession[]
   wecomTransfers  WecomTransfer[]
+  importBatchId   Int?                 @map("import_batch_id") // 从哪次导入建的（口径第 22 节，撤销导入时用）；手工建的为空
+  importBatch     ImportBatch?         @relation(fields: [importBatchId], references: [id])
 
+  @@index([importBatchId])
   @@map("customers")
 }
 
@@ -1083,15 +1108,15 @@ model SalesOrder {
   tradeInOrder TradeInOrder? @relation(fields: [tradeInOrderId], references: [id])
   dailyClose   DailyClose?   @relation(fields: [dailyCloseId], references: [id])
 
-  items        SalesOrderItem[]
-  payments     Payment[]
-  returnOrders ReturnOrder[]
-  entitlements ServiceEntitlement[]
-  wecomBindCodes WecomBindCode[]
-  repairOrders RepairOrder[]
+  items           SalesOrderItem[]
+  payments        Payment[]
+  returnOrders    ReturnOrder[]
+  entitlements    ServiceEntitlement[]
+  wecomBindCodes  WecomBindCode[]
+  repairOrders    RepairOrder[]
   carrierBusiness CarrierBusiness[]
-  subsidyClaims SubsidyClaim[]
-  invoices     Invoice[]
+  subsidyClaims   SubsidyClaim[]
+  invoices        Invoice[]
 
   @@index([storeId, bizDate])
   @@index([salespersonId, bizDate])
@@ -1152,17 +1177,17 @@ model Payment {
 
 /// 退货单
 model ReturnOrder {
-  id           Int       @id @default(autoincrement())
-  orderNo      String    @unique @map("order_no") // RT + yyyyMMdd + 4 位
-  storeId      Int       @map("store_id")
-  salesOrderId Int       @map("sales_order_id") // 原销售单
-  customerId   Int?      @map("customer_id")
-  handledById  Int       @map("handled_by_id")
-  bizDate      DateTime  @map("biz_date") @db.Date
-  refundFen    Int       @map("refund_fen") // 退款合计（正数）
+  id           Int      @id @default(autoincrement())
+  orderNo      String   @unique @map("order_no") // RT + yyyyMMdd + 4 位
+  storeId      Int      @map("store_id")
+  salesOrderId Int      @map("sales_order_id") // 原销售单
+  customerId   Int?     @map("customer_id")
+  handledById  Int      @map("handled_by_id")
+  bizDate      DateTime @map("biz_date") @db.Date
+  refundFen    Int      @map("refund_fen") // 退款合计（正数）
   reason       String?
-  dailyCloseId Int?      @map("daily_close_id")
-  createdAt    DateTime  @default(now()) @map("created_at")
+  dailyCloseId Int?     @map("daily_close_id")
+  createdAt    DateTime @default(now()) @map("created_at")
 
   store      Store       @relation(fields: [storeId], references: [id])
   salesOrder SalesOrder  @relation(fields: [salesOrderId], references: [id])
@@ -1198,27 +1223,27 @@ model ReturnOrderItem {
 
 /// 回收单（以旧换新收旧机）
 model TradeInOrder {
-  id           Int           @id @default(autoincrement())
-  orderNo      String        @unique @map("order_no") // RC + yyyyMMdd + 4 位
-  storeId      Int           @map("store_id")
-  customerId   Int?          @map("customer_id")
-  handledById  Int           @map("handled_by_id")
-  deviceCode   String        @map("device_code") // 旧机主码（SN / IMEI1 / IMEI2 规则同入库）；同时会建一条 Device（状态回收）
-  modelName    String        @map("model_name") // 旧机机型描述（可能不在我们的 SKU 里）
-  skuId        Int?          @map("sku_id") // 能对上 SKU 时填
-  condition    String // 成色：全新 / 95 新 / 9 成新 / 8 成新 / 有损
-  appraisedFen Int           @map("appraised_fen") // 估价 = 抵扣金额 = 旧机成本
+  id             Int           @id @default(autoincrement())
+  orderNo        String        @unique @map("order_no") // RC + yyyyMMdd + 4 位
+  storeId        Int           @map("store_id")
+  customerId     Int?          @map("customer_id")
+  handledById    Int           @map("handled_by_id")
+  deviceCode     String        @map("device_code") // 旧机主码（SN / IMEI1 / IMEI2 规则同入库）；同时会建一条 Device（状态回收）
+  modelName      String        @map("model_name") // 旧机机型描述（可能不在我们的 SKU 里）
+  skuId          Int?          @map("sku_id") // 能对上 SKU 时填
+  condition      String // 成色：全新 / 95 新 / 9 成新 / 8 成新 / 有损
+  appraisedFen   Int           @map("appraised_fen") // 估价 = 抵扣金额 = 旧机成本
   // 卖家身份（口径第 20 节，2026-10-23 起新开的单必填）：身份证号加密存，店员只看打码的
-  sellerName     String?     @map("seller_name")
-  sellerIdEnc    String?     @map("seller_id_enc")
-  sellerIdFp     String?     @map("seller_id_fp")
-  sellerIdMasked String?     @map("seller_id_masked")
-  status       TradeInStatus @default(COMPLETED)
-  note         String?
-  voidedById   Int?          @map("voided_by_id")
-  voidedAt     DateTime?     @map("voided_at")
-  createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @updatedAt @map("updated_at")
+  sellerName     String?       @map("seller_name")
+  sellerIdEnc    String?       @map("seller_id_enc")
+  sellerIdFp     String?       @map("seller_id_fp")
+  sellerIdMasked String?       @map("seller_id_masked")
+  status         TradeInStatus @default(COMPLETED)
+  note           String?
+  voidedById     Int?          @map("voided_by_id")
+  voidedAt       DateTime?     @map("voided_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
 
   store     Store     @relation(fields: [storeId], references: [id])
   customer  Customer? @relation(fields: [customerId], references: [id])
@@ -1226,9 +1251,9 @@ model TradeInOrder {
   voidedBy  User?     @relation("TradeInVoidedBy", fields: [voidedById], references: [id])
   sku       Sku?      @relation(fields: [skuId], references: [id])
 
-  device     Device?     // 收回的旧机
+  device     Device? // 收回的旧机
   salesOrder SalesOrder? // 被哪张销售单抵扣
-  payment    Payment?    // 对应的抵扣支付明细
+  payment    Payment? // 对应的抵扣支付明细
 
   @@index([storeId, createdAt])
   @@index([sellerIdFp])
@@ -1610,12 +1635,12 @@ model Invoice {
   createdAt         DateTime            @default(now()) @map("created_at")
   updatedAt         DateTime            @updatedAt @map("updated_at")
 
-  store       Store       @relation(fields: [storeId], references: [id])
-  salesOrder  SalesOrder  @relation(fields: [salesOrderId], references: [id])
-  customer    Customer?   @relation(fields: [customerId], references: [id])
-  requestedBy User        @relation("InvoiceRequestedBy", fields: [requestedById], references: [id])
-  issuedBy    User?       @relation("InvoiceIssuedBy", fields: [issuedById], references: [id])
-  redBy       User?       @relation("InvoiceRedBy", fields: [redById], references: [id])
+  store       Store      @relation(fields: [storeId], references: [id])
+  salesOrder  SalesOrder @relation(fields: [salesOrderId], references: [id])
+  customer    Customer?  @relation(fields: [customerId], references: [id])
+  requestedBy User       @relation("InvoiceRequestedBy", fields: [requestedById], references: [id])
+  issuedBy    User?      @relation("InvoiceIssuedBy", fields: [issuedById], references: [id])
+  redBy       User?      @relation("InvoiceRedBy", fields: [redById], references: [id])
 
   lines InvoiceLine[]
 
@@ -1658,7 +1683,7 @@ model SubsidyPolicy {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  category Category      @relation(fields: [categoryId], references: [id])
+  category Category       @relation(fields: [categoryId], references: [id])
   claims   SubsidyClaim[]
 
   @@map("subsidy_policies")
@@ -1762,17 +1787,17 @@ model WecomCustomerTag {
 /// 开单绑定码：开单后店员点“生成加企业微信二维码”时建，带着它的活码（联系我）只认这一个客户。
 /// 客户扫码加好友，回调里的 state 就是这个码，按它精确绑定；绑定成功或过期后删掉企业微信那边的活码配置。
 model WecomBindCode {
-  code               String    @id // 短码，同时是活码的 state（企业微信限 30 个字符）
-  customerId         Int       @map("customer_id")
-  salesOrderId       Int       @map("sales_order_id")
-  storeId            Int       @map("store_id")
-  userId             Int       @map("user_id") // 接待员工 = 开单人
-  configId           String?   @unique @map("config_id") // 企业微信返回的活码配置 id
-  qrCodeUrl          String?   @map("qr_code_url") // 企业微信返回的二维码地址（模拟模式为空，页面画占位图）
-  expiresAt          DateTime  @map("expires_at") // 生成后 30 天
-  usedAt             DateTime? @map("used_at") // 绑定成功的时间
+  code                String    @id // 短码，同时是活码的 state（企业微信限 30 个字符）
+  customerId          Int       @map("customer_id")
+  salesOrderId        Int       @map("sales_order_id")
+  storeId             Int       @map("store_id")
+  userId              Int       @map("user_id") // 接待员工 = 开单人
+  configId            String?   @unique @map("config_id") // 企业微信返回的活码配置 id
+  qrCodeUrl           String?   @map("qr_code_url") // 企业微信返回的二维码地址（模拟模式为空，页面画占位图）
+  expiresAt           DateTime  @map("expires_at") // 生成后 30 天
+  usedAt              DateTime? @map("used_at") // 绑定成功的时间
   contactWayDeletedAt DateTime? @map("contact_way_deleted_at") // 活码配置删掉的时间
-  createdAt          DateTime  @default(now()) @map("created_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
 
   customer   Customer   @relation(fields: [customerId], references: [id])
   salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id])
@@ -1804,16 +1829,16 @@ model WecomEvent {
 
 /// 员工档案（口径第 19 节）：在员工账号上补的人事信息，一个账号一份。工资只有本人和总部能看
 model EmployeeProfile {
-  userId        Int       @id @map("user_id")
-  hireDate      DateTime? @map("hire_date") @db.Date
-  position      String? // 岗位（文字，如“店员”“收银”“维修”）
-  phoneEnc      String?   @map("phone_enc") // 联系电话，加密存（口径第 20 节）；总部编辑、本人看时解开
-  phoneMasked   String?   @map("phone_masked") // 列表里显示
-  baseSalaryFen Int       @default(0) @map("base_salary_fen") // 基本工资（每月，分；数据库 CHECK 不为负）
-  leaveDate     DateTime? @map("leave_date") @db.Date // 离职日期（停用时填）
-  commissionPlanId Int?   @map("commission_plan_id") // 提成方案（口径第 19 节，总部选）
-  note          String?
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  userId           Int       @id @map("user_id")
+  hireDate         DateTime? @map("hire_date") @db.Date
+  position         String? // 岗位（文字，如“店员”“收银”“维修”）
+  phoneEnc         String?   @map("phone_enc") // 联系电话，加密存（口径第 20 节）；总部编辑、本人看时解开
+  phoneMasked      String?   @map("phone_masked") // 列表里显示
+  baseSalaryFen    Int       @default(0) @map("base_salary_fen") // 基本工资（每月，分；数据库 CHECK 不为负）
+  leaveDate        DateTime? @map("leave_date") @db.Date // 离职日期（停用时填）
+  commissionPlanId Int?      @map("commission_plan_id") // 提成方案（口径第 19 节，总部选）
+  note             String?
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   user           User            @relation(fields: [userId], references: [id])
   commissionPlan CommissionPlan? @relation(fields: [commissionPlanId], references: [id])
@@ -1863,28 +1888,28 @@ model PayrollRun {
 
 /// 工资条（口径第 19 节）：应发 = 基本工资（按在职天数折算）+ 提成 − 缺勤扣款 + 其他奖惩。社保个税财务另算
 model PayrollSlip {
-  id                   Int     @id @default(autoincrement())
-  runId                Int     @map("run_id")
-  userId               Int     @map("user_id")
-  storeId              Int?    @map("store_id") // 生成时他在哪家店（显示用；分到门店按 store_days）
-  planName             String? @map("plan_name") // 提成方案名（生成时的）
-  baseSalaryFen        Int     @map("base_salary_fen") // 档案里的基本工资（每月）
-  daysInMonth          Int     @map("days_in_month")
-  employedDays         Int     @map("employed_days") // 这个月在职几天（入职、离职当月折算）
-  baseFen              Int     @map("base_fen") // 折算后的基本工资
-  absentDays           Int     @map("absent_days")
-  absenceDeductionFen  Int     @map("absence_deduction_fen") // 缺勤一天扣 基本工资 ÷ 当月天数
-  salesFen             Int     @map("sales_fen") // 这个月开单的销售额（扣掉退货）
-  deviceQty            Int     @map("device_qty") // 卖了几台主机（扣掉退回的）
-  serviceQty           Int     @map("service_qty") // 卖了几份碎屏险、延保（扣掉退的）
-  salesCommissionFen   Int     @map("sales_commission_fen")
-  deviceCommissionFen  Int     @map("device_commission_fen")
-  serviceCommissionFen Int     @map("service_commission_fen")
-  commissionFen        Int     @map("commission_fen")
-  adjustmentFen        Int     @default(0) @map("adjustment_fen") // 其他奖惩（总部手填，写原因）
-  adjustmentNote       String? @map("adjustment_note")
-  grossFen             Int     @map("gross_fen") // 应发
-  storeDays            Json?   @map("store_days") // 每家店上了几天班（按那天在哪家店），门店收支按它分摊
+  id                   Int      @id @default(autoincrement())
+  runId                Int      @map("run_id")
+  userId               Int      @map("user_id")
+  storeId              Int?     @map("store_id") // 生成时他在哪家店（显示用；分到门店按 store_days）
+  planName             String?  @map("plan_name") // 提成方案名（生成时的）
+  baseSalaryFen        Int      @map("base_salary_fen") // 档案里的基本工资（每月）
+  daysInMonth          Int      @map("days_in_month")
+  employedDays         Int      @map("employed_days") // 这个月在职几天（入职、离职当月折算）
+  baseFen              Int      @map("base_fen") // 折算后的基本工资
+  absentDays           Int      @map("absent_days")
+  absenceDeductionFen  Int      @map("absence_deduction_fen") // 缺勤一天扣 基本工资 ÷ 当月天数
+  salesFen             Int      @map("sales_fen") // 这个月开单的销售额（扣掉退货）
+  deviceQty            Int      @map("device_qty") // 卖了几台主机（扣掉退回的）
+  serviceQty           Int      @map("service_qty") // 卖了几份碎屏险、延保（扣掉退的）
+  salesCommissionFen   Int      @map("sales_commission_fen")
+  deviceCommissionFen  Int      @map("device_commission_fen")
+  serviceCommissionFen Int      @map("service_commission_fen")
+  commissionFen        Int      @map("commission_fen")
+  adjustmentFen        Int      @default(0) @map("adjustment_fen") // 其他奖惩（总部手填，写原因）
+  adjustmentNote       String?  @map("adjustment_note")
+  grossFen             Int      @map("gross_fen") // 应发
+  storeDays            Json?    @map("store_days") // 每家店上了几天班（按那天在哪家店），门店收支按它分摊
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
@@ -2105,7 +2130,7 @@ model Notification {
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
-  noticeId  Int?      @map("notice_id") // 公告发的消息（口径第 19 节）
+  noticeId Int? @map("notice_id") // 公告发的消息（口径第 19 节）
 
   user   User         @relation(fields: [userId], references: [id])
   digest AlertDigest? @relation(fields: [digestId], references: [id], onDelete: Cascade)
@@ -2259,4 +2284,27 @@ model SystemSetting {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("system_settings")
+}
+
+/// 数据导入（口径第 22 节）：每次导入一条。在库机器、配件期初的这条就是期初入库单，单号也是库存流水的单号
+model ImportBatch {
+  id           Int          @id @default(autoincrement())
+  batchNo      String       @unique @map("batch_no") // 期初入库单 QC + 日期 + 流水；其他导入 DR + 日期 + 流水
+  kind         ImportKind
+  status       ImportStatus @default(DONE)
+  fileName     String?      @map("file_name")
+  rowCount     Int          @map("row_count") // 表里的有效行数
+  createdCount Int          @map("created_count") // 实际新建的条数（系统里已有、跳过的不算）
+  summary      Json? // 给页面看的汇总：按门店的台数、跳过了哪些……
+  createdById  Int          @map("created_by_id")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  revokedById  Int?         @map("revoked_by_id")
+  revokedAt    DateTime?    @map("revoked_at")
+
+  createdBy User       @relation("ImportCreatedBy", fields: [createdById], references: [id])
+  revokedBy User?      @relation("ImportRevokedBy", fields: [revokedById], references: [id])
+  customers Customer[]
+
+  @@index([kind, createdAt])
+  @@map("import_batches")
 }

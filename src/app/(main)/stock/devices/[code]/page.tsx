@@ -38,7 +38,7 @@ export default async function DevicePage({ params }: PageProps<"/stock/devices/[
   const loaded = await load(user, decoded);
   if (loaded.kind === "missing") notFound();
   if (loaded.kind === "forbidden") return <NoAccess title="没有权限看这台机器" />;
-  const links = await docLinks(loaded.device.ledgers.map((l) => l.docNo), { canViewPurchase: canManagePurchase(user.role) });
+  const links = await docLinks(loaded.device.ledgers.map((l) => l.docNo), { canViewPurchase: canManagePurchase(user.role), canViewImport: user.role === "HQ" });
   const repairs = await listRepairHistory(user, { deviceId: loaded.device.id }); // 客户拿来修过的记录（口径第 13 节）
   return (
     <div style={{ display: "grid", gap: 24 }}>

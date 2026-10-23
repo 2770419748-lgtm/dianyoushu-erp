@@ -31,6 +31,8 @@ import { checkDataKeys } from "../src/server/pii/key-check";
 //     同一个人审批中、已批的假日期不重叠；两级审批还在批的，前面几级的记录条数 = 现在是第几级 − 1；每个月工资的人数、应发合计 = 工资条加起来。
 // 14. 个人信息加密（口径第 20 节）：钥匙和写这个库时的一样；每个手机号、身份证号、发票接收方、二次验证密钥都解得开，
 //     解出来重算的指纹、打码号码和库里存的一样（钥匙换错、哪里绕过工具直接写库，都会在这里露出来）。
+// 15. 数据导入（口径第 22 节）：每条期初入库流水都属于一张没撤销的期初入库单；期初入库单的新建条数 = 它的期初流水条数（机器单只有机器、
+//     配件单只有配件），撤销了的一条流水都不剩；导入的客户属于一次没撤销的客户导入，客户导入的新建条数 = 记着它的客户数；撤销要有人和时间。
 
 export interface IntegrityResult {
   accessory: number;
@@ -48,6 +50,7 @@ export interface IntegrityResult {
   hr: number;
   pii: number;
   piiKeys: number; // 1 = 钥匙和写这个库时的不一样（整库都解不开）
+  imports: number;
 }
 
 /** 第 14 类：钥匙对不对（只核对、不补记录）；逐行解开个人信息，核对指纹和打码号码（数据量是几千到几万行，解一遍很快） */
@@ -265,13 +268,32 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
     hr: Number(hr!.n),
     pii: await piiProblems(prisma),
     piiKeys: await piiKeysMismatch(prisma),
+    imports: await importProblems(prisma),
   };
 }
 
+/** 第 15 类：数据导入 */
+export async function importProblems(prisma: PrismaClient): Promise<number> {
+  const [row] = await prisma.$queryRaw<{ n: bigint }[]>`
+    SELECT (
+      (SELECT COUNT(*) FROM stock_ledgers l
+        WHERE l.doc_type = 'OPENING' AND NOT EXISTS (
+          SELECT 1 FROM import_batches b WHERE b.batch_no = l.doc_no AND b.status = 'DONE'
+            AND ((b.kind = 'DEVICES' AND l.device_id IS NOT NULL AND l.qty_delta = 1) OR (b.kind = 'ACCESSORIES' AND l.device_id IS NULL AND l.qty_delta > 0))))
+      + (SELECT COUNT(*) FROM import_batches b
+          WHERE b.kind IN ('DEVICES', 'ACCESSORIES')
+            AND (SELECT COUNT(*) FROM stock_ledgers l WHERE l.doc_no = b.batch_no AND l.doc_type = 'OPENING') <> CASE WHEN b.status = 'DONE' THEN b.created_count ELSE 0 END)
+      + (SELECT COUNT(*) FROM customers c JOIN import_batches b ON b.id = c.import_batch_id WHERE b.kind <> 'CUSTOMERS' OR b.status <> 'DONE')
+      + (SELECT COUNT(*) FROM import_batches b
+          WHERE b.kind = 'CUSTOMERS' AND b.status = 'DONE' AND (SELECT COUNT(*) FROM customers c WHERE c.import_batch_id = b.id) <> b.created_count)
+    )::bigint AS n`;
+  return Number(row!.n);
+}
+
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假报销工资对不上 ${r.hr} 处，${r.piiKeys ? "个人信息钥匙和写这个库时的不一样（整库都解不开，先换回原来那两把钥匙）" : `个人信息解不开或对不上 ${r.pii} 处`}。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假报销工资对不上 ${r.hr} 处，${r.piiKeys ? "个人信息钥匙和写这个库时的不一样（整库都解不开，先换回原来那两把钥匙）" : `个人信息解不开或对不上 ${r.pii} 处`}，数据导入对不上 ${r.imports} 处。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {
-  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval + r.wecom + r.hr + r.pii + r.piiKeys === 0;
+  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval + r.wecom + r.hr + r.pii + r.piiKeys + r.imports === 0;
 }

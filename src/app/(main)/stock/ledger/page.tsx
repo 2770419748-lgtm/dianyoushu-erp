@@ -20,6 +20,6 @@ export default async function LedgerPage({ searchParams }: PageProps<"/stock/led
   const storeId = stores.some((s) => s.id === requested) ? requested : undefined;
   const q = one(params.q);
   const data = await listLedger(user, { storeId, q, page: Number(one(params.page)) || 1 });
-  const links = await docLinks(data.rows.map((r) => r.docNo), { canViewPurchase: canManagePurchase(user.role) });
+  const links = await docLinks(data.rows.map((r) => r.docNo), { canViewPurchase: canManagePurchase(user.role), canViewImport: user.role === "HQ" });
   return <LedgerView stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))} storeId={storeId} q={q} data={data} links={links} />;
 }
