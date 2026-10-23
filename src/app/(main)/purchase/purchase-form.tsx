@@ -112,6 +112,7 @@ export function PurchaseForm({
                 pagination={false}
                 rowKey="key"
                 dataSource={fields}
+                scroll={{ x: true }} // 手机上表格自己横着滚，不把整页撑宽（复查第 81 条）
                 columns={[
                   {
                     title: "商品",

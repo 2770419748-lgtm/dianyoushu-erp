@@ -120,10 +120,10 @@ export function SetupView({
           </Form.Item>
           <Space wrap>
             <Form.Item name="phone" label="联系电话">
-              <Input maxLength={30} style={{ width: 220 }} />
+              <Input maxLength={30} style={{ width: "min(220px, 75vw)" }} />
             </Form.Item>
             <Form.Item name="address" label="地址">
-              <Input maxLength={100} style={{ width: 360 }} />
+              <Input maxLength={100} style={{ width: "min(360px, 75vw)" }} />
             </Form.Item>
           </Space>
           <Button type="primary" htmlType="submit" loading={pending}>

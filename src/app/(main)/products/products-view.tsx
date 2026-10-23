@@ -166,24 +166,21 @@ export function ProductsView({
     .map((m) => ({ value: m.id, label: `${m.brand.name} ${m.name}（${m.category.name}）` }));
 
   return (
-    <Card
-      title={`商品（${total}）`}
-      extra={
-        canManage ? (
-          <Space>
-            <Link href="/products/catalog">
-              <Button>品类 / 品牌 / 型号</Button>
-            </Link>
-            <Link href="/products/library">
-              <Button>从机型库添加</Button>
-            </Link>
-            <Button type="primary" onClick={() => openModal()}>
-              新增商品
-            </Button>
-          </Space>
-        ) : null
-      }
-    >
+    <Card title={`商品（${total}）`}>
+      {/* 按钮放在卡片里、能换行（放标题栏右边手机上挤不下、把整页撑宽，复查第 81 条） */}
+      {canManage ? (
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Button type="primary" onClick={() => openModal()}>
+            新增商品
+          </Button>
+          <Link href="/products/library">
+            <Button>从机型库添加</Button>
+          </Link>
+          <Link href="/products/catalog">
+            <Button>品类 / 品牌 / 型号</Button>
+          </Link>
+        </Space>
+      ) : null}
       <Space wrap style={{ marginBottom: 16 }}>
         <Input.Search
           allowClear

@@ -41,7 +41,8 @@ export default async function DevicePage({ params }: PageProps<"/stock/devices/[
   const links = await docLinks(loaded.device.ledgers.map((l) => l.docNo), { canViewPurchase: canManagePurchase(user.role), canViewImport: user.role === "HQ" });
   const repairs = await listRepairHistory(user, { deviceId: loaded.device.id }); // 客户拿来修过的记录（口径第 13 节）
   return (
-    <div style={{ display: "grid", gap: 24 }}>
+    // minmax(0, 1fr)：网格的列默认按内容最宽撑开，手机上会把整页撑出屏幕（复查第 81 条）
+    <div style={{ display: "grid", gap: 24, gridTemplateColumns: "minmax(0, 1fr)" }}>
       <DeviceView device={loaded.device} links={links} showCost={user.role !== "STAFF"} />
       {repairs.length > 0 ? <RepairHistory rows={repairs} /> : null}
     </div>

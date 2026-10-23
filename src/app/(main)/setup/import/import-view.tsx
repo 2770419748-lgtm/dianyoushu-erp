@@ -108,7 +108,10 @@ export function ImportView({ history }: { history: History[] }) {
 
       <Card title="导入">
         <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-          <Segmented<ImportKindKey> value={kind} onChange={(v) => reset(v)} options={IMPORT_KIND_ORDER.map((k) => ({ value: k, label: IMPORT_KIND_LABELS[k] }))} />
+          {/* 手机上这一条自己横着滑，不把整页撑宽（复查第 81 条） */}
+          <div style={{ maxWidth: "100%", overflowX: "auto" }}>
+            <Segmented<ImportKindKey> value={kind} onChange={(v) => reset(v)} options={IMPORT_KIND_ORDER.map((k) => ({ value: k, label: IMPORT_KIND_LABELS[k] }))} />
+          </div>
           <Typography.Text type="secondary">{KIND_HINTS[kind]}</Typography.Text>
           <Table
             size="small"

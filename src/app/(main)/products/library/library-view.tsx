@@ -53,7 +53,10 @@ export function LibraryView({ existing }: { existing: string[] }) {
         title="勾型号的颜色和容量，改一下指导价，点下面的“添加”一次建好商品"
         description="价格是首发价或大致行情，只是建议；颜色以厂商为准，没有的可以自己加。系统里已有的组合标了“已有”，不会重复建。库里没有的机型在商品页手工建，或者用 Excel 导。"
       />
-      <Segmented value={brand} onChange={(v) => setBrand(v as string)} options={LIBRARY_BRANDS} />
+      {/* 品牌多，手机上这一条自己横着滑，不把整页撑宽（复查第 81 条） */}
+      <div style={{ maxWidth: "100%", overflowX: "auto" }}>
+        <Segmented value={brand} onChange={(v) => setBrand(v as string)} options={LIBRARY_BRANDS} />
+      </div>
       {MODEL_LIBRARY.filter((m) => m.brand === brand).map((m) => {
         const p = pickOf(m);
         const colors = [...m.colors, ...p.extraColors];
