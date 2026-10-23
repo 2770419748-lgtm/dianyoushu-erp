@@ -94,19 +94,24 @@ describe(".xlsx", () => {
     await expect(readUpload(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]), "坏.xlsx")).rejects.toThrow(/打不开|读不出/);
   });
 
-  it("压缩炸弹：单个、总量、个数超上限拒绝；目录里写小了也只解到写的那么大（复查第 75 条）", () => {
+  it("压缩炸弹：单个、总量、个数超上限拒绝；目录里写小了解到写的大小马上停（复查第 75、79 条）", () => {
     const limits = { maxEntries: 3, maxEntryBytes: 1024, maxTotalBytes: 1500 };
     expect(() => safeRezip(zipSync({ a: new Uint8Array(2000) }), limits)).toThrow(/太大/);
     expect(() => safeRezip(zipSync({ a: new Uint8Array(800), b: new Uint8Array(800) }), limits)).toThrow(/太大/);
     expect(() => safeRezip(zipSync({ a: new Uint8Array(1), b: new Uint8Array(1), c: new Uint8Array(1), d: new Uint8Array(1) }), limits)).toThrow(/太多/);
-    // 做一个“目录里写 100 字节、实际能解出 1 MB”的文件：只解出 100 字节
-    const zip = zipSync({ a: new Uint8Array(1024 * 1024) });
+    // 正常的文件原样过：解开、重新打包，内容一样
+    const ok = unzipSync(safeRezip(zipSync({ "x/a.xml": new TextEncoder().encode("<a/>"), b: new Uint8Array(500).fill(7) }), limits));
+    expect(new TextDecoder().decode(ok["x/a.xml"])).toBe("<a/>");
+    expect(ok.b!.every((v) => v === 7)).toBe(true);
+    // 做一个“目录里写 100 字节、实际能解出 20 MB”的文件：解到 100 字节就报错停下，不会把 20 MB 都解一遍
+    const zip = zipSync({ a: new Uint8Array(20 * 1024 * 1024) });
     const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
     let cd = zip.length - 22;
     while (view.getUint32(cd, true) !== 0x06054b50) cd--;
     const dir = view.getUint32(cd + 16, true);
     view.setUint32(dir + 24, 100, true); // 中央目录里的“解开后大小”
-    const out = unzipSync(safeRezip(zip, { maxEntries: 10, maxEntryBytes: 1000, maxTotalBytes: 1000 }));
-    expect(out.a!.length).toBeLessThanOrEqual(100);
+    const started = performance.now();
+    expect(() => safeRezip(zip, { maxEntries: 10, maxEntryBytes: 1000, maxTotalBytes: 1000 })).toThrow(/对不上/);
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });

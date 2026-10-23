@@ -69,3 +69,38 @@ describe("同一个文件同时导两次（连本机库，真并发）", () => {
     expect(await prisma.sku.count({ where: { model: { brand: { name: "并发测试牌" } } } })).toBe(1);
   });
 });
+
+describe("撤销期初入库单和同时在跑的调拨（快核第 77 条）", () => {
+  it("调拨已经锁住机器、还没提交时点撤销：撤销等它提交，再查出机器动过了，不删", async (ctx) => {
+    const f = await fixture();
+    const deviceSku = f ? await prisma.sku.findFirst({ where: { isActive: true, isService: false, barcode: { not: null }, model: { category: { kind: "DEVICE" } } }, orderBy: { id: "asc" } }) : null;
+    if (!f || !deviceSku) return ctx.skip();
+    const imei = `97${String(Date.now()).slice(-13)}`;
+    const done = await commitImport(f.hq, "DEVICES", csv(`门店编码,条码,IMEI1,成本\n${f.store.code},${deviceSku.barcode},${imei},1000\n`));
+    if (!done.ok) throw new Error(JSON.stringify(done.check.problems));
+    createdBatches.push(done.done.batchNo);
+    const device = await prisma.device.findUniqueOrThrow({ where: { code: imei } });
+    let locked!: () => void;
+    const lockedSignal = new Promise<void>((r) => (locked = r));
+    // 模拟调拨申请：锁住机器，过一会儿才写“调拨锁定”流水、改状态、提交
+    const transfer = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM devices WHERE id = ${device.id} FOR UPDATE`;
+      locked();
+      await new Promise((r) => setTimeout(r, 800));
+      await tx.stockLedger.create({ data: { docType: "TRANSFER_LOCK", docNo: "TR-RACE-TEST", storeId: device.storeId, skuId: device.skuId, deviceId: device.id, qtyDelta: 0, statusBefore: "IN_STOCK", statusAfter: "LOCKED", operatorId: f.hq.id } });
+      await tx.device.update({ where: { id: device.id }, data: { status: "LOCKED" } });
+    });
+    await lockedSignal;
+    const { revokeOpeningStock } = await import("@/server/stock/stock-service");
+    const revoke = prisma.$transaction((tx) => revokeOpeningStock(tx, done.done.batchNo)).then(
+      () => "撤了",
+      (e: Error) => e.message,
+    );
+    await transfer;
+    expect(await revoke).toMatch(/别的进出记录/);
+    expect(await prisma.device.count({ where: { id: device.id } })).toBe(1);
+    // 清理：调拨流水、机器（期初流水和导入记录在 afterAll 里清）
+    await prisma.stockLedger.deleteMany({ where: { docNo: { in: ["TR-RACE-TEST", done.done.batchNo] } } });
+    await prisma.device.delete({ where: { id: device.id } });
+  });
+});

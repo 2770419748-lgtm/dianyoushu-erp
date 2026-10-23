@@ -304,13 +304,21 @@ export async function openingReceiveDevices(tx: Prisma.TransactionClient, input:
  */
 export async function revokeOpeningStock(tx: Prisma.TransactionClient, docNo: string): Promise<{ devices: number; accessories: number }> {
   const ledgers = await tx.stockLedger.findMany({ where: { docNo, docType: "OPENING" }, select: { id: true, storeId: true, skuId: true, deviceId: true, qtyDelta: true } });
+  const deviceIds = ledgers.flatMap((l) => (l.deviceId === null ? [] : [l.deviceId]));
+  // 先锁住这批机器和配件余额，再做下面的检查：同时在跑的调拨、开单、盘点建单要么已经提交（下面查得出来），
+  // 要么等撤销做完（机器没了它们会失败），不会检查都过了、机器却在别的单子里（2026-10-23 快核第 77 条）
+  if (deviceIds.length > 0) await tx.$queryRaw`SELECT id FROM devices WHERE id = ANY(${deviceIds}::int[]) ORDER BY id FOR UPDATE`;
+  for (const l of ledgers.filter((x) => x.deviceId === null).sort((a, b) => a.storeId - b.storeId || a.skuId - b.skuId)) {
+    await tx.$queryRaw`SELECT id FROM accessory_stocks WHERE store_id = ${l.storeId} AND sku_id = ${l.skuId} FOR UPDATE`;
+  }
   const storeIds = [...new Set(ledgers.map((l) => l.storeId))];
   const stocktake = await tx.stocktake.findFirst({ where: { storeId: { in: storeIds }, status: "IN_PROGRESS" }, select: { stocktakeNo: true, store: { select: { name: true } } } });
-  if (stocktake) throw new StockError(`${stocktake.store.name}有进行中的盘点（${stocktake.stocktakeNo}），先确认或作废盘点再撤销`);
+  if (stocktake) throw new StockError(`${stocktake.store.name}有进行中的盘点（${stocktake.stocktakeNo}）：先把这张盘点单作废再撤销（确认过的盘点核对过这批货，就不能撤了）`);
   const pending = await tx.approvalRequest.findFirst({ where: { storeId: { in: storeIds }, status: "PENDING", action: { notIn: ["LEAVE", "EXPENSE"] } }, select: { id: true } });
   if (pending) throw new StockError("这几家店还有待审批的开单、退货、调拨或盘点，先批完或撤回再撤销");
-  const deviceIds = ledgers.flatMap((l) => (l.deviceId === null ? [] : [l.deviceId]));
   if (deviceIds.length > 0) {
+    // 作废的盘点不影响库存：里面这几台机器的明细一起删掉，不算“用着”（快核第 78 条）
+    await tx.stocktakeItem.deleteMany({ where: { deviceId: { in: deviceIds }, stocktake: { status: "VOIDED" } } });
     const usedBy = await findReferences(tx, "devices", deviceIds, ["stock_ledgers"]);
     if (usedBy) throw new StockError(`这张单进来的机器已经用在${usedBy}里了，不能撤销`);
     const moved = await tx.device.findFirst({

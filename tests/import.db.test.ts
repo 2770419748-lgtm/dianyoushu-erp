@@ -224,10 +224,11 @@ describe("数据导入", () => {
       await tx.approvalRequest.updateMany({ where: { storeId: fx.store.id, status: "PENDING" }, data: { status: "CANCELLED" } });
       const st = await tx.stocktake.create({ data: { stocktakeNo: "ST-IMPORT-TEST", storeId: fx.store.id, createdById: fx.hq.id } });
       await tx.stocktakeItem.create({ data: { stocktakeId: st.id, skuId: fx.deviceSku.id, deviceId: devices[0]!.id, expectedQty: 1 } });
-      await expect(revokeOpeningStock(tx, ok.done.batchNo)).rejects.toThrow(/进行中的盘点/);
-      await tx.stocktake.update({ where: { id: st.id }, data: { status: "VOIDED", voidedAt: new Date() } });
+      await expect(revokeOpeningStock(tx, ok.done.batchNo)).rejects.toThrow(/先把这张盘点单作废再撤销/);
+      // 确认过的盘点核对过这批机器：撤不了；作废的盘点不算（快核第 78 条），里面这几台的明细一起删掉
+      await tx.stocktake.update({ where: { id: st.id }, data: { status: "CONFIRMED", confirmedAt: new Date(), confirmedById: fx.hq.id } });
       await expect(revokeOpeningStock(tx, ok.done.batchNo)).rejects.toThrow(/用在盘点单里/);
-      await tx.stocktakeItem.deleteMany({ where: { stocktakeId: st.id } });
+      await tx.stocktake.update({ where: { id: st.id }, data: { status: "VOIDED", voidedAt: new Date(), confirmedAt: null, confirmedById: null } });
       // 大件不能按数量进出（机器号被清空的盘点行曾把手机记成了配件数量）
       await expect(changeAccessoryStock(tx, { storeId: fx.store.id, skuId: fx.deviceSku.id, qtyDelta: 2, docType: "STOCKTAKE_GAIN", docNo: "ST-IMPORT-TEST", operatorId: fx.hq.id })).rejects.toThrow(/大件/);
       // 动过的机器撤不了，没动过的能撤
@@ -235,6 +236,7 @@ describe("数据导入", () => {
       await expect(revokeOpeningStock(tx, ok.done.batchNo)).rejects.toThrow(StockError);
       await tx.device.update({ where: { id: devices[0]!.id }, data: { status: "IN_STOCK" } });
       expect(await revokeOpeningStock(tx, ok.done.batchNo)).toEqual({ devices: 2, accessories: 0 });
+      expect(await tx.stocktakeItem.count({ where: { stocktakeId: st.id } })).toBe(0); // 作废的盘点里这台的明细删了
       expect(await tx.device.count({ where: { id: { in: devices.map((d) => d.id) } } })).toBe(0);
       expect(await tx.stockLedger.count({ where: { docNo: ok.done.batchNo } })).toBe(0);
     });
