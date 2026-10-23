@@ -98,7 +98,10 @@ dc() {
   dir=$(tenant_dir "$t")
   tag="${DC_TAG:-$(current_tag "$t")}"
   [ -n "$tag" ] || die "$t 还没有部署过版本"
-  APP_IMAGE="$APP_REPO:$tag" TOOLS_IMAGE="$TOOLS_REPO:$tag" BACKUP_IMAGE="$BACKUP_REPO:$tag" BACKUP_DIR="$dir/backups" EXPORT_DIR="$dir/exports" TENANT="$t" \
+  # 用干净的环境跑 compose：shell 里碰巧有同名变量（SESSION_SECRET、DATA_ENCRYPTION_KEY、DEMO_MODE……）会盖过这家 .env 里的值，
+  # 一家的应用就用上了别人的、甚至示例里的钥匙。只留找得到 docker 要的几个
+  env -i PATH="$PATH" HOME="${HOME:-/root}" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${DOCKER_CONFIG:+DOCKER_CONFIG="$DOCKER_CONFIG"} \
+    APP_IMAGE="$APP_REPO:$tag" TOOLS_IMAGE="$TOOLS_REPO:$tag" BACKUP_IMAGE="$BACKUP_REPO:$tag" BACKUP_DIR="$dir/backups" EXPORT_DIR="$dir/exports" TENANT="$t" \
     docker compose -p "erp-$t" --project-directory "$APP_DIR" \
     -f "$APP_DIR/docker-compose.yml" -f "$APP_DIR/deploy/docker-compose.tenant.yml" \
     --env-file "$dir/.env" "$@"

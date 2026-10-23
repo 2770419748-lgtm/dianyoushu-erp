@@ -12,3 +12,5 @@ src/generated
 
 # 服务器上的数据库备份不进镜像
 backups
+# 整库导出（pnpm export:all）是明文个人信息，更不能进镜像
+exports
