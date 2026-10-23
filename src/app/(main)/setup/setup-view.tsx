@@ -73,7 +73,7 @@ export function SetupView({
             ]}
           />
         ) : (
-          <Alert type="error" showIcon title="还没有开户信息：请服务商在服务器上跑开户脚本" />
+          <Alert type="error" showIcon title="还没有开户信息：请服务商在服务器上用 pnpm license:set 补上（库里已经有数据时不能再跑开户脚本）" />
         )}
         <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
           续费、改套餐、加门店数找给你开户的服务商（在服务器上改）。到期后 15 天照常用，之后只能查看和导出，数据不会自动删。

@@ -233,7 +233,7 @@ export async function revealSellerId(user: CurrentUser, tradeInId: number, db: D
     if (error instanceof PermissionError) throw new TradeInError("这张回收单不在你的范围内");
     throw error;
   }
-  if (!order.sellerIdEnc) throw new TradeInError("这张回收单没有登记卖家身份（2026-10-23 以前开的）");
+  if (!order.sellerIdEnc) throw new TradeInError("这张回收单没有登记卖家身份证号（2026-10-23 以前开的，或者开单时身份证不是必填）");
   const idNo = decryptPii(order.sellerIdEnc);
   await writeAudit({ userId: user.id, action: "trade_in.reveal_id", entity: "trade_in_order", entityId: order.id, detail: { orderNo: order.orderNo } }, asTx(db));
   return idNo;

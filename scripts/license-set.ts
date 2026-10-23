@@ -40,7 +40,9 @@ async function main() {
     next.plan = plan as LicensePlan;
   }
   if (expires) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(expires) || Number.isNaN(Date.parse(`${expires}T00:00:00Z`))) throw new Error("--expires 要写成 2027-12-31");
+    // 2026-02-30 这种 Date.parse 会滚到 3 月 2 日：解析后再拼回去要一模一样（复查顺手修）
+    const parsed = new Date(`${expires}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(expires) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== expires) throw new Error("--expires 要写成 2027-12-31 这样真有的日期");
     next.expiresOn = expires;
   }
   if (days) {

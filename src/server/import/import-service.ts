@@ -25,7 +25,7 @@ import { DEMO_MODE } from "@/server/auth/demo-accounts";
 import { hashPassword } from "@/server/auth/password";
 import { ROLE_LABELS } from "@/server/auth/permissions";
 import { phoneColumns, phoneFingerprint } from "@/server/pii/crypto";
-import { getLicense } from "@/server/settings/settings-service";
+import { assertStoreQuota, lockStoreQuota, OrgError } from "@/server/org/org-service";
 import { nextDocNo } from "@/server/stock/doc-no";
 import { isValidImei, isValidSn } from "@/server/stock/imei";
 import { changeAccessoryStock, openingReceiveDevices, revokeOpeningStock, StockError } from "@/server/stock/stock-service";
@@ -169,12 +169,11 @@ async function analyzeStores(rows: TableRow<(typeof STORE_COLUMNS)[number]["key"
     if (p.count === before) plan.push({ line: row.line, region: region!, code: code!, name: name!, address });
   }
   // 门店数上限（口径第 21 节）：在用的加上这次新建的不能超
-  if (!DEMO_MODE) {
-    const limit = (await getLicense(db))?.storeLimit ?? null;
-    if (limit !== null) {
-      const active = await db.store.count({ where: { isActive: true } });
-      if (active + rows.length > limit) p.add(0, "门店", `在用的门店 ${active} 家，再导 ${rows.length} 家超过合同上限（${limit} 家）；要加门店找服务商调整套餐`);
-    }
+  try {
+    await assertStoreQuota(db, DEMO_MODE, rows.length);
+  } catch (error) {
+    if (!(error instanceof OrgError)) throw error;
+    p.add(0, "门店", error.message);
   }
   const newRegions = [...new Set(plan.map((s) => s.region).filter((r) => !regionByName.has(norm(r))))];
   return {
@@ -661,6 +660,7 @@ export async function commitImport(
     }
   }
   const run = async (tx: Db) => {
+    if (kind === "STORES") await lockStoreQuota(tx); // 门店数上限：和组织管理建门店排队（复查第 68 条）
     const a = await analyze(kind, cells, tx);
     if (a.problems.length > 0) return { ok: false as const, check: toCheck(kind, rowCount, a) };
     if (a.createCount === 0) throw new ImportError("没有要新建的：表里的都已经在系统里了");

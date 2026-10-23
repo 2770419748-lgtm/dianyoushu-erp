@@ -1,6 +1,10 @@
 import "dotenv/config";
 import { prisma } from "@/lib/prisma";
 import { assertDataKeys } from "@/server/pii/key-check";
+import { isWritable, licenseState } from "@/lib/license";
+import { bjDateKey } from "@/lib/attendance";
+import { DEMO_MODE } from "@/server/auth/demo-accounts";
+import { getLicense } from "@/server/settings/settings-service";
 import { writeAudit } from "@/server/audit";
 import { scanEntitlementReminders } from "@/server/entitlement/entitlement-service";
 import { getWecomClient } from "@/server/wecom/client";
@@ -15,18 +19,24 @@ import { processTransfers } from "@/server/wecom/transfer-service";
 // 2. 企业微信：处理失败的回调事件重放一遍；过期没扫的开单二维码，删掉企业微信那边的活码配置；微信客服消息只留 180 天；
 //    客户继承：离职员工删了就提交、已提交的查结果回写
 // 每一步单独 try：前一步出错不影响后面；有出错的退出码 1，计划任务能据此告警。
+// 过了宽限期只读以后（口径第 21 节）：不再生成到期提醒；企业微信的清理（消息只留 180 天、过期二维码）、补处理回调、离职继承照跑
+// （只读以后总部还能停用离职员工，他的客户要能交接出去）。
 // 脚本里要用服务层（带 server-only 标记），所以 package.json 里用 tsx --conditions=react-server 跑。
 
 async function main() {
   await assertDataKeys(prisma, "每日任务"); // 钥匙对不上就停（口径第 20 节），不然生成的提醒里客户对不上
   const report: Record<string, unknown> = {};
   let failed = false;
+  const readonly = !isWritable(licenseState(await getLicense(), bjDateKey(new Date()), DEMO_MODE));
 
-  try {
-    report.reminders = await scanEntitlementReminders();
-  } catch (error) {
-    failed = true;
-    report.reminders = `出错：${error instanceof Error ? error.message : String(error)}`;
+  if (readonly) report.reminders = "服务已到期（只读），不生成到期提醒";
+  else {
+    try {
+      report.reminders = await scanEntitlementReminders();
+    } catch (error) {
+      failed = true;
+      report.reminders = `出错：${error instanceof Error ? error.message : String(error)}`;
+    }
   }
 
   const mode = wecomMode();

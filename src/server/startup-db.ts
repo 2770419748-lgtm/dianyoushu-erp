@@ -20,5 +20,15 @@ export function describeDbStartupError(error: unknown): { fatal: boolean; reason
     .filter(Boolean)
     .pop();
   const detail = [code, last].filter(Boolean).join(" ") || "未知错误";
+  // 用 PrismaPg 时没有连库、表权限（db-roles.sh 没跑）报的是 P2039，里面带 PostgreSQL 的 42501，也是等多久都不会好（复查顺手修）
+  if (code === "P2039" && /`42501`|"42501"/.test(`${message} ${metaText(error)}`)) return { fatal: true, reason: `${FATAL.P1010}（${detail}）` };
   return FATAL[code] ? { fatal: true, reason: `${FATAL[code]}（${detail}）` } : { fatal: false, reason: detail };
+}
+
+function metaText(error: unknown): string {
+  try {
+    return JSON.stringify((error as { meta?: unknown } | null)?.meta ?? null);
+  } catch {
+    return "";
+  }
 }

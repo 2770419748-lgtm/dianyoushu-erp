@@ -1,9 +1,10 @@
 import "dotenv/config";
-import { createWriteStream, mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { chmodSync, createWriteStream, mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { once } from "node:events";
 import path from "node:path";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { exportCell } from "@/lib/csv";
 import { decryptPii } from "@/server/pii/crypto";
 import { assertDataKeys } from "@/server/pii/key-check";
 
@@ -11,8 +12,10 @@ import { assertDataKeys } from "@/server/pii/key-check";
 // 用法（服务器上）：docker compose --profile tools run --rm tools pnpm export:all [--out exports/某某通讯-20271231]
 // - 一个只读事务里导，各表是同一时刻的数据；
 // - 加密存的手机号、身份证号、发票接收人解开成明文（列名去掉 _enc），指纹列（_fp）不导；
-// - 密码哈希、二次验证密钥、企业微信令牌缓存、钥匙核对记录、迁移记录不导；
-// - CSV 带 UTF-8 BOM，Excel 直接打开不乱码；时间是北京时间。
+// - 密码哈希、二次验证密钥、企业微信令牌缓存、钥匙核对记录、迁移记录不导；门店群机器人地址（带 key，能往群里发消息）只导“已填”
+//   （2026-10-23 复查第 69 条）；
+// - CSV 带 UTF-8 BOM，Excel 直接打开不乱码；时间是北京时间；12 位以上的纯数字（身份证号、串号）前面加 '，免得 Excel 丢位（第 71 条）；
+// - 文件夹 700、文件 600，只有跑脚本的账号能读（第 70 条）。
 // 导出的文件夹里是明文个人信息：交接完就删，别留在服务器上，也别进仓库（exports/ 已在 .gitignore 里）。
 
 function arg(name: string): string | undefined {
@@ -23,6 +26,8 @@ function arg(name: string): string | undefined {
 const SKIP_TABLES = new Set(["_prisma_migrations", "wecom_token_cache"]);
 const SKIP_COLUMNS = new Set(["password_hash", "mfa_secret_enc", "mfa_last_step"]);
 const SKIP_SETTINGS = new Set(["data_key_check"]);
+/** 只导“填没填”的列：门店群机器人地址里带着 key */
+const MASKED_COLUMNS = new Map([["wecom_webhook_url", "已填（机器人地址带密钥，不导出）"]]);
 const PAGE = 5000;
 
 interface Column {
@@ -35,13 +40,6 @@ function stamp(now: Date): string {
   return bj.slice(0, 10).replace(/-/g, "") + "-" + bj.slice(11, 16).replace(":", "");
 }
 
-/** Excel 会把 = + @ 开头（和 - 开头但不是数字）的格子当公式算：前面加一个 ' 只当文字（说明.txt 里写明） */
-function csvCell(raw: string | null): string {
-  if (raw === null) return "";
-  const value = /^[=+@\t\r]/.test(raw) || (raw.startsWith("-") && !/^-\d+(\.\d+)?$/.test(raw)) ? `'${raw}` : raw;
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
-
 /** 每一列都在库里转成文字：时间换成北京时间，其余照 PostgreSQL 的写法 */
 function selectExpr(c: Column): string {
   const q = `"${c.name.replace(/"/g, '""')}"`;
@@ -51,9 +49,11 @@ function selectExpr(c: Column): string {
 }
 
 async function main() {
+  process.umask(0o077); // 这里写的都是明文个人信息：新建的文件夹 700、文件 600
   const out = path.resolve(arg("out") ?? path.join("exports", `export-${stamp(new Date())}`));
   if (existsSync(out) && readdirSync(out).length > 0) throw new Error(`${out} 里已经有文件，换一个 --out`);
-  mkdirSync(out, { recursive: true });
+  mkdirSync(out, { recursive: true, mode: 0o700 });
+  chmodSync(out, 0o700); // 文件夹原来就有（空的）时也收紧
   await assertDataKeys(prisma, "全量导出");
 
   const summary: { table: string; rows: number; decrypted: string[] }[] = [];
@@ -82,7 +82,7 @@ async function main() {
           ORDER BY array_position(i.indkey::int2[], a.attnum)`);
         const order = pk.length > 0 ? pk.map((p) => `"${p.name.replace(/"/g, '""')}"`).join(", ") : columns.map((_, i) => `${i + 1}`).join(", ");
         const file = createWriteStream(path.join(out, `${table}.csv`), { encoding: "utf8" });
-        file.write("﻿" + header.map(csvCell).join(",") + "\r\n");
+        file.write("﻿" + header.map(exportCell).join(",") + "\r\n");
         let rows = 0;
         const select = columns.map((c, i) => `${selectExpr(c)} AS c${i}`).join(", ");
         for (let offset = 0; ; offset += PAGE) {
@@ -90,6 +90,7 @@ async function main() {
           for (const r of page) {
             const values = columns.map((c, i) => {
               const v = r[`c${i}`];
+              if (v !== null && MASKED_COLUMNS.has(c.name)) return MASKED_COLUMNS.get(c.name)!;
               if (v === null || !c.name.endsWith("_enc")) return v;
               try {
                 return decryptPii(v);
@@ -99,7 +100,7 @@ async function main() {
               }
             });
             if (table === "system_settings" && keyColumn >= 0 && SKIP_SETTINGS.has(values[keyColumn] ?? "")) continue;
-            if (!file.write(values.map(csvCell).join(",") + "\r\n")) await once(file, "drain");
+            if (!file.write(values.map(exportCell).join(",") + "\r\n")) await once(file, "drain");
             rows += 1;
           }
           if (page.length < PAGE) break;
@@ -114,7 +115,7 @@ async function main() {
 
   writeFileSync(
     path.join(out, "清单.csv"),
-    "﻿表,行数,解开的个人信息列\r\n" + summary.map((s) => [s.table, String(s.rows), s.decrypted.join(" ")].map(csvCell).join(",")).join("\r\n") + "\r\n",
+    "﻿表,行数,解开的个人信息列\r\n" + summary.map((s) => [s.table, String(s.rows), s.decrypted.join(" ")].map(exportCell).join(",")).join("\r\n") + "\r\n",
   );
   writeFileSync(
     path.join(out, "说明.txt"),
@@ -123,8 +124,8 @@ async function main() {
       `导出时间（北京时间）：${stamp(new Date())}`,
       "一张表一个 CSV，UTF-8 带 BOM，Excel 直接打开；各表是同一时刻的数据。",
       "时间列是北京时间；金额列单位是分（除以 100 是元）。",
-      "手机号、身份证号、发票接收人已解开成明文（列名去掉 _enc）。密码、二次验证密钥、企业微信令牌不在里面。",
-      "以 = + @ 开头（或 - 开头但不是数字）的格子前面加了一个英文单引号 '，防止 Excel 当公式算；原值是去掉这个 ' 的部分。",
+      "手机号、身份证号、发票接收人已解开成明文（列名去掉 _enc）。密码、二次验证密钥、企业微信令牌不在里面；门店群机器人地址只写“已填”（地址里带密钥）。",
+      "以 = + @ 开头（或 - 开头但不是数字）的格子、12 位以上的纯数字（身份证号、串号）前面加了一个英文单引号 '：防止 Excel 当公式算、把长号码改成科学计数法丢位。原值是去掉这个 ' 的部分。",
       "这里是明文个人信息，请妥善保管，用完删除。",
       "",
     ].join("\r\n"),

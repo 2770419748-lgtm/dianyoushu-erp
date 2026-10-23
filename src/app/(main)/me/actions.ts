@@ -33,7 +33,7 @@ export async function confirmMfaSetupAction(code: string, sid: string): Promise<
 }
 
 export async function changePasswordAction(oldPassword: string, newPassword: string): Promise<AccountActionResult> {
-  const user = await requireUser();
+  const user = await requireUser({ allowFirstPassword: true }); // 第一次登录改初始密码也走这里
   try {
     const sessionVersion = await changeOwnPassword(user, oldPassword, newPassword);
     await createSession(user.id, sessionVersion); // 当前这台继续登录着；别处的旧登录已经失效

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireWritableUser } from "@/server/license/license-service";
+import { requireUserForSecurityAction, requireWritableUser } from "@/server/license/license-service";
 import * as org from "@/server/org/org-service";
 
 // 组织管理页的 Server Function：只做"取当前用户 → 调服务层 → 刷新页面"，规则都在服务层。
@@ -65,17 +65,18 @@ export async function updateUserAction(id: number, input: org.UserInput) {
 }
 
 export async function resetUserPasswordAction(id: number, password: string) {
-  const user = await requireWritableUser();
+  const user = await requireUserForSecurityAction(); // 只读以后也能重置（复查第 66 条）
   return run(() => org.resetUserPassword(user, id, password));
 }
 
 export async function resetUserMfaAction(id: number, reason: string) {
-  const user = await requireWritableUser();
+  const user = await requireUserForSecurityAction(); // 只读以后也能重置（复查第 66 条）
   return run(() => org.resetUserMfa(user, id, reason));
 }
 
 export async function setUserActiveAction(id: number, isActive: boolean, takeoverUserId?: number) {
-  const user = await requireWritableUser();
+  // 只读以后能停用（离职的人要能停掉），不能启用（复查第 66 条）
+  const user = isActive ? await requireWritableUser() : await requireUserForSecurityAction();
   let notice: string | undefined;
   const result = await run(async () => {
     notice = (await org.setUserActive(user, id, isActive, { takeoverUserId })).notice;

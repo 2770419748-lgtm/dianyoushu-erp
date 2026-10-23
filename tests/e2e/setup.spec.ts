@@ -27,9 +27,13 @@ test("总部设的密码：第一次登录先改，改完才能用", async ({ pa
   await query("UPDATE users SET must_change_password = true WHERE id = $1", [staff!.id]);
   await login(page, staff!.username);
   await expect(page.getByText("先改一下密码")).toBeVisible();
-  // 换个页面也一样先改密码
+  // 换个页面也一样先改密码；页面数据不发给浏览器（页面一开头就停了）、报表接口不给（复查第 67 条）
   await page.goto("/sales");
   await expect(page.getByText("先改一下密码")).toBeVisible();
+  const [order] = await query<{ order_no: string }>("SELECT order_no FROM sales_orders WHERE store_id = (SELECT store_id FROM users WHERE id = $1) ORDER BY id DESC LIMIT 1", [staff!.id]);
+  const html = await (await page.request.get("/sales")).text();
+  expect(html).not.toContain(order!.order_no);
+  expect((await page.request.get("/api/reports/cashier")).status()).toBe(403);
 
   await page.getByLabel("现在的密码（刚才登录用的）").fill("demo1234");
   await page.getByLabel("新密码", { exact: true }).fill("first-change-1");

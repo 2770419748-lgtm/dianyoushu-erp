@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
 
   if (mode === "simulated") {
     const user = await getCurrentUser();
-    if (!user) return message("先登录 ERP，再从“企微侧边栏”演示页打开");
+    if (!user || user.mustChangePassword) return message("先登录 ERP（第一次登录先改初始密码），再从“企微侧边栏”演示页打开");
     const externalUserid = params.get("externalUserid") ?? "";
     const target = new URL("/wecom-app/customer", origin);
     if (EXTERNAL_USERID_PATTERN.test(externalUserid)) target.searchParams.set("externalUserid", externalUserid);

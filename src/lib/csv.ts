@@ -17,3 +17,12 @@ export function csvCell(value: string | number): string {
 export function toCsv(rows: (string | number)[][]): string {
   return "﻿" + rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
+
+/**
+ * 整库导出用（pnpm export:all，口径第 21 节）：在 csvCell 的基础上，12 位以上的纯数字（18 位身份证号、15 位串号）前面也加 '——
+ * Excel 双击打开 CSV 会把它们当数字，只留 15 位有效数字、显示成科学计数法，存一下就丢位了（2026-10-23 复查第 71 条）。空值写成空格子。
+ */
+export function exportCell(value: string | null): string {
+  if (value === null) return "";
+  return csvCell(/^\d{12,}$/.test(value) ? `'${value}` : value);
+}

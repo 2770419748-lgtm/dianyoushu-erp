@@ -6,6 +6,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/setup": "系统设置",
   "/setup/import": "数据导入",
   "/expired": "服务已到期",
+  "/first-password": "先改密码",
   "/stores": "门店",
   "/logs": "操作日志",
   "/products": "商品",

@@ -60,7 +60,7 @@ export function licenseNotice(state: LicenseState): { level: "info" | "warning" 
     case "readonly":
       return { level: "error", text: "服务已到期，现在只能查看和导出，不能开单和改数据。续费请联系给你开户的服务商，续费后马上恢复" };
     case "missing":
-      return { level: "error", text: "还没有开户信息，现在只能查看。请服务商在服务器上跑开户脚本" };
+      return { level: "error", text: "还没有开户信息，现在只能查看。请联系服务商补上开户信息" };
     default:
       return null;
   }

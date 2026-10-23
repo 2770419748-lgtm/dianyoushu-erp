@@ -13,6 +13,7 @@ const yuan = (fen: number) => (fen / 100).toFixed(2);
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return new Response("请先登录", { status: 401 });
+  if (user.mustChangePassword) return new Response("先改初始密码", { status: 403 }); // 复查第 67 条
   if (user.role === "STAFF") return new Response("没有权限", { status: 403 });
 
   const params = request.nextUrl.searchParams;

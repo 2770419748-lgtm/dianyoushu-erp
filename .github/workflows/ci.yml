@@ -64,7 +64,14 @@ jobs:
       - name: 对账自检（测试跑完账还对得上）
         run: pnpm db:check
 
-      # 浏览器端到端测试（tests/e2e，2026-10-23 起进 CI）：用 Playwright 自带的 Chromium，开发服务器由 Playwright 自己起
+      # 浏览器端到端测试（tests/e2e，2026-10-23 起进 CI）：用 Playwright 自带的 Chromium，开发服务器由 Playwright 自己起。
+      # 浏览器缓存起来（按依赖锁文件换版本），下载慢的时候装一次要 10 分钟；系统依赖照样每次装
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: 装浏览器（端到端测试用）
         run: pnpm exec playwright install --with-deps chromium
 

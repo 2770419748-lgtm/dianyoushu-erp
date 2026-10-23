@@ -12,7 +12,7 @@ import { seedBaseline } from "../prisma/seed-data/products";
 // 开户（口径第 21 节）：一家新客户的空库上跑一次。
 // 用法（服务器上，这家客户的 tools 容器里）：pnpm tenant:init --name "某某通讯" [--admin admin] [--trial-days 30]
 // 做的事：写公司名；建基础数据（品类、默认碎屏险延保、回收用的“其他机型”）；建总部管理员（随机初始密码只打印这一次，
-// 第一次登录先改密码、再绑二次验证）；开试用。不灌演示数据。只能在真用模式（DEMO_MODE=0）、空库（没有门店和员工）上跑。
+// 第一次登录先扫码绑二次验证、再改密码）；开试用。不灌演示数据。只能在真用模式（DEMO_MODE=0）、空库（没有门店和员工）上跑。
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -53,7 +53,7 @@ async function main() {
   console.log(`  基础数据：品类 4 个、服务商品和回收用的“其他机型”共 ${base.skus} 个`);
   console.log(`  试用 ${trialDays} 天，到期日 ${license.expiresOn}（到期后 15 天照常用，之后只读）`);
   console.log(`  总部管理员：账号 ${admin}，初始密码 ${password}`);
-  console.log("  这个初始密码只显示这一次：交给客户，第一次登录先改密码、再绑手机验证器，然后进“系统设置”做初始化。");
+  console.log("  这个初始密码只显示这一次：交给客户，第一次登录先用手机验证器扫码绑定、再改密码，然后进“系统设置”做初始化。");
 }
 
 main()

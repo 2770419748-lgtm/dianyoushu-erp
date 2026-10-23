@@ -10,7 +10,8 @@ import { AppShell, type ShellNotice } from "./app-shell";
 import { ForcePassword } from "./force-password";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
-  const user = await requireUser();
+  // 还没改初始密码的人也要能看到外框和“先改密码”（页面本身的 requireUser 会把他们跳到 /first-password，不查数据）
+  const user = await requireUser({ allowFirstPassword: true });
 
   const scopeLabel =
     user.role === "HQ"

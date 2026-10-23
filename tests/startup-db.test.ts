@@ -20,6 +20,15 @@ describe("启动时连库失败", () => {
     expect(describeDbStartupError(prismaError("P1003", "Database `x` does not exist")).fatal).toBe(true);
   });
 
+  it("没有表权限（PrismaPg 报 P2039，带 42501）：直接退出；别的 P2039 照旧等", () => {
+    const denied = describeDbStartupError(prismaError("P2039", "Database error. Code: `42501`. Message: `对表 system_settings 权限不够`"));
+    expect(denied.fatal).toBe(true);
+    expect(denied.reason).toContain("没有权限");
+    const viaMeta = Object.assign(prismaError("P2039", "Database error."), { meta: { driverAdapterError: { cause: { originalCode: "42501" } } } });
+    expect(describeDbStartupError(viaMeta).fatal).toBe(true);
+    expect(describeDbStartupError(prismaError("P2039", "Database error. Code: `57P01`.")).fatal).toBe(false);
+  });
+
   it("库还没起来：接着等，原因不是空的", () => {
     const refused = describeDbStartupError(Object.assign(new Error("\nInvalid invocation\n"), { code: "ECONNREFUSED" }));
     expect(refused.fatal).toBe(false);

@@ -5,6 +5,7 @@ import { removeFutureShiftsFor } from "@/server/hr/schedule-service";
 import { todayBizDate } from "@/server/stock/doc-no";
 import { prisma } from "@/lib/prisma";
 import type { Role } from "@/generated/prisma/enums";
+import type { Prisma } from "@/generated/prisma/client";
 import { DEMO_MODE, DEMO_PROTECTED_MESSAGE, isProtectedDemoAccount } from "@/server/auth/demo-accounts";
 import { hashPassword } from "@/server/auth/password";
 import { getLicense } from "@/server/settings/settings-service";
@@ -163,24 +164,40 @@ function parseStoreInput(input: StoreInput) {
   };
 }
 
-/** 门店数上限（口径第 21 节）：开户信息里的上限到了，就不能再新建、启用门店；试用不限，演示模式不管 */
-export async function assertStoreQuota(db: Db = prisma, demo = DEMO_MODE): Promise<void> {
+const STORE_QUOTA_LOCK_NS = -81; // 咨询锁命名空间（列表见 attendance-service.ts）：数门店和建门店、启用门店排队
+
+/**
+ * 门店数上限要先拿这把锁再数（同一个事务里接着建或启用）：以前数和建分开，同时发 30 个新建能超出上限
+ * （2026-10-23 复查第 68 条）。数据导入的门店也走这把锁。
+ */
+export async function lockStoreQuota(tx: Prisma.TransactionClient): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${STORE_QUOTA_LOCK_NS}::int, 0)`;
+}
+
+/**
+ * 门店数上限（口径第 21 节）：开户信息里的上限到了，就不能再新建、启用门店；试用不限，演示模式不管。
+ * adding：这次要加几家（数据导入一次加好几家）。并发时调用方要先 lockStoreQuota。
+ */
+export async function assertStoreQuota(db: Db = prisma, demo = DEMO_MODE, adding = 1): Promise<void> {
   if (demo) return;
   const limit = (await getLicense(db))?.storeLimit ?? null;
   if (limit === null) return;
   const active = await db.store.count({ where: { isActive: true } });
-  if (active >= limit) throw new OrgError(`在用的门店已经 ${active} 家，到了合同里的上限（${limit} 家）；要加门店找服务商调整套餐`);
+  if (active + adding > limit) throw new OrgError(adding === 1 ? `在用的门店已经 ${active} 家，到了合同里的上限（${limit} 家）；要加门店找服务商调整套餐` : `在用的门店 ${active} 家，再加 ${adding} 家超过合同上限（${limit} 家）；要加门店找服务商调整套餐`);
 }
 
 export async function createStore(actor: Actor, input: StoreInput) {
   assertCanManage(actor);
-  await assertStoreQuota();
   const data = parseStoreInput(input);
   const webhook = parseWebhook(input.wecomWebhookUrl);
   try {
-    const store = await prisma.store.create({ data: { ...data, wecomWebhookUrl: webhook ?? null } });
-    await writeAudit({ userId: actor.id, action: "store.create", entity: "store", entityId: store.id, detail: { ...data, webhook: webhook ? "已填" : "没填" } });
-    return store;
+    return await prisma.$transaction(async (tx) => {
+      await lockStoreQuota(tx);
+      await assertStoreQuota(tx);
+      const store = await tx.store.create({ data: { ...data, wecomWebhookUrl: webhook ?? null } });
+      await writeAudit({ userId: actor.id, action: "store.create", entity: "store", entityId: store.id, detail: { ...data, webhook: webhook ? "已填" : "没填" } }, tx);
+      return store;
+    });
   } catch (error) {
     if (isUniqueViolation(error)) throw new OrgError("门店编码已经存在");
     throw error;
@@ -206,12 +223,16 @@ export async function setStoreActive(actor: Actor, id: number, isActive: boolean
   if (!isActive) {
     const activeUsers = await prisma.user.count({ where: { storeId: id, isActive: true } });
     if (activeUsers > 0) throw new OrgError(`这家店还有 ${activeUsers} 个在职员工，先把员工停用或调到别的店`);
-  } else if (!(await prisma.store.findUnique({ where: { id }, select: { isActive: true } }))?.isActive) {
-    await assertStoreQuota();
   }
-  const store = await prisma.store.update({ where: { id }, data: { isActive } });
-  await writeAudit({ userId: actor.id, action: isActive ? "store.activate" : "store.deactivate", entity: "store", entityId: id });
-  return store;
+  return prisma.$transaction(async (tx) => {
+    if (isActive) {
+      await lockStoreQuota(tx);
+      if (!(await tx.store.findUnique({ where: { id }, select: { isActive: true } }))?.isActive) await assertStoreQuota(tx);
+    }
+    const store = await tx.store.update({ where: { id }, data: { isActive } });
+    await writeAudit({ userId: actor.id, action: isActive ? "store.activate" : "store.deactivate", entity: "store", entityId: id }, tx);
+    return store;
+  });
 }
 
 // ---------- 员工 ----------

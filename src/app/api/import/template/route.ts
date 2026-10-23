@@ -8,6 +8,7 @@ import { templateXlsx } from "@/server/import/templates";
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return new Response("请先登录", { status: 401 });
+  if (user.mustChangePassword) return new Response("先改初始密码", { status: 403 });
   if (user.role !== "HQ") return new Response("没有权限", { status: 403 });
   const kind = request.nextUrl.searchParams.get("kind");
   if (!isImportKind(kind)) return new Response("参数不对", { status: 400 });
