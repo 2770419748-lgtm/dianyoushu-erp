@@ -33,7 +33,8 @@ export default async function SalesDetailPage({ params }: PageProps<"/sales/[id]
   if (loaded.kind === "forbidden") return <NoAccess title="没有权限看这张销售单" />;
   const wecomCard = await getOrderWecomCard(user, orderId).catch(() => null); // 企业微信卡片出错不影响看单
   return (
-    <div style={{ display: "grid", gap: 24 }}>
+    // minmax(0, 1fr)：网格的列默认按内容最宽撑开，手机上会把整页撑出屏幕（复查第 80 条）
+    <div style={{ display: "grid", gap: 24, gridTemplateColumns: "minmax(0, 1fr)" }}>
       <SalesDetailView order={loaded.order} canVoid={canVoidSales(user.role)} canSell={canSell(user.role)} showCost={user.role !== "STAFF"} />
       {wecomCard ? <WecomOrderCard salesOrderId={orderId} card={wecomCard} /> : null}
     </div>

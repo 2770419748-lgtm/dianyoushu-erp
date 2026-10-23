@@ -79,66 +79,65 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
             <Tag color={SALES_STATUS_COLORS[order.status]}>{SALES_STATUS_LABELS[order.status]}</Tag>
           </Space>
         }
-        extra={
-          <Space>
-            <Link href="/sales">
-              <Button size="small">返回列表</Button>
-            </Link>
-            {/* 小票、保修卡（口径第 23 节）：新窗口打开打印页，自动弹出打印对话框 */}
-            <Button size="small" onClick={() => openPrint(`/print/sales/${order.id}/receipt`, "receipt")}>
-              打印小票
-            </Button>
-            {order.status === "COMPLETED" && order.items.some((i) => i.deviceId !== null && i.returnedQty < i.qty) ? (
-              <Button size="small" onClick={() => openPrint(`/print/sales/${order.id}/warranty`, "warranty")}>
-                打印保修卡
-              </Button>
-            ) : null}
-            {canSell ? (
-              <Link href="/sales/new">
-                <Button size="small" type="primary">
-                  再开一单
-                </Button>
-              </Link>
-            ) : null}
-            {canSell && order.status === "COMPLETED" && !order.invoices.some((i) => INVOICE_ACTIVE_STATUSES.includes(i.status)) ? (
-              <Link href={`/invoices/new?orderId=${order.id}`}>
-                <Button size="small">申请开票</Button>
-              </Link>
-            ) : null}
-            {canReturn ? (
-              order.todayClosed ? (
-                <Button size="small" disabled title="这家店今天已经日结确认，要退货请总部先撤销日结">
-                  退货（今天已日结）
-                </Button>
-              ) : (
-                <Link href={`/sales/${order.id}/return`}>
-                  <Button size="small">退货</Button>
-                </Link>
-              )
-            ) : null}
-            {canVoid && order.status === "COMPLETED" && !order.dailyCloseId && order.returnOrders.length === 0 ? (
-              <Popconfirm
-                title="作废这张单？机器回在库、配件加回数量，收款作废。"
-                description={<Input placeholder="作废原因" value={reason} onChange={(e) => setReason(e.target.value)} />}
-                onConfirm={() =>
-                  startTransition(async () => {
-                    const result = await voidSalesOrderAction(order.id, reason);
-                    if (result.ok) message.success("已作废，库存已恢复");
-                    else if (result.approval) {
-                      message.info(result.error, 6);
-                      router.push(`/approvals/${result.approval.id}`);
-                    } else message.error(result.error);
-                  })
-                }
-              >
-                <Button size="small" danger loading={pending}>
-                  作废
-                </Button>
-              </Popconfirm>
-            ) : null}
-          </Space>
-        }
       >
+        {/* 操作按钮放在卡片里、能换行（以前放在标题栏右边，手机上一排挤不下、超出屏幕，2026-10-23 复查第 80 条） */}
+        <Space wrap size={[8, 8]} style={{ marginBottom: 16 }}>
+          <Link href="/sales">
+            <Button size="small">返回列表</Button>
+          </Link>
+          {/* 小票、保修卡（口径第 23 节）：新窗口打开打印页，自动弹出打印对话框 */}
+          <Button size="small" onClick={() => openPrint(`/print/sales/${order.id}/receipt`, "receipt")}>
+            打印小票
+          </Button>
+          {order.status === "COMPLETED" && order.items.some((i) => i.deviceId !== null && i.returnedQty < i.qty) ? (
+            <Button size="small" onClick={() => openPrint(`/print/sales/${order.id}/warranty`, "warranty")}>
+              打印保修卡
+            </Button>
+          ) : null}
+          {canSell ? (
+            <Link href="/sales/new">
+              <Button size="small" type="primary">
+                再开一单
+              </Button>
+            </Link>
+          ) : null}
+          {canSell && order.status === "COMPLETED" && !order.invoices.some((i) => INVOICE_ACTIVE_STATUSES.includes(i.status)) ? (
+            <Link href={`/invoices/new?orderId=${order.id}`}>
+              <Button size="small">申请开票</Button>
+            </Link>
+          ) : null}
+          {canReturn ? (
+            order.todayClosed ? (
+              <Button size="small" disabled title="这家店今天已经日结确认，要退货请总部先撤销日结">
+                退货（今天已日结）
+              </Button>
+            ) : (
+              <Link href={`/sales/${order.id}/return`}>
+                <Button size="small">退货</Button>
+              </Link>
+            )
+          ) : null}
+          {canVoid && order.status === "COMPLETED" && !order.dailyCloseId && order.returnOrders.length === 0 ? (
+            <Popconfirm
+              title="作废这张单？机器回在库、配件加回数量，收款作废。"
+              description={<Input placeholder="作废原因" value={reason} onChange={(e) => setReason(e.target.value)} />}
+              onConfirm={() =>
+                startTransition(async () => {
+                  const result = await voidSalesOrderAction(order.id, reason);
+                  if (result.ok) message.success("已作废，库存已恢复");
+                  else if (result.approval) {
+                    message.info(result.error, 6);
+                    router.push(`/approvals/${result.approval.id}`);
+                  } else message.error(result.error);
+                })
+              }
+            >
+              <Button size="small" danger loading={pending}>
+                作废
+              </Button>
+            </Popconfirm>
+          ) : null}
+        </Space>
         <Descriptions
           column={{ xs: 1, md: 3 }}
           items={[

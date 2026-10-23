@@ -34,3 +34,18 @@ test("销售单详情页打小票、保修卡", async ({ page }) => {
   await expect(warranty.getByText("保修卡").first()).toBeVisible();
   await expect(warranty.getByText(order!.order_no).first()).toBeVisible();
 });
+
+test("手机宽度：销售单详情页不超出屏幕，打印按钮都点得到（复查第 80 条）", async ({ page }) => {
+  const [order] = await query<{ id: number }>(
+    "SELECT o.id FROM sales_orders o WHERE o.status = 'COMPLETED' AND o.customer_id IS NOT NULL AND EXISTS (SELECT 1 FROM sales_order_items i WHERE i.order_id = o.id AND i.device_id IS NOT NULL AND i.returned_qty = 0) ORDER BY o.id DESC LIMIT 1",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page, "hq");
+  await page.goto(`/sales/${order!.id}`);
+  await expect(page.getByRole("button", { name: "打印保修卡" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  for (const name of ["打印小票", "打印保修卡"]) {
+    const box = (await page.getByRole("button", { name }).boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+  }
+});
