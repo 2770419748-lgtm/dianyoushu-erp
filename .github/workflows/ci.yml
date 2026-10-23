@@ -126,19 +126,27 @@ jobs:
           PASS=$(openssl rand -base64 24)
           echo "::add-mask::$PASS"
           mkdir -p ci-backups
-          docker run --rm --network host -e PGHOST=localhost -e PGUSER=postgres -e PGPASSWORD=postgres -e PGDATABASE=ci \
-            -e BACKUP_PASSPHRASE="$PASS" -v "$PWD/ci-backups:/backups" -v "$PWD/docker/backup.sh:/backup.sh:ro" \
-            dianyoushu-erp-backup:ci sh /backup.sh now
-          FILE=$(ls ci-backups/*.dump.enc | head -1)
+          RUN_BACKUP="docker run --rm --network host -e PGHOST=localhost -e PGUSER=postgres -e PGPASSWORD=postgres -e PGDATABASE=ci -v $PWD/docker/backup.sh:/backup.sh:ro"
+          $RUN_BACKUP -e BACKUP_PASSPHRASE="$PASS" -v "$PWD/ci-backups:/backups" dianyoushu-erp-backup:ci bash /backup.sh now
           # 没口令拒绝备份
-          if docker run --rm --network host -e PGHOST=localhost -e PGUSER=postgres -e PGPASSWORD=postgres -e PGDATABASE=ci \
-            -v "$PWD/docker/backup.sh:/backup.sh:ro" dianyoushu-erp-backup:ci sh /backup.sh now 2>/dev/null; then echo "没口令竟然备份了"; exit 1; fi
-          # 不解密 pg_restore 认不出来；错口令解不开；对的口令解开能列出 customers 表
-          if pg_restore --list "$FILE" > /dev/null 2>&1; then echo "备份没加密"; exit 1; fi
-          if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass pass:wrong-passphrase -in "$FILE" -out /tmp/wrong.dump 2>/dev/null && pg_restore --list /tmp/wrong.dump > /dev/null 2>&1; then echo "错口令竟然解开了"; exit 1; fi
-          BACKUP_PASSPHRASE="$PASS" openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_PASSPHRASE -in "$FILE" -out /tmp/ok.dump
-          docker run --rm -v /tmp/ok.dump:/ok.dump:ro dianyoushu-erp-backup:ci pg_restore --list /ok.dump | grep -q "TABLE public customers"
-          echo "加密备份：备得出、错口令解不开、对的口令能恢复"
+          if $RUN_BACKUP dianyoushu-erp-backup:ci bash /backup.sh now 2>/dev/null; then echo "没口令竟然备份了"; exit 1; fi
+          # 盘满（只给 64KB 的 /backups）：要报失败，不能留下文件，也不能记“完成”
+          if $RUN_BACKUP -e BACKUP_PASSPHRASE="$PASS" --tmpfs /backups:size=64k dianyoushu-erp-backup:ci bash -c 'bash /backup.sh now; s=$?; ls -A /backups; exit $s' > /tmp/full.log 2>&1; then echo "盘满竟然备份成功了"; cat /tmp/full.log; exit 1; fi
+          if grep -q "完成" /tmp/full.log || grep -q "dump" /tmp/full.log; then echo "盘满留下了文件或记了完成"; cat /tmp/full.log; exit 1; fi
+          # 备份文件只有属主（容器里的 root）能读，核对也在同一个镜像里做：
+          # 只有属主能读；不解密 pg_restore 认不出来；错口令解不开；对的口令解开整份读得完（截断的会报错）、有 customers 表
+          docker run --rm -e PASS="$PASS" -v "$PWD/ci-backups:/backups:ro" dianyoushu-erp-backup:ci bash -c '
+            set -eo pipefail
+            f=$(ls /backups/*.dump.enc | head -1)
+            test "$(stat -c %a "$f")" = "600"
+            if pg_restore -f /dev/null "$f" 2>/dev/null; then echo "备份没加密"; exit 1; fi
+            if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass pass:wrong-passphrase -in "$f" 2>/dev/null | pg_restore -f /dev/null 2>/dev/null; then echo "错口令竟然解开了"; exit 1; fi
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:PASS -in "$f" -out /tmp/ok.dump
+            pg_restore -f /dev/null /tmp/ok.dump
+            pg_restore --list /tmp/ok.dump > /tmp/ok.list
+            grep -q "TABLE public customers" /tmp/ok.list
+          '
+          echo "加密备份：备得出、只有属主能读、没口令拒绝、盘满报失败不留文件、错口令解不开、对的口令能完整恢复"
 
       - name: 容器日志（上一步失败时看）
         if: failure()

@@ -10,7 +10,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   const user = await getCurrentUser();
   if (user) redirect("/");
   const reason = (await searchParams).reason;
-  const notice = reason === "expired" || reason === "inactive" ? "登录已失效：密码可能被修改过，或账号已停用。请重新登录，登不上就联系店长或总部。" : undefined;
+  const notice = reason === "expired" || reason === "inactive" ? "登录已失效：密码可能被修改过、账号已停用，或者要先绑定二次验证。请重新登录，登不上就联系店长或总部。" : undefined;
 
   return (
     <main

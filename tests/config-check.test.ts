@@ -28,6 +28,13 @@ describe("checkProductionEnv", () => {
     expect(checkProductionEnv({ SESSION_SECRET: "换成你自己的随机字符串", DATABASE_URL: goodDb, DEMO_MODE: "1" })[0]).toContain("占位值");
   });
 
+  it("数据库连接串解析不了（密码里带 / 这类字符）给明白提示", () => {
+    const base = { SESSION_SECRET: goodSecret, DEMO_MODE: "1", ...keys };
+    expect(checkProductionEnv({ ...base, DATABASE_URL: "postgresql://erp_app:ab/cd+ef=@db:5432/dianyoushu_erp" })[0]).toContain("openssl rand -hex 32");
+    expect(checkProductionEnv({ ...base, DATABASE_URL: "not a url" })[0]).toContain("解析不了");
+    expect(checkProductionEnv({ ...base, DATABASE_URL: "postgresql://erp_app:0123abcd@db:5432/dianyoushu_erp?schema=public" })).toEqual([]);
+  });
+
   it("数据库连接没设、密码还是示例值都拦", () => {
     expect(checkProductionEnv({ SESSION_SECRET: goodSecret, DEMO_MODE: "1", ...keys })).toEqual(["没有设置 DATABASE_URL"]);
     expect(checkProductionEnv({ SESSION_SECRET: goodSecret, DATABASE_URL: "postgresql://postgres:你的密码@localhost:5432/x", DEMO_MODE: "1", ...keys })[0]).toContain("示例值");

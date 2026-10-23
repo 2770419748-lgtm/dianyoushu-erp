@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { needsMfaBinding } from "./mfa-policy";
 import type { SessionPayload } from "./token";
 
 // 由登录令牌找到当前用户：账号要存在、在职，而且令牌里的会话版本号要和库里一致。
@@ -17,12 +18,17 @@ export async function findSessionUser(session: SessionPayload) {
       regionId: true,
       isActive: true,
       sessionVersion: true,
+      mfaEnabledAt: true,
       store: { select: { id: true, name: true, regionId: true } },
       region: { select: { id: true, name: true } },
     },
   });
   if (!user || !user.isActive || user.sessionVersion !== session.sv) return null;
-  const { sessionVersion: _version, ...rest } = user;
+  // 真用时店长及以上必须先绑二次验证（口径第 20 节）：店员改成店长、演示模式切到真用以后，手里那张 7 天的老登录票
+  // 当作没登录，重新登录时补绑（2026-10-23 复查后补）
+  if (needsMfaBinding(user.role, user.mfaEnabledAt)) return null;
+  const { sessionVersion: _version, mfaEnabledAt: _mfa, ...rest } = user;
   void _version;
+  void _mfa;
   return rest;
 }

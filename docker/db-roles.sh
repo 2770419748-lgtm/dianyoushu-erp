@@ -7,7 +7,7 @@
 #
 # 两种跑法：
 # - 数据库第一次初始化时自动跑（compose 把它挂到 /docker-entrypoint-initdb.d/）；
-# - 已经在跑的库补一次：docker compose exec -e APP_DB_PASSWORD -e READONLY_DB_PASSWORD db sh /db-roles.sh
+# - 已经在跑的库补一次：.env 里加好两个密码（openssl rand -hex 32），docker compose up -d db 让 db 容器带上它们，再 docker compose exec db sh /db-roles.sh
 #   （CI 里用 PGHOST、PGUSER、PGPASSWORD 连临时库，DB_OWNER 是表的所有者）。
 set -eu
 

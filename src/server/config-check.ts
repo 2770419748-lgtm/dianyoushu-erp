@@ -15,6 +15,17 @@ const PLACEHOLDER_SECRETS = ["换成你自己的随机字符串", "ci-only-place
 const CI_DATA_KEYS = ["Y2ktb25seS1kYXRhLWVuY3J5cHRpb24ta2V5LTMyYnk=", "Y2ktb25seS1kYXRhLWluZGV4LWtleS0zMmJ5dGVzISE="];
 const PUBLIC_DATA_KEYS = [...Object.values(DEV_DATA_KEYS), ...CI_DATA_KEYS];
 
+/** 连接串能不能解析：主机、端口、库名都要有（密码里带 / 会把端口位置弄乱，Prisma 报 P1013 invalid port） */
+function parsableDatabaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (!/^postgres(ql)?:$/.test(url.protocol) || !url.hostname || url.pathname.length <= 1) return false;
+    return url.port === "" || /^\d+$/.test(url.port);
+  } catch {
+    return false;
+  }
+}
+
 export function checkProductionEnv(env: Record<string, string | undefined>): string[] {
   const problems: string[] = [];
   const secret = env.SESSION_SECRET ?? "";
@@ -33,6 +44,7 @@ export function checkProductionEnv(env: Record<string, string | undefined>): str
   }
   if (env.DATA_ENCRYPTION_KEY && env.DATA_ENCRYPTION_KEY === env.DATA_INDEX_KEY) problems.push("DATA_ENCRYPTION_KEY 和 DATA_INDEX_KEY 不能用同一个");
   if (!env.DATABASE_URL) problems.push("没有设置 DATABASE_URL");
+  else if (!parsableDatabaseUrl(env.DATABASE_URL)) problems.push("DATABASE_URL 解析不了：多半是数据库密码里有 / @ : # 这类字符。数据库密码用 openssl rand -hex 32 生成（只有数字和字母），改完 .env 还要在库里改密码（见 docs/部署.md）");
   else if (/:(你的密码|password|postgres)@/.test(env.DATABASE_URL)) problems.push("DATABASE_URL 里的数据库密码还是示例值或默认值");
   // 演示模式必须写明：演示站写 1，真给门店用写 0（docs/部署.md 上线前检查清单第 1 条）。不写就拒绝，免得真店忘了关演示模式
   if (env.DEMO_MODE === undefined || env.DEMO_MODE === "") problems.push("没有写明 DEMO_MODE：演示站写 1，真给门店用写 0");

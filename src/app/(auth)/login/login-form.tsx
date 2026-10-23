@@ -15,7 +15,7 @@ function MfaStep({ step, qr, secret }: { step: "verify" | "setup"; qr?: string; 
         {step === "setup" ? (
           <>
             <Paragraph>
-              这个账号要开二次验证：手机上装一个验证器 App（Google Authenticator、Microsoft Authenticator、腾讯身份验证器都行），扫下面的二维码，再把 App 里显示的 6 位数填进来。
+              这个账号要开二次验证：先在手机上装好验证器 App（安卓可以用腾讯身份验证器，苹果在 App Store 搜 Microsoft Authenticator 或 Google Authenticator），扫下面的二维码，再把 App 里显示的 6 位数填进来。这一步 15 分钟内做完；中途在别处又输了一次密码，这个二维码就作废了。
             </Paragraph>
             {/* 二维码是服务端生成的 data: 图片，不用 next/image */}
             {/* eslint-disable-next-line @next/next/no-img-element */}

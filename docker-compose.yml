@@ -81,7 +81,7 @@ services:
     depends_on:
       - app
 
-  # 每天凌晨 3 点备份数据库到 ./backups，加密（口径第 20 节），留 14 天；手动备份：docker compose exec backup sh /backup.sh now
+  # 每天凌晨 3 点备份数据库到 ./backups，加密（口径第 20 节），留 14 天；手动备份：docker compose exec backup bash /backup.sh now
   backup:
     build:
       context: ./docker
@@ -93,7 +93,7 @@ services:
       TZ: Asia/Shanghai
       # 备份加密口令，另外离线存一份，丢了备份打不开
       BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:?在 .env 里设置 BACKUP_PASSPHRASE}
-    entrypoint: ["sh", "/backup.sh"]
+    entrypoint: ["bash", "/backup.sh"]
     volumes:
       - ./docker/backup.sh:/backup.sh:ro
       - ./backups:/backups

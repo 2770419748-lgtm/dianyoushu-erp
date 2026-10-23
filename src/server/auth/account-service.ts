@@ -22,12 +22,12 @@ export async function changeOwnPassword(user: CurrentUser, oldPassword: unknown,
   if (newText === oldText) throw new AccountError("新密码不能和旧密码一样");
 
   const key = `change-password:${user.id}`;
-  const check = limiter.check(key);
+  // 先占名额再核对旧密码（同时发一堆请求也只有限额内的几个能核对，2026-10-23 复查后补）
+  const check = limiter.consume(key);
   if (!check.allowed) throw new AccountError(`旧密码错太多次了，${Math.ceil(check.retryAfterMs / 60000)} 分钟后再试`);
 
   const row = await prisma.user.findUnique({ where: { id: user.id }, select: { passwordHash: true } });
   if (!row || !(await verifyPassword(oldText, row.passwordHash))) {
-    limiter.recordFailure(key);
     throw new AccountError("旧密码不对");
   }
   limiter.reset(key);

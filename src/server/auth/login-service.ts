@@ -31,16 +31,18 @@ export async function authenticate(usernameInput: string, password: string, ip: 
   const byIp = TRUST_PROXY && ip !== "unknown";
   const key = byIp ? `login:${username}@${ip}` : `login:${username}`;
   const ipKey = `login-ip:${ip}`;
+  // 先占名额再查库核对（consume 没有 await）：同时发一堆请求也只有限额内的几个能真去核对密码，其余直接拒（2026-10-23 复查后补）
   if (byIp) {
-    const ipGate = ipLimiter.check(ipKey);
+    const ipGate = ipLimiter.consume(ipKey);
     if (!ipGate.allowed) {
       const minutes = Math.max(1, Math.ceil(ipGate.retryAfterMs / 60000));
       return { ok: false, error: `这台设备错误次数太多，请 ${minutes} 分钟后再试` };
     }
   }
   if (limited) {
-    const gate = loginLimiter.check(key);
+    const gate = loginLimiter.consume(key);
     if (!gate.allowed) {
+      if (byIp) ipLimiter.refund(ipKey); // 这次没去核对，不算这台设备的错
       const minutes = Math.max(1, Math.ceil(gate.retryAfterMs / 60000));
       return { ok: false, error: `这个账号错误次数太多，请 ${minutes} 分钟后再试` };
     }
@@ -49,13 +51,13 @@ export async function authenticate(usernameInput: string, password: string, ip: 
   const user = await prisma.user.findUnique({ where: { username } });
   const ok = user !== null && user.isActive && (await verifyPassword(password, user.passwordHash));
   if (!ok) {
-    if (limited) loginLimiter.recordFailure(key);
-    if (byIp) ipLimiter.recordFailure(ipKey);
+    // 失败已经在 consume 时记过了
     await writeAudit({ userId: user?.id ?? null, action: "login_failed", detail: { username }, ip });
     return { ok: false, error: "账号或密码不对" };
   }
 
   if (limited) loginLimiter.reset(key);
+  if (byIp) ipLimiter.refund(ipKey); // 这台设备的计数只算错的
   // 成功的“登录”日志由调用方在真正发登录票时写：开了二次验证的，密码对了还不算登录（口径第 20 节）
   return { ok: true, userId: user.id, sessionVersion: user.sessionVersion };
 }

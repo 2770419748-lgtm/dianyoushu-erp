@@ -4,6 +4,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { mfaRequiredFor } from "@/server/auth/mfa-service";
+import { needsMfaBinding } from "@/server/auth/mfa-policy";
 import { resetUserMfa } from "@/server/org/org-service";
 import { encryptPii } from "@/server/pii/crypto";
 
@@ -47,6 +48,14 @@ describe("二次验证", () => {
     expect(mfaRequiredFor("STORE_MANAGER")).toBe(true);
     expect(mfaRequiredFor("REGIONAL_MANAGER")).toBe(true);
     expect(mfaRequiredFor("HQ")).toBe(true);
+  });
+
+  it("真用时店长及以上没绑的，手里的老登录票不算数（店员改成店长、演示切到真用以后）", () => {
+    expect(needsMfaBinding("STORE_MANAGER", null, true)).toBe(true);
+    expect(needsMfaBinding("HQ", null, true)).toBe(true);
+    expect(needsMfaBinding("STORE_MANAGER", new Date(), true)).toBe(false);
+    expect(needsMfaBinding("STAFF", null, true)).toBe(false);
+    expect(needsMfaBinding("HQ", null, false)).toBe(false); // 演示模式不强制
   });
 
   it("总部重置别人的：要写原因；清掉绑定、所有设备下线、记日志；自己的、没绑定的不行", async (ctx) => {
