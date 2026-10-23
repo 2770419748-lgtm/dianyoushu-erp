@@ -164,11 +164,12 @@ echo "没用上新值时回得去；用上了拒绝回滚，旧版本对账也�
 
 step "认枚举加值的写法：小写、带 schema 的认得出；拆成几行认不全的，当成挡着（复查第 95 条）"
 ctx=$(mktemp -d)
-mkdir "$ctx/a" "$ctx/b"
+mkdir "$ctx/a" "$ctx/b" "$ctx/c"
 printf '%s\n' "alter type public.role  add value 'DRILL_LOWER';" > "$ctx/a/migration.sql"
 printf '%s\n' 'ALTER TYPE "role"' "  ADD VALUE 'DRILL_SPLIT';" > "$ctx/b/migration.sql"
+printf '%s\n' "ALTER TYPE ROLE ADD VALUE 'DRILL_UPPER';" > "$ctx/c/migration.sql"
 printf '%s\n' "FROM dianyoushu-erp-tools:v1" "COPY a prisma/migrations/20991231000002_hand_lower" \
-  "COPY b prisma/migrations/20991231000003_hand_split" > "$ctx/Dockerfile"
+  "COPY b prisma/migrations/20991231000003_hand_split" "COPY c prisma/migrations/20991231000004_hand_upper" > "$ctx/Dockerfile"
 chmod -R a+rX "$ctx"
 docker build -q -t dianyoushu-erp-tools:vhand "$ctx" > /dev/null || fail "打手写迁移的工具镜像失败"
 rm -rf "$ctx"
@@ -176,8 +177,10 @@ note=$(enum_add_blocker t1 vhand 20991231000002_hand_lower)
 [ -z "$note" ] || fail "小写、带 schema 的写法新值没用上，却挡着了：$note"
 note=$(enum_add_blocker t1 vhand 20991231000003_hand_split)
 [[ "$note" == *认不全* ]] || fail "拆成几行的写法认不全，却没当成挡着：${note:-（放行了）}"
+note=$(enum_add_blocker t1 vhand 20991231000004_hand_upper)
+[[ "$note" == *找不到枚举类型\ ROLE* ]] || fail "没带引号的大写类型名认不准，要当成挡着并如实说明：${note:-（放行了）}"
 docker rmi dianyoushu-erp-tools:vhand > /dev/null
-echo "小写、带 schema 的认出了加的值；拆成几行的认不全，当成挡着"
+echo "小写、带 schema 的认出了加的值；拆成几行的认不全、大写类型名认不准，都当成挡着，说明如实"
 
 step "t2 升级到坏版本：要自动回滚到 v1"
 if "$D/deploy.sh" t2 bad --force; then fail "坏版本竟然升级成功了"; fi
@@ -317,6 +320,19 @@ grep -E "t2 (最新一份备份|一份备份都没有|的备份容器|的定时�
   echo "$out"
   fail "起回来以后巡检还在报备份、定时任务（停在下线那天）"
 }
+# 起回来做到一半（有起回来标记、还没补备份和改时间）时碰上每分钟的巡检：先不查备份和定时任务（复查第 96 条）
+d=$(tenant_dir t2)
+touch "$d/.deploy/restoring"
+touch -d '40 days ago' "$d"/backups/*.dump.enc
+echo $(($(date +%s) - 40 * 86400)) > "$d/.ops/last-daily"
+rm -f "$ERP_ROOT"/.ops/alert-*t2*
+out=$("$D/health-check.sh" 2>&1)
+grep -E "t2 (最新一份备份|一份备份都没有|的备份容器|的定时任务)" <<< "$out" && {
+  echo "$out"
+  fail "起回来做到一半，巡检就报了备份、定时任务"
+}
+rm -f "$d/.deploy/restoring"
+date +%s > "$d/.ops/last-daily"
 echo "下线留库；同一个代号再开户被拒绝（不会接上老库、也不会被引去删库）；起回来马上备份、对账，数据原样，巡检不误报"
 
 step "下线 t2 并删库：代号输错什么都不动；输对了，备份做成以后才删"

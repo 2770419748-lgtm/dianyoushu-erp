@@ -253,9 +253,9 @@ enum_values_added() {
 }
 
 # 这家（$1）回到旧版本前，版本 $2 镜像里“枚举加值”这一类的迁移 $3 挡不挡：挡着就打印说明（括号括起来），不挡什么都不打印。
-# 读不到迁移、认不全加了哪些值、库里已经用到了新值，都算挡着
+# 读不到迁移、认不全加了哪些值、库里找不到那个枚举类型、库里已经用到了新值，都算挡着（说明里如实写是哪一种）
 enum_add_blocker() {
-  local t=$1 tag=$2 m=$3 sql pairs total n type value used=""
+  local t=$1 tag=$2 m=$3 sql pairs total n type value used="" unknown=""
   sql=$(migration_sql "$tag" "$m") || {
     echo "（读不到这个迁移，当成挡着）"
     return 0
@@ -269,17 +269,24 @@ enum_add_blocker() {
   fi
   while read -r type value; do
     [ -n "$type" ] || continue
-    if enum_value_used "$t" "$type" "$value"; then used="$used $type.$value"; fi
+    # 库里没有这个类型：名字没认准（比如没带引号的大写，库里存的是小写），查不了用没用到，宁可挡着
+    if [ -z "$(tenant_sql "$t" "SELECT 1 FROM pg_type WHERE typname = '$type' AND typtype = 'e'")" ]; then
+      unknown="$unknown $type"
+    elif enum_value_used "$t" "$type" "$value"; then
+      used="$used $type.$value"
+    fi
   done <<< "$pairs"
-  [ -z "$used" ] || echo "（库里已经用到了：${used# }）"
+  if [ -n "$unknown" ]; then
+    echo "（库里找不到枚举类型 ${unknown# }，认不准加的是哪个类型，当成挡着）"
+  elif [ -n "$used" ]; then
+    echo "（库里已经用到了：${used# }）"
+  fi
   return 0
 }
 
-# 这家库里有没有哪一行用到了枚举类型 $2 的值 $3（所有用这个类型的列，数组列也算）；用到了返回 0。
-# 库里没有这个类型（名字认错了）也返回 0：当成用到了，宁可挡着
+# 这家库里有没有哪一行用到了枚举类型 $2 的值 $3（所有用这个类型的列，数组列也算）；用到了返回 0
 enum_value_used() {
   local t=$1 type=$2 value=$3 q
-  [ -n "$(tenant_sql "$t" "SELECT 1 FROM pg_type WHERE typname = '$type' AND typtype = 'e'")" ] || return 0
   q=$(tenant_sql "$t" "SELECT string_agg(format('(SELECT 1 FROM %I WHERE %s LIMIT 1)', table_name,
       CASE WHEN data_type = 'ARRAY' THEN format('%L = ANY(%I::text[])', '$value', column_name) ELSE format('%I::text = %L', column_name, '$value') END), ' UNION ALL ')
     FROM information_schema.columns WHERE table_schema = 'public' AND udt_name IN ('$type', '_$type')")

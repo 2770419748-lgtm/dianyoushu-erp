@@ -5,7 +5,7 @@
 # - 每家的备份：备份容器在不在跑、最新一份备份超过 26 小时（复查第 84 条）；
 # - 定时任务好久没成功跑过：每日任务、对账超过 26 小时，智能提醒超过 14 小时；备份同步配了却超过 26 小时没成功（包括从来没成功过）；
 # - 硬盘用了 80% 以上。
-# 开户不满这么久的不算。同一件事一小时只告警一次（没发出去下一分钟再试）。用法：deploy/health-check.sh
+# 开户不满这么久的不算，正在起回来的先不查备份和定时任务。同一件事一小时只告警一次（没发出去下一分钟再试）。用法：deploy/health-check.sh
 . "$(dirname "$0")/lib.sh"
 
 now=$(date +%s)
@@ -50,6 +50,10 @@ for t in $(list_tenants); do
     log "$t 健康检查不通（$why），连续第 $fails 次"
     if [ "$fails" -ge 3 ]; then alert_throttled "health-$t" "$t 连续 $fails 次健康检查不通（$why）：deploy/dc.sh $t logs app"; fi
   fi
+
+  # 正在起回来（有 .deploy/restoring 标记）：备份、定时任务的时间还停在下线那天，起回来脚本做完会补，先不查（复查第 96 条）；
+  # 上面的应用和站点照常查，卡住 3 分钟照样告警
+  [ -f "$dir/.deploy/restoring" ] && continue
 
   # 备份：备份容器要在跑，最新一份不能超过 26 小时（开户不满 26 小时的不算）
   if [ -z "$(dc "$t" ps -q backup 2> /dev/null || true)" ]; then
