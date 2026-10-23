@@ -4,7 +4,7 @@
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# 每分钟巡检：健康检查、定时任务有没有在跑、硬盘
+# 每分钟巡检：共享 Caddy、每家的健康检查（也经 Caddy 访问一次）、备份有没有停、定时任务有没有在跑、硬盘
 * * * * *   /srv/erp/app/deploy/health-check.sh >> /var/log/erp/health.log 2>&1
 # 每日任务（到期提醒、企业微信补处理和清理、离职继承）
 0 9 * * *   /srv/erp/app/deploy/run-all.sh daily >> /var/log/erp/daily.log 2>&1
@@ -14,6 +14,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 30 4 * * *  /srv/erp/app/deploy/run-all.sh db:check >> /var/log/erp/db-check.log 2>&1
 # 备份同步到另一个地域的对象存储
 0 5 * * *   /srv/erp/app/deploy/offsite-sync.sh >> /var/log/erp/offsite.log 2>&1
+# 演示站每天 04:00 重置演示数据（只有演示站 demo 配；真用客户绝不能配，DEMO_MODE=0 时 db:reset 也会拒绝）
+0 4 * * *   /srv/erp/app/deploy/dc.sh demo run --rm -T tools pnpm db:reset >> /var/log/erp/demo-reset.log 2>&1
 # 每月 1 号恢复演练
 30 5 1 * *  /srv/erp/app/deploy/restore-drill.sh >> /var/log/erp/restore-drill.log 2>&1
 # 这些日志只留 30 天：把 deploy/logrotate.example 复制成 /etc/logrotate.d/erp（系统每天自动轮转）

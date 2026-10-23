@@ -2,7 +2,8 @@
 # 升级一家客户到某个版本（口径第 24 节），健康检查不过自动回滚：
 #   1 先备份一份（备份失败不升级）→ 2 用新版本跑数据库迁移 → 3 换新版本的应用 → 4 等健康检查（最多 2 分钟）
 #   → 不过就换回上一个版本、告警 → 5 过了再对一遍账（对不上告警，不回滚，人工看）。
-# 数据库迁移只加不删，所以回滚应用不用回滚数据库；真要回到升级前的数据，用第 1 步那份备份恢复（docs/部署.md 恢复演练）。
+# 迁移“只加不删”时回滚应用不用回滚数据库；新版本里有标了“不能直接回滚”的迁移（prisma/migrations-not-rollback-safe.txt：
+# 删列、改名、枚举加值……）时，做完迁移就回不去了：升级前会提示，健康检查不过也不自动回滚，只能修好新版本或者用第 1 步的备份恢复。
 # 用法：deploy/deploy.sh <代号> <版本> [--force]    （--force：白天也发）
 . "$(dirname "$0")/lib.sh"
 
@@ -20,6 +21,20 @@ OLD=$(current_tag "$CODE")
 }
 DIR=$(tenant_dir "$CODE")
 log "升级 $CODE：$OLD → $TAG"
+# 这次要做的迁移里有没有“不能直接回滚”的：有就先说清楚，记进发布记录
+PENDING_IRREVERSIBLE=$(
+  applied=$(applied_migrations "$CODE")
+  list=$(docker run --rm "$TOOLS_REPO:$TAG" cat prisma/migrations-not-rollback-safe.txt 2> /dev/null || true)
+  for m in $(release_migrations "$TAG"); do
+    grep -qx "$m" <<< "$applied" && continue
+    grep -E "^$m( |$)" <<< "$list" || true
+  done
+)
+if [ -n "$PENDING_IRREVERSIBLE" ]; then
+  warn "这次升级有不能直接回滚的迁移，升级以后要回到 $OLD 只能用升级前的备份恢复：
+$PENDING_IRREVERSIBLE"
+  record "$CODE" "升级 $OLD → $TAG 含不能直接回滚的迁移：$(echo "$PENDING_IRREVERSIBLE" | cut -d' ' -f1 | tr '\n' ' ')"
+fi
 
 log "1/5 备份"
 if ! dc "$CODE" exec -T backup bash /backup.sh now; then
@@ -43,6 +58,12 @@ dc "$CODE" up -d --no-build app backup
 
 log "4/5 等健康检查"
 if ! wait_healthy "$CODE" 120; then
+  BLOCKERS=$(irreversible_since "$CODE" "$OLD" "$TAG")
+  if [ -n "$BLOCKERS" ]; then
+    record "$CODE" "升级 $OLD → $TAG 失败：健康检查不过，迁移不能直接回滚，没回滚"
+    alert "$CODE 升级到 $TAG 健康检查不过，而且做过不能直接回滚的迁移（$(echo "$BLOCKERS" | cut -d' ' -f1 | tr '\n' ' ')），没有自动回滚：修好新版本，或者用升级前的备份恢复"
+    exit 1
+  fi
   warn "$CODE 的 $TAG 健康检查不过，回滚到 $OLD"
   echo "$OLD" > "$DIR/.deploy/current"
   echo "$TAG" > "$DIR/.deploy/previous"
@@ -50,6 +71,7 @@ if ! wait_healthy "$CODE" 120; then
   if wait_healthy "$CODE" 120; then
     record "$CODE" "升级 $OLD → $TAG 失败：健康检查不过，已回滚到 $OLD"
     alert "$CODE 升级到 $TAG 健康检查不过，已自动回滚到 $OLD"
+    read_check "$CODE" || alert "$CODE 回滚到 $OLD 以后用旧版本读数据出错（对账跑不过），马上看"
   else
     record "$CODE" "升级 $OLD → $TAG 失败：健康检查不过，回滚到 $OLD 以后也不健康"
     alert "$CODE 升级到 $TAG 失败，回滚到 $OLD 以后也不健康，马上看：docker compose -p erp-$CODE logs app"

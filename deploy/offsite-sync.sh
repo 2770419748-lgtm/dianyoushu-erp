@@ -10,9 +10,12 @@
 command -v rclone > /dev/null || die "没装 rclone：apt-get install -y rclone"
 
 failed=()
+stale=()
 for t in $(list_tenants); do
   dir=$(tenant_dir "$t")/backups
   [ -d "$dir" ] || continue
+  # 本机最新的备份超过 26 小时：同步过去的也是旧的，算失败（复查第 84 条）
+  if [ -z "$(find "$dir" -maxdepth 1 -name '*.dump.enc' -mmin -1560 2> /dev/null)" ]; then stale+=("$t"); fi
   log "$t：同步备份到 $OFFSITE_REMOTE/$t"
   if ! rclone copy "$dir" "$OFFSITE_REMOTE/$t" --include "*.dump.enc" --immutable --checksum; then
     failed+=("$t")
@@ -20,6 +23,10 @@ for t in $(list_tenants); do
 done
 if [ ${#failed[@]} -gt 0 ]; then
   alert "备份同步到对象存储失败：${failed[*]}"
+  exit 1
+fi
+if [ ${#stale[@]} -gt 0 ]; then
+  alert "备份同步了，但这几家本机最新的备份超过 26 小时（每天的备份停了）：${stale[*]}"
   exit 1
 fi
 mkdir -p "$ERP_ROOT/.ops"

@@ -32,20 +32,28 @@ die() {
   exit 1
 }
 
-# 发到运维用的企业微信群机器人（ops.env 的 ALERT_WEBHOOK_URL）；没配就只写日志。消息里不放密钥、密码
+# 发到运维用的企业微信群机器人（ops.env 的 ALERT_WEBHOOK_URL）；没配就只写日志。消息里不放密钥、密码。
+# 发出去了（或者没配机器人）返回 0；配了却没发出去返回 1，并在日志里说为什么
 alert() {
   local text="[店有数 ERP $(hostname)] $*"
   echo "[$(date '+%F %T')] 告警：$*" >&2
-  if [ -n "${ALERT_WEBHOOK_URL:-}" ]; then
-    local body
-    body=$(printf '%s' "$text" | python3 -c 'import json,sys; print(json.dumps({"msgtype":"text","text":{"content":sys.stdin.read()}}))' 2>/dev/null) || body=""
-    if [ -n "$body" ]; then
-      curl -fsS -m 10 -H 'Content-Type: application/json' -d "$body" "$ALERT_WEBHOOK_URL" > /dev/null || echo "[$(date '+%F %T')] 告警没发出去（群机器人地址不通）" >&2
-    fi
+  [ -n "${ALERT_WEBHOOK_URL:-}" ] || return 0
+  if ! command -v python3 > /dev/null; then
+    echo "[$(date '+%F %T')] 告警没发出去：没装 python3（拼消息要用），apt-get install -y python3" >&2
+    return 1
+  fi
+  local body
+  body=$(printf '%s' "$text" | python3 -c 'import json,sys; print(json.dumps({"msgtype":"text","text":{"content":sys.stdin.read()}}))') || {
+    echo "[$(date '+%F %T')] 告警没发出去：拼消息出错" >&2
+    return 1
+  }
+  if ! curl -fsS -m 10 -H 'Content-Type: application/json' -d "$body" "$ALERT_WEBHOOK_URL" > /dev/null; then
+    echo "[$(date '+%F %T')] 告警没发出去：群机器人地址不通" >&2
+    return 1
   fi
 }
 
-# 同一件事一小时内只告警一次（每分钟跑的巡检不刷屏）；key 用来区分是哪件事
+# 同一件事一小时内只告警一次（每分钟跑的巡检不刷屏）；key 用来区分是哪件事。没发出去不算数，下一分钟再试
 alert_throttled() {
   local key=$1
   shift
@@ -53,9 +61,28 @@ alert_throttled() {
   mkdir -p "$dir"
   local mark="$dir/alert-$key"
   if [ -f "$mark" ] && [ $(($(date +%s) - $(cat "$mark"))) -lt 3600 ]; then return 0; fi
-  date +%s > "$mark"
-  alert "$@"
+  if alert "$@"; then date +%s > "$mark"; fi
 }
+
+# 这家共享 Caddy 上的站点地址（tenant-new.sh 记在 .deploy/site）
+tenant_site() { cat "$(tenant_dir "$1")/.deploy/site" 2>/dev/null || true; }
+
+# 经共享 Caddy、按这家的站点地址请求健康检查（和客户从外面访问走同一条路）。
+# 要看到应用回的 {"ok":true}：Caddy 对没配的站点也回 200（空的），只看状态码会把“站点没配上”当成正常
+site_health() {
+  local site body
+  site=$(tenant_site "$1")
+  [ -n "$site" ] || return 1
+  if [[ "$site" == http://* ]]; then
+    body=$(curl -fsS -m 5 -H "Host: ${site#http://}" "http://127.0.0.1:${PROXY_HTTP_PORT:-80}/api/health") || return 1
+  else
+    body=$(curl -fsS -m 5 --resolve "$site:${PROXY_HTTPS_PORT:-443}:127.0.0.1" "https://$site:${PROXY_HTTPS_PORT:-443}/api/health") || return 1
+  fi
+  [[ "$body" == *'"ok":true'* ]]
+}
+
+# 共享 Caddy 的 compose
+proxy_dc() { env -i PATH="$PATH" HOME="${HOME:-/root}" ERP_ROOT="$ERP_ROOT" PROXY_HTTP_PORT="${PROXY_HTTP_PORT:-80}" PROXY_HTTPS_PORT="${PROXY_HTTPS_PORT:-443}" docker compose -p erp-proxy -f "$APP_DIR/deploy/proxy/docker-compose.yml" "$@"; }
 
 valid_code() { [[ "$1" =~ ^[a-z][a-z0-9-]{1,30}$ ]]; }
 
@@ -129,12 +156,36 @@ wait_healthy() {
   return 1
 }
 
-# 只在晚上 22 点以后发（口径第 24 节）；白天要发加 --force
+# 只在晚上 22 点到第二天早上 6 点之间发（口径第 24 节，门店都关门了）；别的时间要发加 --force
 check_window() {
   local force=${1:-}
   local hour
-  hour=$(TZ=Asia/Shanghai date +%H)
-  if [ "$force" != "--force" ] && [ "$((10#$hour))" -lt 22 ]; then
-    die "现在是北京时间 $hour 点，门店还在营业：22 点以后再发；确实要现在发加 --force"
+  hour=$((10#$(TZ=Asia/Shanghai date +%H)))
+  if [ "$force" != "--force" ] && [ "$hour" -ge 6 ] && [ "$hour" -lt 22 ]; then
+    die "现在是北京时间 $hour 点，门店还在营业：22 点到第二天 6 点之间再发；确实要现在发加 --force"
   fi
 }
+
+# 一个版本的镜像里有哪些迁移（一行一个名字）
+release_migrations() { docker run --rm "$TOOLS_REPO:$1" ls prisma/migrations | grep -E '^[0-9]{14}_'; }
+
+# 这家库里做过的迁移
+applied_migrations() { dc "$1" exec -T db psql -U erp -d dianyoushu_erp -tAc "SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY 1"; }
+
+# 回到 $2 版本前要看：库里做过、$2 里没有、而且标了“不能直接回滚”的迁移（清单取自较新的版本 $3 的镜像）。
+# 打印这些迁移（迁移名 原因），没有就什么都不打印（口径第 24 节、复查第 86 条）
+irreversible_since() {
+  local t=$1 target=$2 newer=$3 applied old list m line
+  applied=$(applied_migrations "$t") || die "$t 读不到库里的迁移记录"
+  old=$(release_migrations "$target") || die "读不到版本 $target 的迁移清单"
+  list=$(docker run --rm "$TOOLS_REPO:$newer" cat prisma/migrations-not-rollback-safe.txt 2>/dev/null || true)
+  for m in $applied; do
+    grep -qx "$m" <<< "$old" && continue
+    line=$(grep -E "^$m( |$)" <<< "$list" || true)
+    [ -n "$line" ] && echo "$line"
+  done
+  return 0
+}
+
+# 回滚以后用旧版本把主要业务表都读一遍（就是对账）：旧版本读不了新版本写的数据（比如新的枚举值）时这里会报错
+read_check() { dc "$1" run --rm -T tools pnpm -s db:check > /dev/null 2>&1; }

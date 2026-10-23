@@ -49,6 +49,10 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # 删列、改名、枚举加值这类迁移要登记到 prisma/migrations-not-rollback-safe.txt，部署脚本据此拒绝直接回滚（口径第 24 节）
+      - name: 迁移能不能直接回滚
+        run: node scripts/check-migrations.mjs
+
       - name: 类型检查
         run: pnpm typecheck
 

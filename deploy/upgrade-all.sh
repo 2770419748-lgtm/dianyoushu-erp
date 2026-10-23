@@ -21,8 +21,9 @@ check_window "$FORCE"
 
 if [ -z "$SKIP_DEMO" ] && [ -f "$(tenant_dir demo)/.env" ]; then
   [ "$(current_tag demo)" = "$TAG" ] || die "演示站还不是 $TAG：先 deploy/deploy.sh demo $TAG，跑一天没问题再升客户"
-  since=$(grep "升级 .* → $TAG 成功" "$(tenant_dir demo)/.deploy/history.log" | tail -1 | cut -c1-19)
-  [ -n "$since" ] || die "找不到演示站升级到 $TAG 的记录"
+  # 演示站是直接用这个版本开的户，也算（从开户时间算）
+  since=$(grep -E "(升级 .* → $TAG 成功|开户 版本 $TAG )" "$(tenant_dir demo)/.deploy/history.log" 2> /dev/null | tail -1 | cut -c1-19 || true)
+  [ -n "$since" ] || die "找不到演示站升级到（或开户用）$TAG 的记录：看 $(tenant_dir demo)/.deploy/history.log"
   hours=$((($(date +%s) - $(date -d "$since" +%s)) / 3600))
   [ "$hours" -ge 20 ] || die "演示站升级到 $TAG 才 $hours 小时，跑满 20 小时再升客户（紧急修复加 --skip-demo-check）"
 fi
