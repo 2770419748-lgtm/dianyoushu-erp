@@ -6,6 +6,7 @@ import { bjDateKey, dateFromKey } from "@/lib/attendance";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { getDashboard } from "@/server/dashboard/dashboard-service";
 import { getPnl, saveFixedExpenses } from "@/server/finance/pnl-service";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 门店收支和利润表（口径第 19 节，连本机库，事务回滚不留数据）：一家新开的测试店，上个月开单、退货、运营商业务、维修、报销、工资、固定支出各来一笔，
 // 看利润表每一格对不对；谁能看、谁能录固定支出；数据不全。
@@ -76,7 +77,7 @@ describe("门店利润表（连本机库，事务回滚）", () => {
       // 运营商：一笔 80 元算，作废的不算
       const sample = await tx.carrierBusiness.findFirst({ select: { carrier: true, bizType: true } });
       if (sample) {
-        const cb = { storeId: store.id, handledById: staff.id, carrier: sample.carrier, bizType: sample.bizType, phone: "13900001111", packageName: "测试套餐", bizDate: day(6), clawbackMonths: 6 };
+        const cb = { storeId: store.id, handledById: staff.id, carrier: sample.carrier, bizType: sample.bizType, ...phoneColumns("13900001111"), packageName: "测试套餐", bizDate: day(6), clawbackMonths: 6 };
         await tx.carrierBusiness.create({ data: { ...cb, orderNo: "YY-PNLTEST-1", expectedCommissionFen: 8000 } });
         await tx.carrierBusiness.create({ data: { ...cb, orderNo: "YY-PNLTEST-2", expectedCommissionFen: 5000, status: "VOIDED", voidedAt: new Date(), voidedById: mgr.id, voidReason: "测试" } });
       }
@@ -88,7 +89,7 @@ describe("门店利润表（连本机库，事务回滚）", () => {
       // 国补：这台的补贴 500 元上个月 12 号被平台驳回、现在还是驳回（算进费用）；同样驳回过、又改了重新提交的不算
       const policy = await tx.subsidyPolicy.findFirst({ select: { id: true, categoryId: true } });
       if (policy) {
-        const customer = await tx.customer.create({ data: { name: "利润测试客户", phone: "19900002222" } });
+        const customer = await tx.customer.create({ data: { name: "利润测试客户", ...phoneColumns("19900002222") } });
         const claim = { storeId: store.id, salesOrderId: second.order.id, customerId: customer.id, deviceId: second.device.id, policyId: policy.id, categoryId: policy.categoryId, bizDate: day(4), basePriceFen: 500000, subsidyFen: 50000, submittedAt: new Date(`${prev}-05T04:00:00Z`), reviewedAt: new Date(`${prev}-12T04:00:00Z`) };
         await tx.subsidyClaim.create({ data: { ...claim, claimNo: "GB-PNLTEST-1", salesOrderItemId: second.item.id, qualificationCode: "PNLTEST-QC-1", status: "REJECTED", rejectReason: "测试驳回" } });
         const third = await mk("PNLTEST000000003", 400000, 300000, 4, "SO-PNLTEST-4");

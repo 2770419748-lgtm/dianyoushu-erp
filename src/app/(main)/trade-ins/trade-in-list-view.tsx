@@ -1,13 +1,45 @@
 "use client";
 
 import Link from "next/link";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Card, Space, Table, Tag } from "antd";
+import { App, Button, Card, Space, Table, Tag } from "antd";
 import type { TableColumnsType } from "antd";
 import type { DeviceStatus } from "@/generated/prisma/enums";
 import { formatDateTime, formatFen } from "@/lib/format";
 import { DEVICE_STATUS_COLORS, DEVICE_STATUS_LABELS } from "@/lib/stock-labels";
 import type { TradeInRow } from "@/server/tradein/trade-in-service";
+import { revealSellerIdAction } from "./actions";
+
+/** 卖家身份证号：默认打码；店长及以上点“显示”在服务端解开（记日志） */
+function SellerId({ row, canReveal }: { row: TradeInRow; canReveal: boolean }) {
+  const { message } = App.useApp();
+  const [full, setFull] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  if (!row.sellerIdMasked) return <>-</>;
+  if (full) return <>{full}</>;
+  return (
+    <Space size={4}>
+      {row.sellerIdMasked}
+      {canReveal ? (
+        <Button
+          type="link"
+          size="small"
+          loading={pending}
+          onClick={() =>
+            startTransition(async () => {
+              const r = await revealSellerIdAction(row.id);
+              if (r.ok) setFull(r.idNo);
+              else message.error(r.error);
+            })
+          }
+        >
+          显示
+        </Button>
+      ) : null}
+    </Space>
+  );
+}
 
 export function TradeInListView({
   rows,
@@ -16,6 +48,7 @@ export function TradeInListView({
   pageSize,
   canCreate,
   canRefurbish,
+  canSeeSellerId,
 }: {
   rows: TradeInRow[];
   total: number;
@@ -23,6 +56,7 @@ export function TradeInListView({
   pageSize: number;
   canCreate: boolean;
   canRefurbish: boolean;
+  canSeeSellerId: boolean;
 }) {
   const router = useRouter();
 
@@ -42,6 +76,8 @@ export function TradeInListView({
       render: (_, r) => (r.salesOrder ? <Link href={`/sales/${r.salesOrder.id}`}>{r.salesOrder.orderNo}</Link> : <Tag>未使用</Tag>),
     },
     { title: "客户", render: (_, r) => (r.customer ? `${r.customer.name} ${r.customer.phoneMasked}` : "-") },
+    { title: "卖家", render: (_, r) => r.sellerName ?? "-" },
+    { title: "卖家身份证号", render: (_, r) => <SellerId row={r} canReveal={canSeeSellerId} /> },
     { title: "经手人", render: (_, r) => r.handledBy.name },
     { title: "时间", dataIndex: "createdAt", render: (v: Date) => formatDateTime(v) },
   ];

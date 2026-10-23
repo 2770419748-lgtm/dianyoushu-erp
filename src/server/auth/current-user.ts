@@ -17,7 +17,8 @@ export type CurrentUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>
 export async function requireUser(): Promise<CurrentUser> {
   const user = await getCurrentUser();
   if (user) return user;
-  // 有登录 cookie、但登录已失效（账号停用、密码改过、账号不存在）：先去清 cookie，否则登录页和首页会来回跳（见 /api/session/clear）
-  if (await readSession()) redirect("/api/session/clear");
+  // 有登录 cookie、但登录已失效（账号停用、密码改过、账号不存在）：带上 reason=expired 去登录页，
+  // proxy 见到它不再把人弹回首页（不然两边来回跳），登录页发 POST 清掉旧 cookie（见 /api/session/clear）
+  if (await readSession()) redirect("/login?reason=expired");
   redirect("/login");
 }

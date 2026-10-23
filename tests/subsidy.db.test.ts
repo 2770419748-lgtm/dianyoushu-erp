@@ -8,6 +8,7 @@ import { createSalesOrderTx, voidSalesOrderTx } from "@/server/sales/sales-servi
 import { receiveDevices } from "@/server/stock/stock-service";
 import { createClaimsTx, importPlatformResults, markReturnedTx, savePolicy, simulateReview, simulateSettle, submitClaimTx } from "@/server/subsidy/subsidy-service";
 import { runIntegrityChecks } from "../prisma/integrity-checks";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 国补（口径第 15 节，连本机库，事务回滚不留数据）：开单立减和校验、作废退货撤销、提交审核、平台结果、模拟器、对账自检第 9 类。
 
@@ -70,7 +71,7 @@ async function setPolicy(tx: Prisma.TransactionClient) {
 /** 卖一台新手机给一个新客户，用国补 */
 async function subsidizedSale(tx: Prisma.TransactionClient, seed: number, opts: { code?: string; user?: CurrentUser; customerId?: number } = {}) {
   const f = fixture!;
-  const customerId = opts.customerId ?? (await tx.customer.create({ data: { name: "国补测试", phone: `196${String(seed).padStart(8, "0")}` } })).id;
+  const customerId = opts.customerId ?? (await tx.customer.create({ data: { name: "国补测试", ...phoneColumns(`196${String(seed).padStart(8, "0")}`) } })).id;
   const [deviceId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.phoneSkuId, devices: [{ sn: null, imei1: imei(seed), imei2: null }], costFen: 100000, docType: "PURCHASE_RECEIPT", docNo: `RI-GB-${seed}`, operatorId: f.hq.id });
   const subsidyFen = Math.min(Math.round((f.priceFen * 1500) / 10000), 50000);
   const sale = await createSalesOrderTx(tx, opts.user ?? f.hq, {
@@ -97,7 +98,7 @@ describe("国补（连本机库，事务回滚）", () => {
       await setPolicy(tx);
       const first = await subsidizedSale(tx, 41);
       const claim = await tx.subsidyClaim.findFirstOrThrow({ where: { salesOrderId: first.saleId } });
-      const customer = await tx.customer.create({ data: { name: "国补测试", phone: "19600000042" } });
+      const customer = await tx.customer.create({ data: { name: "国补测试", ...phoneColumns("19600000042") } });
       const [deviceId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.phoneSkuId, devices: [{ sn: null, imei1: imei(42), imei2: null }], costFen: 100000, docType: "PURCHASE_RECEIPT", docNo: "RI-GB-42", operatorId: f.hq.id });
       const plain = await createSalesOrderTx(tx, f.hq, { storeId: f.storeId, customerId: customer.id, items: [{ deviceId }], paymentMethod: "CASH" });
       const item = await tx.salesOrderItem.findFirstOrThrow({ where: { orderId: plain.id } });

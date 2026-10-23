@@ -16,5 +16,5 @@ export default async function TradeInsPage({ searchParams }: PageProps<"/trade-i
   if (!canSell(user.role) && user.role !== "REGIONAL_MANAGER") return <NoAccess />;
   const params = await searchParams;
   const data = await listTradeIns(user, Number(one(params.page)) || 1);
-  return <TradeInListView rows={data.rows} total={data.total} page={data.page} pageSize={data.pageSize} canCreate={canSell(user.role)} canRefurbish={canRefurbish(user.role)} />;
+  return <TradeInListView rows={data.rows} total={data.total} page={data.page} pageSize={data.pageSize} canCreate={canSell(user.role)} canRefurbish={canRefurbish(user.role)} canSeeSellerId={data.canSeeSellerId} />;
 }

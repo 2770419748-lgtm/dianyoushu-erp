@@ -12,6 +12,9 @@ import { KF_CLAIM_TEXT, KF_HUMAN_TEXT, KF_STORE_HOURS, KF_WARRANTY_TEXT } from "
 import { bjMinuteOfDay, LEAVE_HQ_DAYS, LEAVE_KIND_LABELS, LEAVE_KINDS, leaveChain, SHIFT_TIMES, type LeaveKindKey, type ShiftKindKey, type WorkShiftKey } from "../src/lib/attendance";
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS, expenseChain, type ExpenseCategoryKey } from "../src/lib/expense";
 import { SIMULATED_KF_ID } from "../src/server/wecom/config";
+import { encryptPii, maskIdCard, phoneColumns, piiFingerprint } from "../src/server/pii/crypto";
+import { maskPhone } from "../src/lib/sales-labels";
+import { idCardCheckChar } from "../src/lib/id-card";
 import { buildInvoiceLines, simulateInvoiceNumber, usccCheckChar, type InvoiceKindKey, type InvoiceStatusKey, type InvoiceTitleTypeKey } from "../src/lib/invoice";
 
 // 模拟经营数据 v1（第 9 周）：10 家店、3 个月（截至昨天）的采购到货、销售、以旧换新、回收机转良品再卖、作废、退货、日结。
@@ -86,6 +89,14 @@ function newPhone(): string {
     }
   }
 }
+/** 演示用的身份证号：常见的几个地区码 + 1965～2003 年的生日 + 顺序码 + 正确的校验位（不是真人） */
+function newIdCard(): string {
+  const area = pick(["110105", "310104", "440304", "320106", "330106", "420111", "510107"]);
+  const birth = new Date(Date.UTC(between(1965, 2003), between(0, 11), between(1, 28))).toISOString().slice(0, 10).replace(/-/g, "");
+  const first17 = `${area}${birth}${String(between(10, 999)).padStart(3, "0")}`;
+  return first17 + idCardCheckChar(first17);
+}
+
 let imei1Seq = 10000000000;
 let imei2Seq = 5000000000000;
 let oldImeiSeq = 1000000000000;
@@ -720,7 +731,9 @@ async function main() {
             tradeInId = ++ids.tradeIn;
             const code = oldPhoneCode();
             const condition = pick(CONDITIONS);
-            out.tradeIns.push({ id: tradeInId, orderNo: rcNo, storeId: store.id, customerId, handledById: salesperson.id, deviceCode: code, modelName: old.name, skuId: genericSku.id, condition, appraisedFen: tradeInFen, status: "COMPLETED", note: null, createdAt: t, updatedAt: t });
+            // 卖家身份（口径第 20 节）：有客户就是客户本人
+            const sellerName = customerId ? (out.customers[customerId - 1]!.name as string) : pick(SURNAMES) + pick(GIVEN) + (chance(0.4) ? pick(GIVEN) : "");
+            out.tradeIns.push({ id: tradeInId, orderNo: rcNo, storeId: store.id, customerId, handledById: salesperson.id, deviceCode: code, modelName: old.name, skuId: genericSku.id, condition, appraisedFen: tradeInFen, sellerName, sellerIdNo: newIdCard(), status: "COMPLETED", note: null, createdAt: t, updatedAt: t });
             const device: DeviceRec = { id: ++ids.device, code, sn: null, imei1: code, imei2: null, skuId: genericSku.id, storeId: store.id, status: "RECYCLED", costFen: tradeInFen, condition, goodsReceiptId: null, tradeInOrderId: tradeInId, createdAt: t, updatedAt: t };
             out.devices.push(device);
             ledger({ docType: "TRADE_IN", docNo: rcNo, storeId: store.id, skuId: genericSku.id, deviceId: device.id, qtyDelta: 1, statusAfter: "RECYCLED", operatorId: salesperson.id, note: old.name, createdAt: t });
@@ -1162,7 +1175,8 @@ async function writeHrDemo(users: { id: number; username: string; role: string; 
   const staffPlan = await prisma.commissionPlan.create({ data: { name: "店员方案", salesRateBp: 100, perDeviceFen: 2000, perServiceFen: 1500, note: "销售额 1%，每台主机 20 元，每份碎屏险延保 15 元" } });
   const managerPlan = await prisma.commissionPlan.create({ data: { name: "店长方案", salesRateBp: 50, perDeviceFen: 1000, perServiceFen: 1000, note: "店长自己开的单按这个算" } });
   const planOf = (role: string) => (role === "STAFF" ? staffPlan.id : role === "STORE_MANAGER" ? managerPlan.id : null);
-  await prisma.employeeProfile.createMany({ data: profiles.map((p) => ({ ...p, commissionPlanId: planOf(users.find((u) => u.id === p.userId)!.role) })) });
+  // 联系电话加密存（口径第 20 节）
+  await prisma.employeeProfile.createMany({ data: profiles.map(({ phone, ...p }) => ({ ...p, phoneEnc: encryptPii(phone), phoneMasked: maskPhone(phone), commissionPlanId: planOf(users.find((u) => u.id === p.userId)!.role) })) });
 
   const storeRegion = new Map(stores.map((s) => [s.id, s.regionId]));
   const active = users.filter((u) => u.isActive);
@@ -2159,6 +2173,23 @@ function cancelClaim(c: SubsidyRec, t: Date, day = 0) {
   c.updatedAt = t;
 }
 
+// 写库前把明文换成密文、指纹、打码号码（口径第 20 节）；内存里留着明文，前面各段数据互相引用（运营商用客户号码、发票接收方）要用
+function sealCustomers(rows: Row[]): Row[] {
+  return rows.map(({ phone, ...r }) => ({ ...r, ...phoneColumns(phone as string) }));
+}
+function sealTradeIns(rows: Row[]): Row[] {
+  return rows.map(({ sellerIdNo, ...r }) => {
+    const id = sellerIdNo as string | undefined;
+    return id ? { ...r, sellerIdEnc: encryptPii(id), sellerIdFp: piiFingerprint("idcard", id), sellerIdMasked: maskIdCard(id) } : r;
+  });
+}
+function sealInvoices(rows: Row[]): Row[] {
+  return rows.map(({ receiver, ...r }) => ({ ...r, receiverEnc: receiver ? encryptPii(receiver as string) : null }));
+}
+function sealCarrierLines(rows: Row[]): Row[] {
+  return rows.map(({ phone, ...r }) => ({ ...r, phoneEnc: phone ? encryptPii(phone as string) : null, phoneMasked: phone ? maskPhone(phone as string) : null }));
+}
+
 async function insert<T extends Row>(label: string, rows: T[], fn: (chunk: T[]) => Promise<unknown>) {
   for (let i = 0; i < rows.length; i += 2000) await fn(rows.slice(i, i + 2000));
   console.log(`  ${label}：${rows.length}`);
@@ -2166,12 +2197,12 @@ async function insert<T extends Row>(label: string, rows: T[], fn: (chunk: T[]) 
 
 async function write() {
   console.log("写入数据库：");
-  await insert("客户", out.customers, (c) => prisma.customer.createMany({ data: c as never }));
+  await insert("客户", sealCustomers(out.customers), (c) => prisma.customer.createMany({ data: c as never }));
   await insert("采购单", out.purchaseOrders, (c) => prisma.purchaseOrder.createMany({ data: c as never }));
   await insert("采购明细", out.purchaseItems, (c) => prisma.purchaseOrderItem.createMany({ data: c as never }));
   await insert("入库单", out.receipts, (c) => prisma.goodsReceipt.createMany({ data: c as never }));
   await insert("入库明细", out.receiptItems, (c) => prisma.goodsReceiptItem.createMany({ data: c as never }));
-  await insert("回收单", out.tradeIns, (c) => prisma.tradeInOrder.createMany({ data: c as never }));
+  await insert("回收单", sealTradeIns(out.tradeIns), (c) => prisma.tradeInOrder.createMany({ data: c as never }));
   await insert("机器", out.devices as unknown as Row[], (c) => prisma.device.createMany({ data: c as never }));
   await insert("日结", out.closes, (c) => prisma.dailyClose.createMany({ data: c as never }));
   await insert("日结明细", out.closeLines, (c) => prisma.dailyCloseLine.createMany({ data: c as never }));
@@ -2185,14 +2216,14 @@ async function write() {
   await prisma.invoiceSeller.create({ data: { id: 1, ...DEMO_SELLER } });
   await insert("审批规则", DEMO_APPROVAL_RULES as unknown as Row[], (c) => prisma.approvalRule.createMany({ data: c as never }));
   await insert("审批单", out.approvals, (c) => prisma.approvalRequest.createMany({ data: c as never }));
-  await insert("发票", out.invoices as unknown as Row[], (c) => prisma.invoice.createMany({ data: c as never }));
+  await insert("发票", sealInvoices(out.invoices as unknown as Row[]), (c) => prisma.invoice.createMany({ data: c as never }));
   await insert("发票明细", out.invoiceLines, (c) => prisma.invoiceLine.createMany({ data: c as never }));
   await insert("国补政策", out.subsidyPolicies, (c) => prisma.subsidyPolicy.createMany({ data: c as never }));
   await insert("国补单", out.subsidyClaims as unknown as Row[], (c) => prisma.subsidyClaim.createMany({ data: c as never }));
   await insert("运营商佣金政策", carrierOut.rules, (c) => prisma.carrierCommissionRule.createMany({ data: c as never }));
   await insert("运营商结算单", carrierOut.settlements, (c) => prisma.carrierSettlement.createMany({ data: c as never }));
-  await insert("运营商业务", carrierOut.business as unknown as Row[], (c) => prisma.carrierBusiness.createMany({ data: c as never }));
-  await insert("运营商结算明细", carrierOut.lines, (c) => prisma.carrierSettlementLine.createMany({ data: c as never }));
+  await insert("运营商业务", sealCustomers(carrierOut.business as unknown as Row[]), (c) => prisma.carrierBusiness.createMany({ data: c as never }));
+  await insert("运营商结算明细", sealCarrierLines(carrierOut.lines), (c) => prisma.carrierSettlementLine.createMany({ data: c as never }));
   await insert("到期提醒", out.reminders, (c) => prisma.entitlementReminder.createMany({ data: c as never }));
   // 企业微信：店员、店长、总部的企业微信账号 = 登录账号（演示用；总部现场开单也能生成加微二维码）
   await prisma.$executeRaw`UPDATE users SET wecom_userid = username WHERE role IN ('STAFF', 'STORE_MANAGER', 'HQ') AND is_active`;

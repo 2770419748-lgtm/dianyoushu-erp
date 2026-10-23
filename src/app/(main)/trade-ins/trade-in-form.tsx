@@ -4,6 +4,7 @@ import { useTransition } from "react";
 import { App, Button, Form, Input, InputNumber, Select, Space, Typography } from "antd";
 import { ScanButton } from "@/components/scan-button";
 import { yuanToFen } from "@/lib/format";
+import { isValidIdCard, normalizeIdCard } from "@/lib/id-card";
 import { parseDeviceCodeLines } from "@/server/stock/imei";
 import { createTradeInAction } from "./actions";
 
@@ -29,6 +30,8 @@ interface Values {
   modelName?: string;
   condition: string;
   appraisedYuan: number;
+  sellerName: string;
+  sellerIdNo: string;
   note?: string;
 }
 
@@ -64,6 +67,8 @@ export function TradeInForm({
         modelName: values.modelName,
         condition: values.condition,
         appraisedFen: yuanToFen(values.appraisedYuan),
+        sellerName: values.sellerName,
+        sellerIdNo: values.sellerIdNo,
         note: values.note,
       });
       if (!result.ok) {
@@ -114,6 +119,22 @@ export function TradeInForm({
         </Form.Item>
         <Form.Item name="appraisedYuan" label="估价（元，等于抵扣金额）" rules={[{ required: true, message: "填估价" }]}>
           <InputNumber min={1} precision={2} style={{ width: 180 }} />
+        </Form.Item>
+      </Space>
+      <Space size="large" wrap>
+        <Form.Item name="sellerName" label="卖家姓名" rules={[{ required: true, whitespace: true, message: "填卖家姓名" }]}>
+          <Input maxLength={30} style={{ width: 180 }} placeholder="和身份证上的一致" />
+        </Form.Item>
+        <Form.Item
+          name="sellerIdNo"
+          label="卖家身份证号"
+          extra="收旧手机要登记卖家身份；加密保存，店员只看到打码的"
+          rules={[
+            { required: true, message: "填卖家身份证号" },
+            { validator: (_, v: string | undefined) => (!v || isValidIdCard(normalizeIdCard(v)) ? Promise.resolve() : Promise.reject(new Error("身份证号不对，核对一下"))) },
+          ]}
+        >
+          <Input maxLength={18} style={{ width: 240 }} autoComplete="off" />
         </Form.Item>
       </Space>
       <Form.Item name="note" label="备注">

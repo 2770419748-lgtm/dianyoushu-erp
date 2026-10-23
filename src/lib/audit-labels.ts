@@ -50,6 +50,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "sale.void": "作废销售单",
   "trade_in.create": "开回收单",
   "trade_in.refurbish": "回收机转良品",
+  "trade_in.reveal_id": "查看回收卖家完整身份证号",
   "return.create": "退货",
   "repair.create": "售后接件",
   "repair.quote": "维修报价",

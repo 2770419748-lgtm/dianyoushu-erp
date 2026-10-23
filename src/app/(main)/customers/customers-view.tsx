@@ -77,8 +77,8 @@ export function CustomersView({ rows, total, page, pageSize, q }: { rows: Custom
       }
     >
       <Space style={{ marginBottom: 12 }}>
-        <Input.Search allowClear placeholder="输手机号（至少 4 位）或姓名" defaultValue={q} style={{ width: "min(280px, 100%)" }} onSearch={(value) => navigate({ q: value, page: 1 })} />
-        <Typography.Text type="secondary">手机号脱敏显示；输手机号的任意 4 位以上（比如尾号）或姓名都能搜。</Typography.Text>
+        <Input.Search allowClear placeholder="输完整手机号、尾号 4 位或姓名" defaultValue={q} style={{ width: "min(280px, 100%)" }} onSearch={(value) => navigate({ q: value, page: 1 })} />
+        <Typography.Text type="secondary">手机号加密保存、只显示打码的；输完整手机号、尾号 4 位或姓名都能搜（中间几位搜不到）。</Typography.Text>
       </Space>
       <Table
         rowKey="id"

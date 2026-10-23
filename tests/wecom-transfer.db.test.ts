@@ -6,6 +6,7 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { createSimulatedWecomClient, type WecomClient } from "@/server/wecom/client";
 import { cancelResignedTransfersFor, cancelTransfer, createResignedTransfers, processTransfers, STUCK_DAYS, transferOnJob } from "@/server/wecom/transfer-service";
 import { onAddExternalContact, unbindCustomerWecom } from "@/server/wecom/contact-service";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 企业微信客户继承（口径第 12 节第三步，连本机库，事务回滚不留数据）：在职转接的权限和限制、查结果回写跟进关系、
 // 客户拒绝、离职继承要等删除成员、90 天 2 次。
@@ -77,7 +78,7 @@ describe("企业微信客户继承（连本机库，事务回滚）", () => {
     const s = stores;
     await inRolledBackTx(async (tx) => {
       const p = await people(tx, s.a, s.b);
-      const customer = await tx.customer.create({ data: { name: "继承测试客户", phone: "19922223333", wecomExternalUserid: "wmTrTest01" } });
+      const customer = await tx.customer.create({ data: { name: "继承测试客户", ...phoneColumns("19922223333"), wecomExternalUserid: "wmTrTest01" } });
       const follow = await tx.wecomFollow.create({ data: { externalUserid: "wmTrTest01", wecomUserid: "trTestA", userId: p.a.id, customerId: customer.id, firstAddAt: new Date() } });
       const opts = { db: tx, client: clientWith(1) };
 
@@ -140,7 +141,7 @@ describe("企业微信客户继承（连本机库，事务回滚）", () => {
     const s = stores;
     await inRolledBackTx(async (tx) => {
       const p = await people(tx, s.a, s.b);
-      const customer = await tx.customer.create({ data: { name: "继承测试客户三", phone: "19922225555", wecomExternalUserid: "wmTrTest03" } });
+      const customer = await tx.customer.create({ data: { name: "继承测试客户三", ...phoneColumns("19922225555"), wecomExternalUserid: "wmTrTest03" } });
       const follow = await tx.wecomFollow.create({ data: { externalUserid: "wmTrTest03", wecomUserid: "trTestA", userId: p.a.id, customerId: customer.id, firstAddAt: new Date() } });
       const other = await tx.wecomFollow.create({ data: { externalUserid: "wmTrTest03", wecomUserid: "trTestC", userId: p.c.id, customerId: customer.id, firstAddAt: new Date() } });
       await transferOnJob(p.manager, { followId: follow.id, toUserId: p.b.id }, { db: tx, client: clientWith(2) });

@@ -5,6 +5,7 @@ import { PrismaClient, type Prisma } from "@/generated/prisma/client";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { CarrierError, confirmBusinessTx, generateSimulatedSettlement, importSettlementCsv, listBusiness, registerBusinessTx, syncSimulatedStatus, voidBusinessTx } from "@/server/carrier/carrier-service";
 import { createSalesOrderTx } from "@/server/sales/sales-service";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 运营商业务（口径第 14 节，连本机库，事务回滚不留数据）：登记要有政策、佣金按登记时记、谁能确认和作废、结算单导入对账和返销、模拟器。
 
@@ -99,7 +100,7 @@ describe("运营商业务（连本机库，事务回滚）", () => {
     const f = fixture;
     await inRolledBackTx(async (tx) => {
       await setRule(tx, "CUCC", "CONTRACT_PHONE", 18000);
-      const customer = await tx.customer.create({ data: { name: "合约测试", phone: "19699990001" } });
+      const customer = await tx.customer.create({ data: { name: "合约测试", ...phoneColumns("19699990001") } });
       await tx.accessoryStock.upsert({ where: { storeId_skuId: { storeId: f.storeId, skuId: f.accessorySkuId } }, create: { storeId: f.storeId, skuId: f.accessorySkuId, qty: 5 }, update: { qty: { increment: 5 } } });
       const sale = await createSalesOrderTx(tx, f.hq, { storeId: f.storeId, customerId: customer.id, items: [{ skuId: f.accessorySkuId, qty: 1 }], paymentMethod: "CASH" });
       const order = await tx.salesOrder.findUniqueOrThrow({ where: { id: sale.id } });

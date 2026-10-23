@@ -297,7 +297,7 @@ export function MobileSaleView({
             </Space>
           ) : (
             <Space orientation="vertical" style={{ width: "100%" }}>
-              <Input.Search placeholder="输手机号（至少 4 位）或姓名找老客户" inputMode="tel" allowClear onSearch={async (q) => setCustomerResults(q.trim() ? await searchCustomersAction(q) : [])} />
+              <Input.Search placeholder="输完整手机号、尾号 4 位或姓名找老客户" inputMode="tel" allowClear onSearch={async (q) => setCustomerResults(q.trim() ? await searchCustomersAction(q) : [])} />
               {customerResults.length > 0 ? (
                 <Space wrap>
                   {customerResults.map((c) => (

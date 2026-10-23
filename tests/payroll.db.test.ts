@@ -8,6 +8,7 @@ import { saveEmployeeProfile } from "@/server/hr/employee-service";
 import { generatePayroll, getPayrollPage, payrollCostByStore, publishPayroll, savePlan, setAdjustment, voidPayroll } from "@/server/hr/payroll-service";
 import { voidSalesOrderTx } from "@/server/sales/sales-service";
 import { runIntegrityChecks } from "../prisma/integrity-checks";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 提成和工资条（口径第 19 节，连本机库，事务回滚不留数据）：按考勤扣缺勤、按开单算提成、奖惩、发布锁定、作废重算、
 // 只有本人和总部看得到、按那天在哪家店分摊到门店。测试的人和单据都在事务里新建。
@@ -73,7 +74,7 @@ async function setup(tx: Prisma.TransactionClient) {
   const device = await tx.device.create({ data: { code: "PAYTEST000000001", skuId: b.deviceSkuId, storeId: b.a.id, status: "SOLD", costFen: 200000 } });
   const order = await tx.salesOrder.create({ data: { orderNo: "SO-PAYTEST-1", storeId: b.a.id, salespersonId: staff.id, bizDate: dateFromKey(day(5)), subtotalFen: 300000, totalFen: 300000 } });
   const item = await tx.salesOrderItem.create({ data: { orderId: order.id, skuId: b.deviceSkuId, deviceId: device.id, unitPriceFen: 300000, lineTotalFen: 300000, costFen: 200000 } });
-  const customer = await tx.customer.create({ data: { name: "工资测试客户", phone: "19900001111" } });
+  const customer = await tx.customer.create({ data: { name: "工资测试客户", ...phoneColumns("19900001111") } });
   const order2 = await tx.salesOrder.create({ data: { orderNo: "SO-PAYTEST-2", storeId: b.a.id, salespersonId: staff.id, customerId: customer.id, bizDate: dateFromKey(day(6)), subtotalFen: 10000, totalFen: 10000 } });
   const item2 = await tx.salesOrderItem.create({ data: { orderId: order2.id, skuId: b.serviceSkuId, unitPriceFen: 10000, lineTotalFen: 10000, costFen: 0 } });
   await tx.serviceEntitlement.create({ data: { customerId: customer.id, storeId: b.a.id, salesOrderId: order2.id, salesOrderItemId: item2.id, skuId: b.serviceSkuId, startedOn: dateFromKey(day(6)), expiresOn: dateFromKey(day(28)) } });

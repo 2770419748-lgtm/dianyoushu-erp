@@ -10,6 +10,7 @@ import { createReturnTx } from "@/server/sales/return-service";
 import { createSalesOrderTx, SalesError, voidSalesOrderTx } from "@/server/sales/sales-service";
 import { receiveDevices } from "@/server/stock/stock-service";
 import { todayBizDate } from "@/server/stock/doc-no";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 服务权益（口径第 12 节，连本机库，事务回滚不留数据）：
 // 碎屏险、延保开单不动库存、必须选客户、一行一份、生成权益；作废或退掉服务时权益失效；到期提醒每档只生成一次。
@@ -65,7 +66,7 @@ afterAll(async () => {
 
 async function setup(tx: Prisma.TransactionClient, seed: number, devices = 1) {
   const f = fixture!;
-  const customer = await tx.customer.create({ data: { name: "权益测试", phone: `199${String(seed).padStart(8, "0")}` } });
+  const customer = await tx.customer.create({ data: { name: "权益测试", ...phoneColumns(`199${String(seed).padStart(8, "0")}`) } });
   const deviceIds = await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: Array.from({ length: devices }, (_, i) => ({ sn: null, imei1: imei(seed * 10 + i), imei2: null })), costFen: 300000, docType: "PURCHASE_RECEIPT", docNo: `RI-ENT-${seed}`, operatorId: f.user.id });
   return { customerId: customer.id, deviceIds };
 }

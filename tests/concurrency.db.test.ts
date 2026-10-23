@@ -5,6 +5,7 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { importSettlementCsv } from "@/server/carrier/carrier-service";
 import { lockStoreDay } from "@/server/dailyclose/guard";
 import { applyDeviceAction, changeAccessoryStock, StockError } from "@/server/stock/stock-service";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 并发测试（连本机库）：两个事务真的同时跑，验证“两人同时卖同一台 / 同时卖最后几件 / 同店同日排队”。
 // 做法：事务 A 改完先不提交、停一会儿；事务 B 这时开始，读到的还是旧数据，按老写法会两个都成功。
@@ -123,7 +124,7 @@ describe("并发（连本机库）", () => {
     const user = { ...hq, store: null, region: null } as CurrentUser;
     const months = ["2019-01", "2019-02"]; // 不会有真实结算单的月份
     const business = await prisma.carrierBusiness.create({
-      data: { orderNo: "RACE-YY-0001", storeId: store.id, handledById: hq.id, carrier: "CTCC", bizType: "BROADBAND", phone: "13800009951", packageName: "并发测试", carrierOrderNo: "RACE-JS-0001", bizDate: new Date("2019-01-10"), expectedCommissionFen: 13000, clawbackMonths: 12, status: "ACTIVATED", activatedAt: new Date() },
+      data: { orderNo: "RACE-YY-0001", storeId: store.id, handledById: hq.id, carrier: "CTCC", bizType: "BROADBAND", ...phoneColumns("13800009951"), packageName: "并发测试", carrierOrderNo: "RACE-JS-0001", bizDate: new Date("2019-01-10"), expectedCommissionFen: 13000, clawbackMonths: 12, status: "ACTIVATED", activatedAt: new Date() },
     });
     try {
       const csv = "受理单号,佣金\nRACE-JS-0001,130";

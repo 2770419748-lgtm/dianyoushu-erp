@@ -4,11 +4,16 @@
 import { isValidAesKey } from "./wecom/crypto";
 import { WECOM_REQUIRED_ENV } from "./wecom/config";
 import { LLM_REQUIRED_ENV } from "./llm/config";
+import { decodeDataKey, DEV_DATA_KEYS } from "./pii/crypto";
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
 
 // .env.example 和 CI 里的占位值，原样拿去上线等于没设
 const PLACEHOLDER_SECRETS = ["换成你自己的随机字符串", "ci-only-placeholder-not-a-real-secret"];
+
+// 个人信息加密的两把钥匙（口径第 20 节）：代码里写死的开发钥匙、CI 里的测试钥匙都是公开的，不能拿去上线
+const CI_DATA_KEYS = ["Y2ktb25seS1kYXRhLWVuY3J5cHRpb24ta2V5LTMyYnk=", "Y2ktb25seS1kYXRhLWluZGV4LWtleS0zMmJ5dGVzISE="];
+const PUBLIC_DATA_KEYS = [...Object.values(DEV_DATA_KEYS), ...CI_DATA_KEYS];
 
 export function checkProductionEnv(env: Record<string, string | undefined>): string[] {
   const problems: string[] = [];
@@ -20,6 +25,13 @@ export function checkProductionEnv(env: Record<string, string | undefined>): str
   } else if (secret.length < MIN_SESSION_SECRET_LENGTH) {
     problems.push(`SESSION_SECRET 太短（${secret.length} 个字符），至少要 ${MIN_SESSION_SECRET_LENGTH} 个；可以用 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" 生成`);
   }
+  for (const name of ["DATA_ENCRYPTION_KEY", "DATA_INDEX_KEY"] as const) {
+    const value = env[name];
+    if (!value) problems.push(`没有设置 ${name}（个人信息加密用，口径第 20 节）：用 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" 生成，另外离线存一份`);
+    else if (!decodeDataKey(value)) problems.push(`${name} 格式不对：要 32 字节的 base64`);
+    else if (PUBLIC_DATA_KEYS.includes(value)) problems.push(`${name} 还是开发或测试用的公开钥匙，要换成自己生成的`);
+  }
+  if (env.DATA_ENCRYPTION_KEY && env.DATA_ENCRYPTION_KEY === env.DATA_INDEX_KEY) problems.push("DATA_ENCRYPTION_KEY 和 DATA_INDEX_KEY 不能用同一个");
   if (!env.DATABASE_URL) problems.push("没有设置 DATABASE_URL");
   else if (/:(你的密码|password|postgres)@/.test(env.DATABASE_URL)) problems.push("DATABASE_URL 里的数据库密码还是示例值或默认值");
   // 演示模式必须写明：演示站写 1，真给门店用写 0（docs/部署.md 上线前检查清单第 1 条）。不写就拒绝，免得真店忘了关演示模式

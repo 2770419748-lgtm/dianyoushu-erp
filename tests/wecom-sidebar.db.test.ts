@@ -6,6 +6,7 @@ import { createSimulatedWecomClient } from "@/server/wecom/client";
 import { claimFromSidebar, getSidebarProfile, issueSidebarToken, type SidebarUser, sidebarUserFromToken } from "@/server/wecom/sidebar-service";
 import { unbindCustomerWecom } from "@/server/wecom/contact-service";
 import { signSidebarToken } from "@/server/wecom/sidebar-token";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 企微侧边栏（口径第 12 节第三步，连本机库）：票换人要核对会话版本和企业微信账号；只能看自己的好友；按完整手机号认领。
 // 画像只读演示数据；认领在事务里做、最后回滚，不留数据。
@@ -81,12 +82,12 @@ describe("企微侧边栏（连本机库）", () => {
     await inRolledBackTx(async (tx) => {
       const ext = "wmSidebarTest0001";
       await tx.wecomFollow.create({ data: { externalUserid: ext, wecomUserid: me.wecomUserid, userId: me.id, firstAddAt: new Date() } });
-      const a = await tx.customer.create({ data: { name: "侧边栏甲", phone: "19900001111" } });
-      const b = await tx.customer.create({ data: { name: "侧边栏乙", phone: "19900002222", wecomExternalUserid: "wmSomebodyElse01" } });
+      const a = await tx.customer.create({ data: { name: "侧边栏甲", ...phoneColumns("19900001111") } });
+      await tx.customer.create({ data: { name: "侧边栏乙", ...phoneColumns("19900002222"), wecomExternalUserid: "wmSomebodyElse01" } });
       await expect(claimFromSidebar(me, ext, "1990000", { client, db: tx })).rejects.toThrow("11 位手机号");
       await expect(claimFromSidebar(me, ext, "19900009999", { client, db: tx })).rejects.toThrow("没有这个手机号");
-      await expect(claimFromSidebar(me, ext, b.phone, { client, db: tx })).rejects.toThrow("已经绑了别的微信");
-      await expect(claimFromSidebar(me, "wmNotMyFriend01", a.phone, { client, db: tx })).rejects.toThrow("不是你的企业微信好友");
+      await expect(claimFromSidebar(me, ext, "19900002222", { client, db: tx })).rejects.toThrow("已经绑了别的微信");
+      await expect(claimFromSidebar(me, "wmNotMyFriend01", "19900001111", { client, db: tx })).rejects.toThrow("不是你的企业微信好友");
 
       expect(await claimFromSidebar(me, ext, "199 0000 1111", { client, db: tx })).toEqual({ id: a.id, name: "侧边栏甲" });
       const bound = await tx.customer.findUniqueOrThrow({ where: { id: a.id } });
@@ -94,9 +95,9 @@ describe("企微侧边栏（连本机库）", () => {
       expect((await tx.wecomFollow.findFirstOrThrow({ where: { externalUserid: ext } })).customerId).toBe(a.id);
       expect(await tx.auditLog.count({ where: { action: "wecom.claim", entityId: String(a.id) } })).toBe(1);
 
-      const c = await tx.customer.create({ data: { name: "侧边栏丙", phone: "19900003333" } });
-      await expect(claimFromSidebar(me, ext, c.phone, { client, db: tx })).rejects.toThrow("这个微信已经绑了别的客户");
-      await expect(claimFromSidebar(me, ext, a.phone, { client, db: tx })).rejects.toThrow("已经绑定在这个客户上了");
+      const c = await tx.customer.create({ data: { name: "侧边栏丙", ...phoneColumns("19900003333") } });
+      await expect(claimFromSidebar(me, ext, "19900003333", { client, db: tx })).rejects.toThrow("这个微信已经绑了别的客户");
+      await expect(claimFromSidebar(me, ext, "19900001111", { client, db: tx })).rejects.toThrow("已经绑定在这个客户上了");
 
       // 绑错了能解绑：店员不行、要写原因；解绑后好友关系不再算这个客户，客户本人的微信能再绑
       await expect(unbindCustomerWecom(me, a.id, "输错了", tx)).rejects.toThrow("店长和总部");
@@ -106,7 +107,7 @@ describe("企微侧边栏（连本机库）", () => {
       expect(await tx.customer.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ wecomExternalUserid: null, wecomNickname: null });
       expect((await tx.wecomFollow.findFirstOrThrow({ where: { externalUserid: ext } })).customerId).toBeNull();
       expect(await tx.auditLog.count({ where: { action: "wecom.unbind", entityId: String(a.id) } })).toBe(1);
-      expect(await claimFromSidebar(me, ext, c.phone, { client, db: tx })).toMatchObject({ id: c.id });
+      expect(await claimFromSidebar(me, ext, "19900003333", { client, db: tx })).toMatchObject({ id: c.id });
     });
   });
 });

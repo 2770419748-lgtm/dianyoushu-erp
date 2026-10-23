@@ -33,6 +33,17 @@ export async function createTradeInAction(input: tradeIn.TradeInInput): Promise<
   }
 }
 
+/** 店长及以上看回收单卖家的完整身份证号（记日志） */
+export async function revealSellerIdAction(tradeInId: number): Promise<{ ok: true; idNo: string } | { ok: false; error: string }> {
+  const user = await requireUser();
+  try {
+    return { ok: true, idNo: await tradeIn.revealSellerId(user, tradeInId) };
+  } catch (error) {
+    const r = toError(error);
+    return { ok: false, error: r.ok ? "操作失败，请稍后再试" : r.error };
+  }
+}
+
 export async function refurbishAction(deviceId: number): Promise<TradeInActionResult> {
   const user = await requireUser();
   try {

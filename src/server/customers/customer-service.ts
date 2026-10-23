@@ -1,14 +1,14 @@
 import "server-only";
 import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
-import { maskPhone } from "@/lib/sales-labels";
 import { canSell } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { canAccessStoreSafe } from "@/server/auth/scope";
 import { listCustomerEntitlements } from "@/server/entitlement/entitlement-service";
+import { phoneColumns, phoneSearch } from "@/server/pii/crypto";
 
-// 客户：按手机号查、新建。手机号在列表和详情里一律脱敏显示；客户不分门店（口径第 8 节）。
+// 客户：按手机号查、新建。手机号加密存（口径第 20 节），列表和详情里一律只显示打码号码；客户不分门店（口径第 8 节）。
 
 export class CustomerError extends Error {}
 
@@ -24,25 +24,23 @@ export async function searchCustomers(user: CurrentUser, q = "", page = 1) {
   assertCanUse(user);
   const text = q.trim();
   const current = clampPage(page);
-  // 姓名和手机号都能模糊搜（2026-10-17 坤总定：门店常按手机尾号找人）。手机号至少输 4 位数字才按号码匹配，免得输一两位就把全部客户列出来。
-  // 已知取舍：能模糊搜手机号，有心人可以一位一位试出被脱敏的中间 4 位；只有店员、店长、总部能搜，演示版接受。
-  const where = !text
-    ? {}
-    : /^\d{4,11}$/.test(text)
-      ? { OR: [{ phone: { contains: text } }, { name: { contains: text, mode: "insensitive" as const } }] }
-      : { name: { contains: text, mode: "insensitive" as const } };
+  // 姓名模糊搜；手机号加密以后（口径第 20 节）只能整号（11 位）或尾号（4 位）搜，中间几位搜不到。
+  // （2026-10-17 坤总定的是“至少输 4 位就能模糊搜”，加密后做不到原样，改成这样；也顺带堵住了一位一位试出中间 4 位的口子）
+  const byPhone = text ? phoneSearch(text) : null;
+  const byName = { name: { contains: text, mode: "insensitive" as const } };
+  const where = !text ? {} : byPhone ? { OR: [byPhone, byName] } : byName;
   const [rows, total] = await Promise.all([
     prisma.customer.findMany({
       where,
       orderBy: { id: "desc" },
       skip: (current - 1) * CUSTOMER_PAGE_SIZE,
       take: CUSTOMER_PAGE_SIZE,
-      select: { id: true, name: true, phone: true, note: true, createdAt: true, _count: { select: { salesOrders: true } } },
+      select: { id: true, name: true, phoneMasked: true, note: true, createdAt: true, _count: { select: { salesOrders: true } } },
     }),
     prisma.customer.count({ where }),
   ]);
   return {
-    rows: rows.map((c) => ({ id: c.id, name: c.name, phoneMasked: maskPhone(c.phone), note: c.note, createdAt: c.createdAt, orders: c._count.salesOrders })),
+    rows: rows.map((c) => ({ id: c.id, name: c.name, phoneMasked: c.phoneMasked, note: c.note, createdAt: c.createdAt, orders: c._count.salesOrders })),
     total,
     page: current,
     pageSize: CUSTOMER_PAGE_SIZE,
@@ -57,24 +55,29 @@ export interface CustomerInput {
   note?: unknown;
 }
 
-function parseCustomer(input: CustomerInput) {
+function parseName(input: CustomerInput) {
   const name = typeof input.name === "string" ? input.name.trim() : "";
   if (!name) throw new CustomerError("请填客户姓名");
   if (name.length > 30) throw new CustomerError("姓名最多 30 个字");
-  const phone = typeof input.phone === "string" ? input.phone.replace(/\s+/g, "") : "";
-  if (!PHONE_PATTERN.test(phone)) throw new CustomerError("手机号要 11 位，1 开头");
   const note = typeof input.note === "string" ? input.note.trim() : "";
   if (note.length > 200) throw new CustomerError("备注最多 200 个字");
-  return { name, phone, note: note || null };
+  return { name, note: note || null };
+}
+
+function parsePhone(value: unknown): string {
+  const phone = typeof value === "string" ? value.replace(/\s+/g, "") : "";
+  if (!PHONE_PATTERN.test(phone)) throw new CustomerError("手机号要 11 位，1 开头");
+  return phone;
 }
 
 export async function createCustomer(user: CurrentUser, input: CustomerInput) {
   assertCanUse(user);
-  const data = parseCustomer(input);
+  const base = parseName(input);
+  const phone = phoneColumns(parsePhone(input.phone));
   try {
-    const customer = await prisma.customer.create({ data });
-    await writeAudit({ userId: user.id, action: "customer.create", entity: "customer", entityId: customer.id, detail: { name: data.name, phoneMasked: maskPhone(data.phone) } });
-    return { id: customer.id, name: customer.name, phoneMasked: maskPhone(customer.phone) };
+    const customer = await prisma.customer.create({ data: { ...base, ...phone } });
+    await writeAudit({ userId: user.id, action: "customer.create", entity: "customer", entityId: customer.id, detail: { name: base.name, phoneMasked: phone.phoneMasked } });
+    return { id: customer.id, name: customer.name, phoneMasked: customer.phoneMasked };
   } catch (error) {
     if (typeof error === "object" && error !== null && (error as { code?: string }).code === "P2002") {
       throw new CustomerError("这个手机号已经有客户了，直接搜出来选");
@@ -87,9 +90,9 @@ export async function createCustomer(user: CurrentUser, input: CustomerInput) {
 export async function updateCustomer(user: CurrentUser, id: number, input: CustomerInput) {
   assertCanUse(user);
   const phoneText = typeof input.phone === "string" ? input.phone.trim() : "";
-  const current = await prisma.customer.findUnique({ where: { id }, select: { phone: true } });
+  const current = await prisma.customer.findUnique({ where: { id }, select: { id: true } });
   if (!current) throw new CustomerError("客户不存在");
-  const data = parseCustomer({ ...input, phone: phoneText || current.phone });
+  const data = { ...parseName(input), ...(phoneText ? phoneColumns(parsePhone(phoneText)) : {}) };
   try {
     await prisma.customer.update({ where: { id }, data });
     await writeAudit({ userId: user.id, action: "customer.update", entity: "customer", entityId: id, detail: { name: data.name } });
@@ -118,7 +121,7 @@ export const CUSTOMER_ORDER_LIMIT = 30;
  */
 export async function getCustomerDetail(user: CurrentUser, id: number) {
   assertCanUse(user);
-  const customer = await prisma.customer.findUnique({ where: { id }, select: { id: true, name: true, phone: true, note: true, createdAt: true } });
+  const customer = await prisma.customer.findUnique({ where: { id }, select: { id: true, name: true, phoneMasked: true, note: true, createdAt: true } });
   if (!customer) return null;
   const [orders, orderCount, entitlements] = await Promise.all([
     prisma.salesOrder.findMany({
@@ -135,7 +138,7 @@ export async function getCustomerDetail(user: CurrentUser, id: number) {
     listCustomerEntitlements(id),
   ]);
   return {
-    customer: { id: customer.id, name: customer.name, phoneMasked: maskPhone(customer.phone), note: customer.note, createdAt: customer.createdAt },
+    customer: { id: customer.id, name: customer.name, phoneMasked: customer.phoneMasked, note: customer.note, createdAt: customer.createdAt },
     orders: orders.map((o) => {
       const canOpen = canAccessStoreSafe(user, o.store) && (user.role !== "STAFF" || o.salesperson.id === user.id);
       return {

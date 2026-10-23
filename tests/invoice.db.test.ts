@@ -12,6 +12,7 @@ import { submitClaimTx } from "@/server/subsidy/subsidy-service";
 import { simulateInvoiceNumber } from "@/lib/invoice";
 import { todayBizDate, todayBizDateText } from "@/server/stock/doc-no";
 import { runIntegrityChecks } from "../prisma/integrity-checks";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 发票（口径第 16 节，连本机库，事务回滚不留数据）：申请、开具、撤回、红冲、纸质票到店；退货作废联动；国补带发票号；对账自检第 10 类。
 
@@ -72,7 +73,7 @@ async function setSeller(tx: Prisma.TransactionClient) {
 /** 卖一台机器（可整单优惠）给一个新客户 */
 async function sale(tx: Prisma.TransactionClient, seed: number, opts: { discountFen?: number; subsidy?: boolean } = {}) {
   const f = fixture!;
-  const customer = await tx.customer.create({ data: { name: "发票测试", phone: `195${String(seed).padStart(8, "0")}` } });
+  const customer = await tx.customer.create({ data: { name: "发票测试", ...phoneColumns(`195${String(seed).padStart(8, "0")}`) } });
   const [deviceId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.phoneSkuId, devices: [{ sn: null, imei1: imei(seed), imei2: null }], costFen: 100000, docType: "PURCHASE_RECEIPT", docNo: `RI-KP-${seed}`, operatorId: f.hq.id });
   const totalFen = f.priceFen - (opts.discountFen ?? 0);
   const subsidyFen = opts.subsidy ? Math.min(Math.round((totalFen * 1500) / 10000), 50000) : 0;

@@ -97,7 +97,7 @@ export function RepairIntakeForm({ stores, defaultStoreId }: { stores: { id: num
           ) : (
             <Space orientation="vertical" style={{ width: "100%" }}>
               <Space wrap>
-                <Input.Search placeholder="输手机号（至少 4 位）或姓名找客户" style={{ width: "min(280px, 100%)" }} allowClear onSearch={async (q) => setCustomerResults(q.trim() ? await searchCustomersAction(q) : [])} />
+                <Input.Search placeholder="输完整手机号、尾号 4 位或姓名找客户" style={{ width: "min(280px, 100%)" }} allowClear onSearch={async (q) => setCustomerResults(q.trim() ? await searchCustomersAction(q) : [])} />
                 <Button onClick={() => { customerForm.resetFields(); setCustomerModalOpen(true); }}>新客户</Button>
               </Space>
               {customerResults.length > 0 ? (

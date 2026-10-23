@@ -211,6 +211,11 @@ export function canRunReminderScan(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
 }
 
+/** 谁能看回收单卖家的完整身份证号：店长及以上，每看一次记日志；店员只看打码的（口径第 20 节） */
+export function canSeeSellerId(role: Role): boolean {
+  return role !== "STAFF";
+}
+
 /** 谁能看成本（机器成本、商品参考成本、销售明细成本）：店长、区域经理、总部；店员拿到的数据里就是 0（2026-10-18 坤总定） */
 export function canSeeCost(role: Role): boolean {
   return role !== "STAFF";

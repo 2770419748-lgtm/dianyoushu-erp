@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import type { ReminderStage } from "@/generated/prisma/enums";
 import { daysUntil, entitlementPeriod, stageDateRange, type ReminderStageKey } from "@/lib/entitlement";
-import { maskPhone } from "@/lib/sales-labels";
 import { canFollowUpReminders, canRunReminderScan, canSell } from "@/server/auth/permissions";
 import { assertStoreAccess, PermissionError, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
@@ -97,7 +96,7 @@ export async function listExpiringEntitlements(user: CurrentUser, query: { stage
       skip: (page - 1) * EXPIRING_PAGE_SIZE,
       take: EXPIRING_PAGE_SIZE,
       include: {
-        customer: { select: { id: true, name: true, phone: true } },
+        customer: { select: { id: true, name: true, phoneMasked: true } },
         sku: { select: { name: true } },
         device: { select: { code: true } },
         store: { select: { code: true, name: true } },
@@ -110,7 +109,7 @@ export async function listExpiringEntitlements(user: CurrentUser, query: { stage
   return {
     rows: rows.map(({ customer, reminders, ...r }) => ({
       ...shape(r, today),
-      customer: { id: customer.id, name: customer.name, phoneMasked: maskPhone(customer.phone) },
+      customer: { id: customer.id, name: customer.name, phoneMasked: customer.phoneMasked },
       reminder: reminders[0] ?? null,
     })),
     total,

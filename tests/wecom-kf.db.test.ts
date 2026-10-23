@@ -6,6 +6,7 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { createSimulatedWecomClient, type KfInboundMessage, type WecomClient } from "@/server/wecom/client";
 import { cleanupKfMessages, handleKfMessage, onKfMsgOrEvent } from "@/server/wecom/kf-service";
 import { simulateKfMessage, SIMULATED_KF_ID } from "@/server/wecom/simulator";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 微信客服（口径第 12 节第三步，连本机库，事务回滚不留数据）：去重、认意图答复、转人工后不再自动答、
 // 会话结束恢复、48 小时外不发、我的保障只答绑定过的、游标存库、180 天清理、演示的模拟发消息。
@@ -169,7 +170,7 @@ describe("微信客服（连本机库，事务回滚）", () => {
     if (!hq) return ctx.skip();
     await inRolledBackTx(async (tx) => {
       const ext = "wmKfTestBound01";
-      await tx.customer.create({ data: { name: "客服测试", phone: "19911112222", wecomExternalUserid: ext } });
+      await tx.customer.create({ data: { name: "客服测试", ...phoneColumns("19911112222"), wecomExternalUserid: ext } });
       const inbox = [msg(ext, "我的碎屏险到什么时候"), msg(ext, "iPhone 16 多少钱")];
       const client = createSimulatedWecomClient({ kfInbox: inbox });
       const note = await onKfMsgOrEvent({ OpenKfId: "wkTest01", Token: "t" }, { db: tx, client, now: new Date(), simulated: true });

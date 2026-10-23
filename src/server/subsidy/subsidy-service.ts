@@ -5,7 +5,6 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { SubsidyClaimStatus } from "@/generated/prisma/enums";
 import { monthRange } from "@/lib/carrier";
 import { isValidFen, MAX_AMOUNT_FEN } from "@/lib/limits";
-import { maskPhone } from "@/lib/sales-labels";
 import {
   applyPlatformResult,
   lineBaseFen,
@@ -362,7 +361,7 @@ export async function listClaims(user: CurrentUser, query: SubsidyQuery) {
       take: SUBSIDY_PAGE_SIZE,
       include: {
         store: { select: { code: true, name: true } },
-        customer: { select: { id: true, name: true, phone: true } },
+        customer: { select: { id: true, name: true, phoneMasked: true } },
         salesOrder: { select: { id: true, orderNo: true } },
         device: { select: { code: true, sku: { select: { name: true } } } },
         category: { select: { name: true } },
@@ -371,7 +370,7 @@ export async function listClaims(user: CurrentUser, query: SubsidyQuery) {
     prisma.subsidyClaim.count({ where }),
   ]);
   return {
-    rows: rows.map(({ customer, ...r }) => ({ ...r, customer: { id: customer.id, name: customer.name, phoneMasked: maskPhone(customer.phone) } })),
+    rows: rows.map(({ customer, ...r }) => ({ ...r, customer: { id: customer.id, name: customer.name, phoneMasked: customer.phoneMasked } })),
     total,
     page,
     pageSize: SUBSIDY_PAGE_SIZE,

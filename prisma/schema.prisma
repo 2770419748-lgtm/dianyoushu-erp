@@ -1021,7 +1021,10 @@ model StocktakeItem {
 model Customer {
   id        Int      @id @default(autoincrement())
   name      String
-  phone     String   @unique // 列表脱敏显示
+  // 手机号加密存（口径第 20 节）：密文、指纹（整号查找、全公司唯一）、打码号码（显示、尾号搜索）
+  phoneEnc    String @map("phone_enc")
+  phoneFp     String @unique @map("phone_fp")
+  phoneMasked String @map("phone_masked")
   note      String?
   wecomExternalUserid String?   @unique @map("wecom_external_userid") // 企业微信外部联系人 id，开单绑定码加微后写入；不按手机号自动匹配
   wecomNickname       String?   @map("wecom_nickname") // 加微时的微信昵称（快照）
@@ -1200,6 +1203,11 @@ model TradeInOrder {
   skuId        Int?          @map("sku_id") // 能对上 SKU 时填
   condition    String // 成色：全新 / 95 新 / 9 成新 / 8 成新 / 有损
   appraisedFen Int           @map("appraised_fen") // 估价 = 抵扣金额 = 旧机成本
+  // 卖家身份（口径第 20 节，2026-10-23 起新开的单必填）：身份证号加密存，店员只看打码的
+  sellerName     String?     @map("seller_name")
+  sellerIdEnc    String?     @map("seller_id_enc")
+  sellerIdFp     String?     @map("seller_id_fp")
+  sellerIdMasked String?     @map("seller_id_masked")
   status       TradeInStatus @default(COMPLETED)
   note         String?
   voidedById   Int?          @map("voided_by_id")
@@ -1218,6 +1226,7 @@ model TradeInOrder {
   payment    Payment?    // 对应的抵扣支付明细
 
   @@index([storeId, createdAt])
+  @@index([sellerIdFp])
   @@map("trade_in_orders")
 }
 
@@ -1414,7 +1423,10 @@ model CarrierBusiness {
   customerId            Int?             @map("customer_id")
   carrier               Carrier
   bizType               CarrierBizType   @map("biz_type")
-  phone                 String // 办理的号码（宽带填联系电话），列表脱敏；不存身份证号
+  // 办理的号码（宽带填联系电话），加密存（口径第 20 节）；不存身份证号
+  phoneEnc              String           @map("phone_enc")
+  phoneFp               String           @map("phone_fp")
+  phoneMasked           String           @map("phone_masked")
   packageName           String           @map("package_name")
   monthlyFeeFen         Int?             @map("monthly_fee_fen")
   carrierOrderNo        String?          @map("carrier_order_no") // 运营商系统的受理单号（对账用）
@@ -1447,7 +1459,7 @@ model CarrierBusiness {
   @@index([storeId, bizDate])
   @@index([carrier, status])
   @@index([carrierOrderNo])
-  @@index([phone])
+  @@index([phoneFp])
   @@map("carrier_business")
 }
 
@@ -1482,7 +1494,8 @@ model CarrierSettlementLine {
   id             Int               @id @default(autoincrement())
   settlementId   Int               @map("settlement_id")
   carrierOrderNo String?           @map("carrier_order_no")
-  phone          String?
+  phoneEnc       String?           @map("phone_enc") // 结算单里的号码，加密存（口径第 20 节）
+  phoneMasked    String?           @map("phone_masked")
   bizType        CarrierBizType?   @map("biz_type")
   commissionFen  Int               @map("commission_fen")
   clawbackFen    Int               @map("clawback_fen")
@@ -1572,7 +1585,7 @@ model Invoice {
   buyerTaxNo        String?             @map("buyer_tax_no")
   buyerAddressPhone String?             @map("buyer_address_phone") // 专票要
   buyerBankAccount  String?             @map("buyer_bank_account") // 专票要
-  receiver          String? // 电子票的接收邮箱或手机
+  receiverEnc       String?             @map("receiver_enc") // 电子票的接收邮箱或手机，加密存（口径第 20 节），看的时候解开
   amountFen         Int                 @map("amount_fen") // 价税合计 = 明细合计（数据库 CHECK > 0）
   taxFen            Int                 @map("tax_fen") // 税额合计 = 明细合计
   status            InvoiceStatus       @default(REQUESTED)
@@ -1789,7 +1802,8 @@ model EmployeeProfile {
   userId        Int       @id @map("user_id")
   hireDate      DateTime? @map("hire_date") @db.Date
   position      String? // 岗位（文字，如“店员”“收银”“维修”）
-  phone         String? // 联系电话，列表里脱敏
+  phoneEnc      String?   @map("phone_enc") // 联系电话，加密存（口径第 20 节）；总部编辑、本人看时解开
+  phoneMasked   String?   @map("phone_masked") // 列表里显示
   baseSalaryFen Int       @default(0) @map("base_salary_fen") // 基本工资（每月，分；数据库 CHECK 不为负）
   leaveDate     DateTime? @map("leave_date") @db.Date // 离职日期（停用时填）
   commissionPlanId Int?   @map("commission_plan_id") // 提成方案（口径第 19 节，总部选）

@@ -8,6 +8,7 @@ import { createReturnTx } from "@/server/sales/return-service";
 import { createSalesOrderTx, voidSalesOrderTx } from "@/server/sales/sales-service";
 import { receiveDevices } from "@/server/stock/stock-service";
 import { todayBizDate } from "@/server/stock/doc-no";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 售后维修（口径第 13 节，连本机库，事务回滚不留数据）：接件规则、谁来付、碎屏险理赔一次、取机收款进日结、不动库存。
 
@@ -62,7 +63,7 @@ afterAll(async () => {
 /** 卖一台机器（可带碎屏险）给一个新客户 */
 async function soldDevice(tx: Prisma.TransactionClient, seed: number, withScreenInsurance: boolean) {
   const f = fixture!;
-  const customer = await tx.customer.create({ data: { name: "维修测试", phone: `197${String(seed).padStart(8, "0")}` } });
+  const customer = await tx.customer.create({ data: { name: "维修测试", ...phoneColumns(`197${String(seed).padStart(8, "0")}`) } });
   const [deviceId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: [{ sn: null, imei1: imei(seed), imei2: null }], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: `RI-WX-${seed}`, operatorId: f.hq.id });
   const items = withScreenInsurance ? [{ deviceId }, { skuId: f.screenSkuId, qty: 1, serviceDeviceId: deviceId }] : [{ deviceId }];
   const sale = await createSalesOrderTx(tx, f.hq, { storeId: f.storeId, customerId: customer.id, items, paymentMethod: "CASH" });
@@ -143,7 +144,7 @@ describe("售后维修（连本机库，事务回滚）", () => {
     await inRolledBackTx(async (tx) => {
       const [stockId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: [{ sn: null, imei1: imei(10), imei2: null }], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-WX-10", operatorId: f.hq.id });
       expect(stockId).toBeGreaterThan(0);
-      const customer = await tx.customer.create({ data: { name: "外来机", phone: "19700000099" } });
+      const customer = await tx.customer.create({ data: { name: "外来机", ...phoneColumns("19700000099") } });
       await expect(createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: customer.id, code: imei(10), faultCategory: "BATTERY", faultDescription: "x" })).rejects.toThrow(/在库/);
 
       await expect(createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: customer.id, code: "SNOUTSIDE001", faultCategory: "BOARD", faultDescription: "开不了机" })).rejects.toThrow(/机型/);
@@ -202,14 +203,14 @@ describe("售后维修（连本机库，事务回滚）", () => {
     if (!fixture) return ctx.skip();
     const f = fixture;
     await inRolledBackTx(async (tx) => {
-      const customer = await tx.customer.create({ data: { name: "季度险", phone: "19700000088" } });
+      const customer = await tx.customer.create({ data: { name: "季度险", ...phoneColumns("19700000088") } });
       const [deviceId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: [{ sn: null, imei1: imei(33), imei2: null }], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-WX-33", operatorId: f.hq.id });
       await createSalesOrderTx(tx, f.hq, { storeId: f.storeId, customerId: customer.id, items: [{ deviceId }, { skuId: f.screenSkuId, qty: 1 }], paymentMethod: "CASH" });
       const found = await lookupRepairDevice(f.hq, imei(33), tx);
       expect(found.kind).toBe("ours");
       if (found.kind === "ours") expect(found.entitlements.map((e) => e.name).join()).toMatch(/不绑机器/);
 
-      const outsider = await tx.customer.create({ data: { name: "外来机", phone: "19700000087" } });
+      const outsider = await tx.customer.create({ data: { name: "外来机", ...phoneColumns("19700000087") } });
       const first = await createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: outsider.id, code: "snoutcase1", modelName: "iPhone 12", faultCategory: "BATTERY", faultDescription: "x" });
       expect((await tx.repairOrder.findUniqueOrThrow({ where: { id: first.id } })).deviceCode).toBe("SNOUTCASE1");
       await expect(createRepairTx(tx, f.hq, { storeId: f.storeId, customerId: outsider.id, code: "SNOUTCASE1", modelName: "iPhone 12", faultCategory: "BATTERY", faultDescription: "x" })).rejects.toThrow(/没完结/);

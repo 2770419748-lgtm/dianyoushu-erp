@@ -3,7 +3,6 @@ import { lockStoreDay } from "./guard";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
 import type { PaymentMethod } from "@/generated/prisma/enums";
-import { maskPhone } from "@/lib/sales-labels";
 import { canCloseDay } from "@/server/auth/permissions";
 import { assertStoreAccess, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
@@ -48,7 +47,7 @@ async function loadDay(tx: Tx | typeof prisma, storeId: number, bizDate: Date) {
       orderBy: { id: "asc" },
       include: {
         payments: { select: { method: true, amountFen: true } },
-        customer: { select: { name: true, phone: true } },
+        customer: { select: { name: true, phoneMasked: true } },
         salesperson: { select: { name: true } },
       },
     });
@@ -61,7 +60,7 @@ async function loadDay(tx: Tx | typeof prisma, storeId: number, bizDate: Date) {
   const repairs = await tx.repairOrder.findMany({
       where: { storeId, bizDate, status: "CLOSED" },
       orderBy: { id: "asc" },
-      include: { payments: { select: { method: true, amountFen: true } }, customer: { select: { name: true, phone: true } }, closedBy: { select: { name: true } } },
+      include: { payments: { select: { method: true, amountFen: true } }, customer: { select: { name: true, phoneMasked: true } }, closedBy: { select: { name: true } } },
     });
   const close = await tx.dailyClose.findUnique({ where: { storeId_bizDate: { storeId, bizDate } }, include: { lines: true, confirmedBy: { select: { name: true } } } });
   const completed = orders.filter((o) => o.status === "COMPLETED");
@@ -87,7 +86,7 @@ export async function getDailyCloseView(user: CurrentUser, storeId: number, bizD
       totalFen: o.totalFen,
       payments: o.payments,
       mismatchFen: mismatch,
-      customer: o.customer ? `${o.customer.name} ${maskPhone(o.customer.phone)}` : "散客",
+      customer: o.customer ? `${o.customer.name} ${o.customer.phoneMasked}` : "散客",
       salesperson: o.salesperson.name,
       createdAt: o.createdAt,
     };
@@ -102,7 +101,7 @@ export async function getDailyCloseView(user: CurrentUser, storeId: number, bizD
     check: checkClose(lines, mismatched),
     orders,
     returns: day.returns.map((r) => ({ id: r.id, orderNo: r.orderNo, salesOrderNo: r.salesOrder.orderNo, refundFen: r.refundFen, payments: r.payments, handledBy: r.handledBy.name, createdAt: r.createdAt })),
-    repairs: day.repairs.map((r) => ({ id: r.id, orderNo: r.orderNo, chargeFen: r.chargeFen, payments: r.payments, customer: `${r.customer.name} ${maskPhone(r.customer.phone)}`, closedBy: r.closedBy?.name ?? "-", closedAt: r.closedAt })),
+    repairs: day.repairs.map((r) => ({ id: r.id, orderNo: r.orderNo, chargeFen: r.chargeFen, payments: r.payments, customer: `${r.customer.name} ${r.customer.phoneMasked}`, closedBy: r.closedBy?.name ?? "-", closedAt: r.closedAt })),
     totals: {
       orderCount: day.completed.length,
       voidedCount: orders.length - day.completed.length,

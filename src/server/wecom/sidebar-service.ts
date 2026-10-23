@@ -4,6 +4,7 @@ import { daysUntil, warrantyEndsOn } from "@/lib/entitlement";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { findSessionUser } from "@/server/auth/session-user";
 import { writeAudit } from "@/server/audit";
+import { decryptPii, phoneFingerprint } from "@/server/pii/crypto";
 import { CustomerError, getCustomerDetail } from "@/server/customers/customer-service";
 import { isUniqueViolation } from "@/server/db-errors";
 import { todayBizDate } from "@/server/stock/doc-no";
@@ -114,7 +115,7 @@ export async function claimFromSidebar(user: SidebarUser, externalUserid: unknow
   let result: { id: number; name: string };
   try {
     result = await withTx(db, async (tx) => {
-      const customer = await tx.customer.findUnique({ where: { phone: mobile }, select: { id: true, name: true, wecomExternalUserid: true } });
+      const customer = await tx.customer.findUnique({ where: { phoneFp: phoneFingerprint(mobile) }, select: { id: true, name: true, wecomExternalUserid: true } });
       if (!customer) throw new SidebarError("没有这个手机号的客户档案（开单时会自动建档）");
       if (customer.wecomExternalUserid === id) throw new SidebarError("已经绑定在这个客户上了");
       if (customer.wecomExternalUserid) throw new SidebarError("这个客户已经绑了别的微信，核对一下手机号");
@@ -160,8 +161,8 @@ export async function demoClaimHint(user: CurrentUser): Promise<{ name: string; 
   const order = await prisma.salesOrder.findFirst({
     where: { status: "COMPLETED", customer: { wecomExternalUserid: null }, ...(user.role === "STAFF" ? { salespersonId: user.id } : user.storeId ? { storeId: user.storeId } : {}) },
     orderBy: { id: "desc" },
-    select: { customer: { select: { name: true, phone: true } } },
+    select: { customer: { select: { name: true, phoneEnc: true } } },
   });
-  return order?.customer ? { name: order.customer.name, phone: order.customer.phone } : null;
+  return order?.customer ? { name: order.customer.name, phone: decryptPii(order.customer.phoneEnc) } : null;
 }
 

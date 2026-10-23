@@ -7,6 +7,7 @@ import { canEditEmployees, canViewEmployees } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
 import { writeAudit } from "@/server/audit";
+import { decryptPii, encryptPii } from "@/server/pii/crypto";
 import { asTx, type Db } from "@/server/db-tx";
 
 // 员工档案（口径第 19 节）：员工就是 ERP 的账号，档案补入职日期、岗位、电话、基本工资、离职日期。
@@ -67,8 +68,8 @@ export async function listEmployees(user: CurrentUser, query: { storeId?: number
       position: u.profile?.position ?? null,
       hireDate: u.profile?.hireDate ?? null,
       leaveDate: u.profile?.leaveDate ?? null,
-      phoneMasked: u.profile?.phone ? maskPhone(u.profile.phone) : null,
-      phone: showSalary ? (u.profile?.phone ?? null) : null, // 总部编辑时要原值
+      phoneMasked: u.profile?.phoneMasked ?? null,
+      phone: showSalary && u.profile?.phoneEnc ? decryptPii(u.profile.phoneEnc) : null, // 总部编辑时要原值（加密存，口径第 20 节）
       baseSalaryFen: showSalary ? (u.profile?.baseSalaryFen ?? 0) : null,
       note: showSalary ? (u.profile?.note ?? null) : null,
       commissionPlanId: showSalary ? (u.profile?.commissionPlanId ?? null) : null, // 提成方案和工资一样只给总部看
@@ -101,7 +102,7 @@ export async function saveEmployeeProfile(user: CurrentUser, userId: number, inp
     if (!Number.isInteger(commissionPlanId)) throw new EmployeeError("提成方案不对");
     if (commissionPlanId !== current && !(await db.commissionPlan.findFirst({ where: { id: commissionPlanId, isActive: true }, select: { id: true } }))) throw new EmployeeError("提成方案不存在或已经停用");
   }
-  const data = { hireDate, position: text(input.position, 20), phone: phone || null, baseSalaryFen: salary, leaveDate, note: text(input.note, 200), commissionPlanId };
+  const data = { hireDate, position: text(input.position, 20), phoneEnc: phone ? encryptPii(phone) : null, phoneMasked: phone ? maskPhone(phone) : null, baseSalaryFen: salary, leaveDate, note: text(input.note, 200), commissionPlanId };
   await db.employeeProfile.upsert({ where: { userId }, create: { userId, ...data }, update: data });
   // 日志不写电话和工资的具体值
   await writeAudit({ userId: user.id, action: "employee.profile.save", entity: "user", entityId: userId, detail: { position: data.position, hireDate: data.hireDate, leaveDate: data.leaveDate, commissionPlanId } }, asTx(db));
@@ -110,5 +111,5 @@ export async function saveEmployeeProfile(user: CurrentUser, userId: number, inp
 /** “我的”页：自己的档案（工资给本人看） */
 export async function getMyProfile(userId: number) {
   const p = await prisma.employeeProfile.findUnique({ where: { userId } });
-  return p ? { hireDate: p.hireDate, position: p.position, phone: p.phone, baseSalaryFen: p.baseSalaryFen, leaveDate: p.leaveDate } : null;
+  return p ? { hireDate: p.hireDate, position: p.position, phone: p.phoneEnc ? decryptPii(p.phoneEnc) : null, baseSalaryFen: p.baseSalaryFen, leaveDate: p.leaveDate } : null;
 }

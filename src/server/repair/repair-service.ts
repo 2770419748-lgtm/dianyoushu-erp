@@ -7,7 +7,6 @@ import { daysUntil } from "@/lib/entitlement";
 import { formatDate } from "@/lib/format";
 import { isValidFen, MAX_AMOUNT_FEN } from "@/lib/limits";
 import { FAULT_LABELS, payerOptions, REPAIR_PAYER_LABELS, repairChargeFen, type ServiceKindKey, warrantyEndsOn } from "@/lib/repair";
-import { maskPhone } from "@/lib/sales-labels";
 import { DEVICE_STATUS_LABELS } from "@/lib/stock-labels";
 import { canHandleRepair, canSeeCost, canVoidRepair } from "@/server/auth/permissions";
 import { assertStoreAccess, canAccessStoreSafe, PermissionError, storeScopeWhere } from "@/server/auth/scope";
@@ -63,7 +62,7 @@ async function lastSaleOf(db: Db, deviceId: number) {
   const line = await db.salesOrderItem.findFirst({
     where: { deviceId, order: { status: "COMPLETED" } },
     orderBy: { id: "desc" },
-    select: { qty: true, returnedQty: true, order: { select: { id: true, orderNo: true, bizDate: true, customer: { select: { id: true, name: true, phone: true } }, store: { select: { name: true } } } } },
+    select: { qty: true, returnedQty: true, order: { select: { id: true, orderNo: true, bizDate: true, customer: { select: { id: true, name: true, phoneMasked: true } }, store: { select: { name: true } } } } },
   });
   return line && line.returnedQty < line.qty ? line.order : null;
 }
@@ -99,7 +98,7 @@ export async function lookupRepairDevice(user: CurrentUser, rawCode: string, db:
     kind: "ours" as const,
     code: device.code,
     modelName: deviceModelName(device),
-    sale: sale ? { orderNo: sale.orderNo, bizDate: sale.bizDate, storeName: sale.store.name, customer: sale.customer ? { id: sale.customer.id, name: sale.customer.name, phoneMasked: maskPhone(sale.customer.phone) } : null } : null,
+    sale: sale ? { orderNo: sale.orderNo, bizDate: sale.bizDate, storeName: sale.store.name, customer: sale.customer ? { id: sale.customer.id, name: sale.customer.name, phoneMasked: sale.customer.phoneMasked } : null } : null,
     warrantyEndsOn: sale ? warrantyEndsOn(sale.bizDate) : null,
     inWarranty: sale ? daysUntil(warrantyEndsOn(sale.bizDate), today) >= 0 : false,
     entitlements: entitlements.map((e) => ({
@@ -398,7 +397,7 @@ export async function listRepairs(user: CurrentUser, query: { view?: RepairListV
       orderBy: { id: "desc" },
       skip: (page - 1) * REPAIR_PAGE_SIZE,
       take: REPAIR_PAGE_SIZE,
-      include: { store: { select: { code: true, name: true } }, customer: { select: { name: true, phone: true } }, receivedBy: { select: { name: true } } },
+      include: { store: { select: { code: true, name: true } }, customer: { select: { name: true, phoneMasked: true } }, receivedBy: { select: { name: true } } },
     }),
     prisma.repairOrder.count({ where }),
   ]);
@@ -408,7 +407,7 @@ export async function listRepairs(user: CurrentUser, query: { view?: RepairListV
       orderNo: r.orderNo,
       createdAt: r.createdAt,
       store: `${r.store.code} ${r.store.name}`,
-      customer: `${r.customer.name} ${maskPhone(r.customer.phone)}`,
+      customer: `${r.customer.name} ${r.customer.phoneMasked}`,
       modelName: r.modelName,
       deviceCode: r.deviceCode,
       fault: FAULT_LABELS[r.faultCategory],
@@ -432,7 +431,7 @@ export async function getRepair(user: CurrentUser, id: number) {
     where: { id },
     include: {
       store: { select: { id: true, code: true, name: true, regionId: true } },
-      customer: { select: { id: true, name: true, phone: true } },
+      customer: { select: { id: true, name: true, phoneMasked: true } },
       receivedBy: { select: { name: true } },
       closedBy: { select: { name: true } },
       voidedBy: { select: { name: true } },
@@ -452,7 +451,7 @@ export async function getRepair(user: CurrentUser, id: number) {
   return {
     ...repair,
     costFen: showCost ? repair.costFen : null,
-    customer: { id: repair.customer.id, name: repair.customer.name, phoneMasked: maskPhone(repair.customer.phone) },
+    customer: { id: repair.customer.id, name: repair.customer.name, phoneMasked: repair.customer.phoneMasked },
     salesOrder: repair.salesOrder ? { id: repair.salesOrder.id, orderNo: repair.salesOrder.orderNo, canOpen: canAccessStoreSafe(user, repair.salesOrder.store) } : null,
     warrantyEndsOn: repair.purchasedOn ? warrantyEndsOn(repair.purchasedOn) : null,
     payerOptions: options,

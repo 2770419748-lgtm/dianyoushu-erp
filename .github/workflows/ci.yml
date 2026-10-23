@@ -28,6 +28,9 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci?schema=public
       SESSION_SECRET: ci-only-placeholder-not-a-real-secret
+      # 个人信息加密钥匙（口径第 20 节）：CI 专用的公开值，生产环境会被拒绝
+      DATA_ENCRYPTION_KEY: Y2ktb25seS1kYXRhLWVuY3J5cHRpb24ta2V5LTMyYnk=
+      DATA_INDEX_KEY: Y2ktb25seS1kYXRhLWluZGV4LWtleS0zMmJ5dGVzISE=
       RUN_DESTRUCTIVE_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
@@ -73,13 +76,18 @@ jobs:
         run: |
           DB_PW=$(openssl rand -hex 16)
           SECRET=$(openssl rand -base64 32)
+          ENC_KEY=$(openssl rand -base64 32)
+          IDX_KEY=$(openssl rand -base64 32)
           echo "::add-mask::$DB_PW"
           echo "::add-mask::$SECRET"
+          echo "::add-mask::$ENC_KEY"
+          echo "::add-mask::$IDX_KEY"
           # 应用在生产模式下会拒绝默认密码 postgres，给容器单建一个随机密码的账号（临时库，跑完就没了）
           PGPASSWORD=postgres psql -h localhost -U postgres -d ci -v ON_ERROR_STOP=1 -q -c "CREATE ROLE erp_ci LOGIN SUPERUSER PASSWORD '$DB_PW'"
           docker run -d --name erp-ci --network host \
             -e DATABASE_URL="postgresql://erp_ci:$DB_PW@localhost:5432/ci?schema=public" \
             -e SESSION_SECRET="$SECRET" -e DEMO_MODE=1 \
+            -e DATA_ENCRYPTION_KEY="$ENC_KEY" -e DATA_INDEX_KEY="$IDX_KEY" \
             dianyoushu-erp:ci
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:3000/api/health; then echo; break; fi

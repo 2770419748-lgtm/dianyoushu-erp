@@ -141,7 +141,7 @@ export function CarrierListView({ data, query, stores, isHq }: { data: Data; que
         <Select allowClear placeholder="业务类型" style={{ width: 120 }} value={query.bizType} options={CARRIER_BIZ_TYPES.map((t) => ({ value: t, label: CARRIER_BIZ_TYPE_LABELS[t] }))} onChange={(v) => navigate({ bizType: v, page: 1 })} />
         <Input placeholder="月份 2026-09" defaultValue={query.month} style={{ width: 130 }} onPressEnter={(e) => navigate({ month: (e.target as HTMLInputElement).value.trim() || undefined, page: 1 })} />
         {stores.length > 1 ? <Select allowClear placeholder="全部门店" style={{ width: 180 }} value={query.storeId} options={stores.map((s) => ({ value: s.id, label: s.label }))} onChange={(v) => navigate({ storeId: v, page: 1 })} /> : null}
-        <Input.Search allowClear placeholder="单号、受理单号、号码（至少 4 位）" defaultValue={query.q} style={{ width: "min(280px, 100%)" }} onSearch={(v) => navigate({ q: v, page: 1 })} />
+        <Input.Search allowClear placeholder="单号、受理单号、完整号码或尾号 4 位" defaultValue={query.q} style={{ width: "min(280px, 100%)" }} onSearch={(v) => navigate({ q: v, page: 1 })} />
       </Space>
       <Table
         rowKey="id"

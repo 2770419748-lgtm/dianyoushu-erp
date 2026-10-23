@@ -6,7 +6,10 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { createReturnTx, ReturnError } from "@/server/sales/return-service";
 import { createSalesOrderTx, SalesError, voidSalesOrderTx } from "@/server/sales/sales-service";
 import { changeAccessoryStock, receiveDevices } from "@/server/stock/stock-service";
-import { createTradeInTx, GENERIC_TRADE_IN_SKU_NAME, refurbishTx, TradeInError } from "@/server/tradein/trade-in-service";
+import { createTradeInTx, GENERIC_TRADE_IN_SKU_NAME, refurbishTx, revealSellerId, TradeInError } from "@/server/tradein/trade-in-service";
+
+// 回收登记卖家身份（口径第 20 节）：GB 11643 里的示例号码，校验位是对的
+const SELLER = { sellerName: "回收测试卖家", sellerIdNo: "11010519491231002X" };
 
 // 第 7 周核心链路（连本机库，事务回滚不留数据）：
 // 回收单 → 旧机"回收"、成本 = 估价；开单关联回收单抵扣 + 两种支付；退货恢复库存、退款只退实付；
@@ -67,7 +70,7 @@ describe("以旧换新、多支付、退货、转良品（连本机库，事务�
     const f = fixture;
     await inRolledBackTx(async (tx) => {
       // 1. 回收单：旧机进回收，成本 = 估价
-      const tradeIn = await createTradeInTx(tx, f.user, {
+      const tradeIn = await createTradeInTx(tx, f.user, { ...SELLER,
         storeId: f.storeId,
         codesText: `SNOLD12345 ${imei(1)}`,
         skuId: f.deviceSkuId,
@@ -166,7 +169,7 @@ describe("以旧换新、多支付、退货、转良品（连本机库，事务�
     if (!dbReady || !fixture) return ctx.skip();
     const f = fixture;
     await inRolledBackTx(async (tx) => {
-      const tradeIn = await createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: imei(10), skuId: f.deviceSkuId, condition: "8 成新", appraisedFen: 50000 });
+      const tradeIn = await createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: imei(10), skuId: f.deviceSkuId, condition: "8 成新", appraisedFen: 50000 });
       await changeAccessoryStock(tx, { storeId: f.storeId, skuId: f.accessorySkuId, qtyDelta: 2, docType: "PURCHASE_RECEIPT", docNo: "RI-W7-2", operatorId: f.user.id });
       const s1 = await createSalesOrderTx(tx, f.user, { storeId: f.storeId, items: [{ skuId: f.accessorySkuId, qty: 1, unitPriceFen: 60000 }], tradeInOrderId: tradeIn.id, payments: [{ method: "CASH", amountFen: 10000 }] });
       await voidSalesOrderTx(tx, f.user, s1.id, "录错了");
@@ -182,10 +185,30 @@ describe("以旧换新、多支付、退货、转良品（连本机库，事务�
     if (!dbReady || !fixture) return ctx.skip();
     const f = fixture;
     await inRolledBackTx(async (tx) => {
-      await createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: imei(20), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 });
-      await expect(createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: imei(20), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(TradeInError);
-      await expect(createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: imei(21), skuId: 0, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(/机型/);
-      await expect(createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: imei(22), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 0 })).rejects.toThrow(/估价/);
+      await createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: imei(20), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 });
+      await expect(createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: imei(20), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(TradeInError);
+      await expect(createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: imei(21), skuId: 0, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(/机型/);
+      await expect(createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: imei(22), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 0 })).rejects.toThrow(/估价/);
+    });
+  });
+
+  it("回收登记卖家身份：姓名、身份证号必填，号码校验；库里存密文和打码号码，只有店长及以上能看全号且记日志（口径第 20 节）", async (ctx) => {
+    if (!dbReady || !fixture) return ctx.skip();
+    const f = fixture;
+    await inRolledBackTx(async (tx) => {
+      const input = { storeId: f.storeId, codesText: imei(23), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 };
+      await expect(createTradeInTx(tx, f.user, input)).rejects.toThrow("卖家姓名");
+      await expect(createTradeInTx(tx, f.user, { ...input, sellerName: "张三" })).rejects.toThrow("身份证号");
+      await expect(createTradeInTx(tx, f.user, { ...input, sellerName: "张三", sellerIdNo: "110105194912310021" })).rejects.toThrow("校验码"); // 最后一位错了
+      await expect(createTradeInTx(tx, f.user, { ...input, sellerName: "张三", sellerIdNo: "110105194902300020" })).rejects.toThrow("校验码"); // 校验位对、但 2 月 30 日不是真日期
+      const t = await createTradeInTx(tx, f.user, { ...input, sellerName: " 张三 ", sellerIdNo: "11010519491231002x" }); // 小写 x、前后空格照样认
+      const row = await tx.tradeInOrder.findUniqueOrThrow({ where: { id: t.id } });
+      expect(row).toMatchObject({ sellerName: "张三", sellerIdMasked: "110***********002X" });
+      expect(row.sellerIdEnc).toMatch(/^v1\./);
+      expect(JSON.stringify(row)).not.toContain("11010519491231002X"); // 库里没有完整号码
+      await expect(revealSellerId({ ...f.user, role: "STAFF" }, t.id, tx)).rejects.toThrow("店员只能看打码");
+      expect(await revealSellerId(f.user, t.id, tx)).toBe("11010519491231002X");
+      expect(await tx.auditLog.count({ where: { action: "trade_in.reveal_id", entityId: String(t.id) } })).toBe(1);
     });
   });
 
@@ -199,7 +222,7 @@ describe("以旧换新、多支付、退货、转良品（连本机库，事务�
       const saleItem = await tx.salesOrderItem.findFirstOrThrow({ where: { orderId: sale.id } });
 
       // 店员选了“其他机型”也没关系：系统知道这台是什么机型，以系统为准
-      const t = await createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: imei(30), skuId: generic.id, modelName: "随便写的", condition: "9 成新", appraisedFen: 209000 });
+      const t = await createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: imei(30), skuId: generic.id, modelName: "随便写的", condition: "9 成新", appraisedFen: 209000 });
       const device = await tx.device.findUniqueOrThrow({ where: { id: soldId! } });
       expect(device.status).toBe("RECYCLED");
       expect(device.skuId).toBe(f.deviceSkuId);
@@ -220,10 +243,10 @@ describe("以旧换新、多支付、退货、转良品（连本机库，事务�
       // 在库的机器、已经在回收库里的机器都不能再回收
       const [inStockId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: [{ sn: null, imei1: imei(31), imei2: null }], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: "RI-RETAKE2", operatorId: f.user.id });
       expect(inStockId).toBeGreaterThan(0);
-      await expect(createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: imei(31), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(/在库/);
-      await expect(createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: imei(30), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(/良品/);
+      await expect(createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: imei(31), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(/在库/);
+      await expect(createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: imei(30), skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(/良品/);
       // 两个码分属两台机器
-      await expect(createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: `${imei(30)} ${imei(31)}`, skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(/2 台/);
+      await expect(createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: `${imei(30)} ${imei(31)}`, skuId: f.deviceSkuId, condition: "全新", appraisedFen: 1000 })).rejects.toThrow(/2 台/);
     });
   });
 
@@ -233,7 +256,7 @@ describe("以旧换新、多支付、退货、转良品（连本机库，事务�
     await inRolledBackTx(async (tx) => {
       const generic = await tx.sku.findFirstOrThrow({ where: { name: GENERIC_TRADE_IN_SKU_NAME } });
       expect(generic.guidePriceFen).toBe(0);
-      const t = await createTradeInTx(tx, f.user, { storeId: f.storeId, codesText: imei(40), skuId: generic.id, modelName: "某品牌 X1", condition: "9 成新", appraisedFen: 209000 });
+      const t = await createTradeInTx(tx, f.user, { ...SELLER, storeId: f.storeId, codesText: imei(40), skuId: generic.id, modelName: "某品牌 X1", condition: "9 成新", appraisedFen: 209000 });
       const device = await tx.device.findUniqueOrThrow({ where: { tradeInOrderId: t.id } });
       await refurbishTx(tx, f.user, device.id);
       const sale = await createSalesOrderTx(tx, f.user, { storeId: f.storeId, items: [{ deviceId: device.id }], paymentMethod: "CASH" });

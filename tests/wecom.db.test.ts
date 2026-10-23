@@ -12,6 +12,7 @@ import { cleanupExpiredBindCodes, createOrderBindCode } from "@/server/wecom/con
 import { decryptWecomMessage, encryptWecomMessage, wecomSignature } from "@/server/wecom/crypto";
 import { buildEncryptedCallback, contactEventFields, simulateScanBindCode } from "@/server/wecom/simulator";
 import { OFFICIAL, OFFICIAL_POST } from "./fixtures/wecom-official";
+import { phoneColumns } from "@/server/pii/crypto";
 
 // 企业微信底座（口径第 12 节，连本机库，事务回滚不留数据）：回调验签、去重、按开单绑定码绑客户、删好友、令牌缓存。
 
@@ -76,7 +77,7 @@ afterAll(async () => {
 async function orderWithCode(tx: Prisma.TransactionClient, seed: number, client: WecomClient, now = new Date()) {
   const f = fixture!;
   await tx.user.update({ where: { id: f.user.id }, data: { wecomUserid: "zz_test_hq" } });
-  const customer = await tx.customer.create({ data: { name: "企微测试", phone: `198${String(seed).padStart(8, "0")}` } });
+  const customer = await tx.customer.create({ data: { name: "企微测试", ...phoneColumns(`198${String(seed).padStart(8, "0")}`) } });
   const [deviceId] = await receiveDevices(tx, { storeId: f.storeId, skuId: f.deviceSkuId, devices: [{ sn: null, imei1: imei(seed), imei2: null }], costFen: 1, docType: "PURCHASE_RECEIPT", docNo: `RI-WX-${seed}`, operatorId: f.user.id });
   const sale = await createSalesOrderTx(tx, f.user, { storeId: f.storeId, customerId: customer.id, items: [{ deviceId }], paymentMethod: "CASH" });
   const code = await createOrderBindCode(f.user, sale.id, { db: tx, client, now });

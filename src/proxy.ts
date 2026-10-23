@@ -58,8 +58,12 @@ export async function proxy(request: NextRequest) {
   if (pathname === "/wecom-app" || pathname.startsWith("/wecom-app/")) return nextWithCsp(request, { frameSelf: true });
   const session = await verifySessionToken(request.cookies.get(COOKIE_NAME)?.value);
 
+  // 清失效登录（POST，接口里核对来源）：cookie 在不在都放行
+  if (pathname === "/api/session/clear") return NextResponse.next();
   if (pathname.startsWith("/login")) {
-    return session ? NextResponse.redirect(new URL("/", request.url)) : nextWithCsp(request);
+    // 登录已失效（reason=expired）时 cookie 签名还有效，但账号已经用不了：照样进登录页，不弹回首页
+    const expired = request.nextUrl.searchParams.get("reason") === "expired";
+    return session && !expired ? NextResponse.redirect(new URL("/", request.url)) : nextWithCsp(request);
   }
   if (!session) {
     return NextResponse.redirect(new URL("/login", request.url));

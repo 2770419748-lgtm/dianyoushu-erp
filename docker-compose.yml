@@ -40,6 +40,9 @@ services:
     environment:
       DATABASE_URL: postgresql://erp:${POSTGRES_PASSWORD}@db:5432/dianyoushu_erp?schema=public
       SESSION_SECRET: ${SESSION_SECRET:?在 .env 里设置 SESSION_SECRET}
+      # 个人信息加密的两把钥匙（口径第 20 节），丢了数据就解不开，另外离线存一份
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?在 .env 里设置 DATA_ENCRYPTION_KEY}
+      DATA_INDEX_KEY: ${DATA_INDEX_KEY:?在 .env 里设置 DATA_INDEX_KEY}
       # 必须在 .env 里写明：演示站 1，真给门店用 0（见 docs/部署.md 上线前检查清单）；应用启动时也会检查
       DEMO_MODE: ${DEMO_MODE:?在 .env 里写明 DEMO_MODE：演示站 1，真给门店用 0}
       <<: *wecom-env
@@ -102,6 +105,9 @@ services:
       <<: *wecom-env
       # 压测（pnpm load-test）要用它签登录 cookie
       SESSION_SECRET: ${SESSION_SECRET}
+      # 灌演示数据、导入要加密手机号，必须和应用用同一套钥匙
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?在 .env 里设置 DATA_ENCRYPTION_KEY}
+      DATA_INDEX_KEY: ${DATA_INDEX_KEY:?在 .env 里设置 DATA_INDEX_KEY}
     depends_on:
       db:
         condition: service_healthy

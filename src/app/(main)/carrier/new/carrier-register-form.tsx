@@ -68,7 +68,7 @@ export function CarrierRegisterForm({ stores, defaultStoreId, rules }: { stores:
           ) : (
             <Space orientation="vertical" style={{ width: "100%" }}>
               <Space wrap>
-                <Input.Search placeholder="输手机号（至少 4 位）或姓名找客户（可不选）" style={{ width: "min(300px, 100%)" }} allowClear onSearch={async (q) => setResults(q.trim() ? await searchCustomersAction(q) : [])} />
+                <Input.Search placeholder="输完整手机号、尾号 4 位或姓名找客户（可不选）" style={{ width: "min(300px, 100%)" }} allowClear onSearch={async (q) => setResults(q.trim() ? await searchCustomersAction(q) : [])} />
                 <Button onClick={() => { customerForm.resetFields(); setCustomerModal(true); }}>新客户</Button>
               </Space>
               {results.length > 0 ? (

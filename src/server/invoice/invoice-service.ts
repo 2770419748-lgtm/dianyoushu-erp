@@ -9,6 +9,7 @@ import { canManageInvoice, canMarkInvoiceDelivered, canSell } from "@/server/aut
 import { assertStoreAccess, canAccessStoreSafe, PermissionError, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
+import { decryptPii, encryptPii } from "@/server/pii/crypto";
 import { lockRow } from "@/server/db-lock";
 import { type Db, withTx } from "@/server/db-tx";
 import { nextDocNo, todayBizDate, todayBizDateText } from "@/server/stock/doc-no";
@@ -89,7 +90,7 @@ export async function invoiceDraft(user: CurrentUser, salesOrderId: number) {
   const lines = draftLines(order);
   const active = await prisma.invoice.findFirst({ where: { salesOrderId, status: { in: INVOICE_ACTIVE_STATUSES } }, select: { id: true, requestNo: true, status: true } });
   const blocked = !canSell(user.role) ? "你的角色不能申请开票" : order.status !== "COMPLETED" ? "作废的单不能开票" : active ? `这张单已经有在办的发票 ${active.requestNo}` : lines.length === 0 ? "这张单没有可开票的金额（都退了）" : null;
-  const last = order.customer ? await prisma.invoice.findFirst({ where: { customerId: order.customer.id, status: { not: "CANCELLED" } }, orderBy: { id: "desc" }, select: { kind: true, titleType: true, titleName: true, buyerTaxNo: true, buyerAddressPhone: true, buyerBankAccount: true, receiver: true } }) : null;
+  const last = order.customer ? await prisma.invoice.findFirst({ where: { customerId: order.customer.id, status: { not: "CANCELLED" } }, orderBy: { id: "desc" }, select: { kind: true, titleType: true, titleName: true, buyerTaxNo: true, buyerAddressPhone: true, buyerBankAccount: true, receiverEnc: true } }) : null;
   return {
     order: { id: order.id, orderNo: order.orderNo, bizDate: order.bizDate, totalFen: order.totalFen, store: { code: order.store.code, name: order.store.name }, customer: order.customer },
     lines,
@@ -97,7 +98,7 @@ export async function invoiceDraft(user: CurrentUser, salesOrderId: number) {
     taxFen: lines.reduce((s, l) => s + l.taxFen, 0),
     blocked,
     activeId: active?.id ?? null,
-    lastTitle: last,
+    lastTitle: last ? { ...withoutReceiverEnc(last), receiver: last.receiverEnc ? decryptPii(last.receiverEnc) : null } : null,
   };
 }
 
@@ -126,7 +127,8 @@ export async function requestInvoiceTx(tx: Tx, user: CurrentUser, input: { sales
       storeId: order.storeId,
       salesOrderId,
       customerId: order.customerId,
-      ...title,
+      ...withoutReceiver(title),
+      receiverEnc: title.receiver ? encryptPii(title.receiver) : null, // 接收邮箱或手机加密存（口径第 20 节）
       amountFen: lines.reduce((s, l) => s + l.amountFen, 0),
       taxFen: lines.reduce((s, l) => s + l.taxFen, 0),
       requestedById: user.id,
@@ -289,6 +291,7 @@ export async function listInvoices(user: CurrentUser, query: InvoiceQuery) {
       skip: (page - 1) * INVOICE_PAGE_SIZE,
       take: INVOICE_PAGE_SIZE,
       include: { store: { select: { code: true, name: true } }, salesOrder: { select: { id: true, orderNo: true } }, requestedBy: { select: { name: true } } },
+      omit: { receiverEnc: true }, // 列表用不着接收方
     }),
     prisma.invoice.count({ where }),
   ]);
@@ -333,6 +336,20 @@ export async function invoiceSummary(user: CurrentUser, query: { storeId?: numbe
   return { stores, total: { pending: sum("pending"), monthCount: sum("monthCount"), monthFen: sum("monthFen"), redPending: sum("redPending"), electronic: sum("electronic"), paper: sum("paper") } };
 }
 
+/** 去掉明文接收方（写库时换成密文） */
+function withoutReceiver<T extends { receiver: string | null }>(title: T): Omit<T, "receiver"> {
+  const { receiver, ...rest } = title;
+  void receiver;
+  return rest;
+}
+
+/** 去掉接收方密文（给页面前换成解开的明文） */
+function withoutReceiverEnc<T extends { receiverEnc: string | null }>(row: T): Omit<T, "receiverEnc"> {
+  const { receiverEnc, ...rest } = row;
+  void receiverEnc;
+  return rest;
+}
+
 export async function getInvoice(user: CurrentUser, id: number) {
   const invoice = await prisma.invoice.findUnique({
     where: { id },
@@ -349,7 +366,8 @@ export async function getInvoice(user: CurrentUser, id: number) {
   if (!invoice) return null;
   assertStoreAccess(user, invoice.store); // 别店的抛 PermissionError，页面显示无权限页
   return {
-    ...invoice,
+    ...withoutReceiverEnc(invoice),
+    receiver: invoice.receiverEnc ? decryptPii(invoice.receiverEnc) : null, // 开票、发票要用完整的，详情里照旧显示
     salesOrder: { id: invoice.salesOrder.id, orderNo: invoice.salesOrder.orderNo, bizDate: invoice.salesOrder.bizDate, canOpen: canAccessStoreSafe(user, invoice.salesOrder.store) && (user.role !== "STAFF" || invoice.salesOrder.salespersonId === user.id) },
     can: {
       cancel: invoice.status === "REQUESTED" && (invoice.requestedById === user.id || user.role === "STORE_MANAGER" || user.role === "HQ"),

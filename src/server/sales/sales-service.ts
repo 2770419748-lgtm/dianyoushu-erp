@@ -2,7 +2,6 @@ import "server-only";
 import { clampPage } from "@/lib/paging";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/generated/prisma/client";
-import { maskPhone } from "@/lib/sales-labels";
 import { canSell, canVoidSales } from "@/server/auth/permissions";
 import { assertStoreAccess, PermissionError, storeScopeWhere } from "@/server/auth/scope";
 import type { CurrentUser } from "@/server/auth/current-user";
@@ -383,7 +382,7 @@ export async function listSalesOrders(user: CurrentUser, query: { storeId?: numb
       take: SALES_PAGE_SIZE,
       include: {
         store: { select: { code: true, name: true } },
-        customer: { select: { name: true, phone: true } },
+        customer: { select: { name: true, phoneMasked: true } },
         salesperson: { select: { name: true } },
         payments: { select: { method: true, amountFen: true } },
         _count: { select: { items: true } },
@@ -392,7 +391,7 @@ export async function listSalesOrders(user: CurrentUser, query: { storeId?: numb
     prisma.salesOrder.count({ where }),
   ]);
   return {
-    rows: rows.map((o) => ({ ...o, customer: o.customer ? { name: o.customer.name, phoneMasked: maskPhone(o.customer.phone) } : null })),
+    rows: rows.map((o) => ({ ...o, customer: o.customer ? { name: o.customer.name, phoneMasked: o.customer.phoneMasked } : null })),
     total,
     page,
     pageSize: SALES_PAGE_SIZE,
@@ -406,7 +405,7 @@ export async function getSalesOrder(user: CurrentUser, id: number) {
     where: { id },
     include: {
       store: { select: { id: true, code: true, name: true, regionId: true } },
-      customer: { select: { id: true, name: true, phone: true } },
+      customer: { select: { id: true, name: true, phoneMasked: true } },
       salesperson: { select: { id: true, name: true } },
       voidedBy: { select: { name: true } },
       items: { include: { sku: { select: { name: true, isService: true } }, device: { select: { code: true } }, entitlement: { select: { id: true, status: true, startedOn: true, expiresOn: true, deviceReturnedAt: true, device: { select: { code: true } } } } } },
@@ -429,7 +428,7 @@ export async function getSalesOrder(user: CurrentUser, id: number) {
     ...order,
     // 成本只给店长以上：店员连数据都拿不到，不只是页面上不显示
     items: user.role === "STAFF" ? order.items.map((i) => ({ ...i, costFen: 0 })) : order.items,
-    customer: order.customer ? { id: order.customer.id, name: order.customer.name, phoneMasked: maskPhone(order.customer.phone) } : null,
+    customer: order.customer ? { id: order.customer.id, name: order.customer.name, phoneMasked: order.customer.phoneMasked } : null,
     todayClosed,
   };
 }

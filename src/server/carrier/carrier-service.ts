@@ -18,6 +18,7 @@ import { isValidFen, MAX_AMOUNT_FEN } from "@/lib/limits";
 import { maskPhone } from "@/lib/sales-labels";
 import { canHandleCarrier, canManageCarrier, canVoidCarrier } from "@/server/auth/permissions";
 import { assertStoreAccess, PermissionError, storeScopeWhere } from "@/server/auth/scope";
+import { decryptPii, encryptPii, phoneColumns, phoneFingerprint, phoneSearch } from "@/server/pii/crypto";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
 import { lockRow } from "@/server/db-lock";
@@ -144,7 +145,7 @@ export async function registerBusinessTx(tx: Tx, user: CurrentUser, input: Carri
       customerId,
       carrier,
       bizType,
-      phone,
+      ...phoneColumns(phone),
       packageName,
       monthlyFeeFen,
       carrierOrderNo,
@@ -241,11 +242,13 @@ async function importLinesTx(tx: Tx, user: CurrentUser, carrier: Carrier, month:
   // 候选：这个运营商已开通、已结算的业务（返销可能是以前月份的）
   const candidates = await tx.carrierBusiness.findMany({
     where: { carrier, status: { in: ["ACTIVATED", "SETTLED"] }, bizDate: { lt: to } },
-    select: { id: true, carrierOrderNo: true, phone: true, bizType: true, expectedCommissionFen: true, status: true, bizDate: true },
+    select: { id: true, carrierOrderNo: true, phoneFp: true, bizType: true, expectedCommissionFen: true, status: true, bizDate: true },
   });
+  // 号码加密存（口径第 20 节）：按号码对账时两边都用指纹比；结算单上的原号码加密后存进结算明细
+  const plainPhones = lines.map((l) => (l.phone ? l.phone.replace(/\s/g, "") : null));
   const result = reconcileStatement(
-    lines,
-    candidates.map((c) => ({ ...c, inMonth: c.bizDate >= from && c.bizDate < to })),
+    lines.map((l, i) => ({ ...l, phone: plainPhones[i] ? phoneFingerprint(plainPhones[i]!) : null })),
+    candidates.map(({ phoneFp, ...c }) => ({ ...c, phone: phoneFp, inMonth: c.bizDate >= from && c.bizDate < to })),
   );
   const settlementNo = await nextDocNo(tx, "JS");
   const settlement = await tx.carrierSettlement.create({
@@ -264,7 +267,8 @@ async function importLinesTx(tx: Tx, user: CurrentUser, carrier: Carrier, month:
       totalClawbackFen: lines.reduce((s, l) => s + l.clawbackFen, 0),
     },
   });
-  await tx.carrierSettlementLine.createMany({ data: result.lines.map((l) => ({ settlementId: settlement.id, carrierOrderNo: l.carrierOrderNo, phone: l.phone, bizType: l.bizType, commissionFen: l.commissionFen, clawbackFen: l.clawbackFen, businessId: l.businessId, result: l.result })) });
+  // reconcileStatement 按输入顺序一行出一行，按下标取回原号码
+  await tx.carrierSettlementLine.createMany({ data: result.lines.map((l, i) => ({ settlementId: settlement.id, carrierOrderNo: l.carrierOrderNo, phoneEnc: plainPhones[i] ? encryptPii(plainPhones[i]!) : null, phoneMasked: plainPhones[i] ? maskPhone(plainPhones[i]!) : null, bizType: l.bizType, commissionFen: l.commissionFen, clawbackFen: l.clawbackFen, businessId: l.businessId, result: l.result })) });
   // 条件写入兜底：读候选之后被别处改过状态的，整张单不落（加了锁正常碰不到）
   for (const s of result.settle) {
     const done = await tx.carrierBusiness.updateMany({ where: { id: s.id, status: "ACTIVATED" }, data: { status: "SETTLED", settledFen: s.settledFen, settlementId: settlement.id } });
@@ -312,8 +316,9 @@ export async function generateSimulatedSettlement(user: CurrentUser, input: { ca
   const random = options.random ?? Math.random;
   const { from, to } = monthRange(month);
   return withTx(db, async (tx) => {
-    const active = await tx.carrierBusiness.findMany({ where: { carrier, status: "ACTIVATED", bizDate: { gte: from, lt: to } }, select: { carrierOrderNo: true, phone: true, bizType: true, expectedCommissionFen: true } });
-    const settledBefore = await tx.carrierBusiness.findMany({ where: { carrier, status: "SETTLED", bizDate: { lt: from } }, select: { carrierOrderNo: true, phone: true, bizType: true, settledFen: true } });
+    // 模拟运营商那边的表格：号码是明文（在服务端解开，不出这个函数）
+    const active = (await tx.carrierBusiness.findMany({ where: { carrier, status: "ACTIVATED", bizDate: { gte: from, lt: to } }, select: { carrierOrderNo: true, phoneEnc: true, bizType: true, expectedCommissionFen: true } })).map(({ phoneEnc, ...b }) => ({ ...b, phone: decryptPii(phoneEnc) }));
+    const settledBefore = (await tx.carrierBusiness.findMany({ where: { carrier, status: "SETTLED", bizDate: { lt: from } }, select: { carrierOrderNo: true, phoneEnc: true, bizType: true, settledFen: true } })).map(({ phoneEnc, ...b }) => ({ ...b, phone: decryptPii(phoneEnc) }));
     const lines: StatementLine[] = [];
     for (const b of active) {
       const r = random();
@@ -353,7 +358,8 @@ function businessWhere(user: CurrentUser, query: CarrierQuery): Prisma.CarrierBu
       query.carrier ? { carrier: query.carrier } : {},
       query.bizType ? { bizType: query.bizType } : {},
       range ? { bizDate: { gte: range.from, lt: range.to } } : {},
-      q ? { OR: [{ orderNo: { contains: q, mode: "insensitive" } }, { carrierOrderNo: { contains: q } }, ...(/^\d{4,11}$/.test(q) ? [{ phone: { contains: q } }] : [])] } : {},
+      // 号码加密存（口径第 20 节）：只能整号或尾号 4 位搜
+      q ? { OR: [{ orderNo: { contains: q, mode: "insensitive" } }, { carrierOrderNo: { contains: q } }, ...(phoneSearch(q) ? [phoneSearch(q)!] : [])] } : {},
     ],
   };
 }
@@ -368,11 +374,12 @@ export async function listBusiness(user: CurrentUser, query: CarrierQuery) {
       skip: (page - 1) * CARRIER_PAGE_SIZE,
       take: CARRIER_PAGE_SIZE,
       include: { store: { select: { code: true, name: true } }, handledBy: { select: { name: true } }, customer: { select: { id: true, name: true } }, salesOrder: { select: { id: true, orderNo: true } } },
+      omit: { phoneEnc: true, phoneFp: true }, // 密文、指纹不出服务端，页面只用打码号码
     }),
     prisma.carrierBusiness.count({ where }),
   ]);
   return {
-    rows: rows.map(({ phone, ...r }) => ({ ...r, phoneMasked: maskPhone(phone) })),
+    rows,
     total,
     page,
     pageSize: CARRIER_PAGE_SIZE,
@@ -425,7 +432,7 @@ export async function getSettlement(user: CurrentUser, id: number) {
   assertHq(user);
   const settlement = await prisma.carrierSettlement.findUnique({
     where: { id },
-    include: { importedBy: { select: { name: true } }, lines: { orderBy: [{ result: "asc" }, { id: "asc" }], include: { business: { select: { id: true, orderNo: true, expectedCommissionFen: true, store: { select: { name: true } } } } } } },
+    include: { importedBy: { select: { name: true } }, lines: { orderBy: [{ result: "asc" }, { id: "asc" }], omit: { phoneEnc: true }, include: { business: { select: { id: true, orderNo: true, expectedCommissionFen: true, store: { select: { name: true } } } } } } },
   });
   if (!settlement) return null;
   const { from, to } = monthRange(settlement.month);
@@ -433,13 +440,10 @@ export async function getSettlement(user: CurrentUser, id: number) {
   const missing = await prisma.carrierBusiness.findMany({
     where: { carrier: settlement.carrier, status: "ACTIVATED", bizDate: { gte: from, lt: to } },
     include: { store: { select: { name: true } }, handledBy: { select: { name: true } } },
+    omit: { phoneEnc: true, phoneFp: true },
     orderBy: { bizDate: "asc" },
   });
-  return {
-    ...settlement,
-    lines: settlement.lines.map(({ phone, ...l }) => ({ ...l, phoneMasked: phone ? maskPhone(phone) : null })),
-    missing: missing.map(({ phone, ...m }) => ({ ...m, phoneMasked: maskPhone(phone) })),
-  };
+  return { ...settlement, missing };
 }
 
 export type CarrierSettlementDetail = NonNullable<Awaited<ReturnType<typeof getSettlement>>>;

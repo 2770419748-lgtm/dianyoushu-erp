@@ -6,6 +6,7 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { listEmployees, saveEmployeeProfile } from "@/server/hr/employee-service";
 import { getNotice, pruneNoticeNotifications, publishNotice, withdrawNotice } from "@/server/notice/notice-service";
 import { setUserActive } from "@/server/org/org-service";
+import { decryptPii } from "@/server/pii/crypto";
 
 // 人事 OA 第一步（口径第 19 节，连本机库，事务回滚不留数据）：公告的范围、消息、已读、撤下；员工档案的范围、工资谁能看、校验。
 
@@ -132,7 +133,10 @@ describe("公告和员工档案（连本机库，事务回滚）", () => {
       await expect(saveEmployeeProfile(p.hq, p.staff.id, { hireDate: "2026-02-30" }, tx)).rejects.toThrow("不是真实的日期");
       await expect(saveEmployeeProfile(p.hq, p.staff.id, { hireDate: "2026-05-01", leaveDate: "2026-04-01" }, tx)).rejects.toThrow("不能早于");
       await saveEmployeeProfile(p.hq, p.staff.id, { position: "收银", phone: "13800001111", baseSalaryFen: 420000, hireDate: "2025-03-01" }, tx);
-      expect(await tx.employeeProfile.findUniqueOrThrow({ where: { userId: p.staff.id } })).toMatchObject({ position: "收银", phone: "13800001111", baseSalaryFen: 420000 });
+      const saved = await tx.employeeProfile.findUniqueOrThrow({ where: { userId: p.staff.id } });
+      expect(saved).toMatchObject({ position: "收银", phoneMasked: "138****1111", baseSalaryFen: 420000 });
+      expect(saved.phoneEnc).toMatch(/^v1\./); // 库里没有明文（口径第 20 节）
+      expect(decryptPii(saved.phoneEnc!)).toBe("13800001111");
     });
   });
 

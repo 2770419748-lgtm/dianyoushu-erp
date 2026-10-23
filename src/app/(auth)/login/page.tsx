@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { DEMO_MODE } from "@/server/auth/demo-accounts";
+import { ClearStaleSession } from "./clear-stale-session";
 import { LoginForm } from "./login-form";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
         background: "#f5f5f5",
       }}
     >
+      {reason === "expired" ? <ClearStaleSession /> : null}
       <LoginForm notice={notice} showDemoAccounts={DEMO_MODE} />
     </main>
   );
