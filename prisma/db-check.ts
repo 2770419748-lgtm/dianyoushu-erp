@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
-import { describeIntegrity, integrityOk, runIntegrityChecks } from "./integrity-checks";
+import { describeIntegrity, integrityOk, runIntegrityChecks, unknownEnumValues } from "./integrity-checks";
 
 // pnpm db:check：对一遍账（规则见 integrity-checks.ts）。全对退出码 0；有对不上的退出码 1，方便定时任务据此告警。
 // 服务器上每天跑：docker compose run --rm tools pnpm db:check（见 docs/部署.md 上线前检查清单）。
@@ -15,6 +15,8 @@ async function main() {
       console.log(line);
     } else {
       console.error(`${line} 有对不上的，请马上查最近的单据和流水。`);
+      // 多半是回滚到了旧版本、新版本录的单还在：列出来是哪张表的哪个值
+      if (result.enums > 0) console.error(`这个版本不认识的枚举值：${(await unknownEnumValues(prisma)).join("、")}`);
       process.exitCode = 1;
     }
   } finally {

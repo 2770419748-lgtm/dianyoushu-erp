@@ -28,10 +28,15 @@ body {
   }
 }
 
-/* 切换条（Segmented）选项多时，窄屏上在自己的框里横着滑，不把整页撑宽（复查第 81～83 条） */
+/* 切换条（Segmented）选项多时，窄屏上在自己的框里横着滑，不把整页撑宽（复查第 81～83 条）。
+   overflow 只在手机宽度开：行内块加了 overflow，对齐基线从文字底边变成整个框的底边，电脑上同一行的东西会上下错开（复查第 90 条） */
 .ant-segmented {
   max-width: 100%;
-  overflow-x: auto;
+}
+@media (max-width: 575.98px) {
+  .ant-segmented {
+    overflow-x: auto;
+  }
 }
 /* 横排（Space）里的一项最宽只到外面的宽度：里面的切换条、长输入框在窄屏上不再把整页撑宽 */
 .ant-space {

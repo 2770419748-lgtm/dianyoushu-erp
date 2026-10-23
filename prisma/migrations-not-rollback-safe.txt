@@ -1,13 +1,15 @@
-# 不能直接回滚的迁移（口径第 24 节）：一行一个“迁移名 原因”。
+# 不能直接回滚的迁移（口径第 24 节）：一行一个“迁移名 原因”。只加了枚举值的，原因写“枚举加值”开头（见下）。
 # 回滚应用不回滚数据库，靠的是迁移“只加不删”：旧版本照样能用新的表结构。下面这些不是只加——
-# 删列、改名、改成非空、改列类型、枚举加值（旧版本读到新的枚举值会报错）——做过以后旧版本就用不了了。
+# 删列、改名、改成非空、加必填列、去掉默认值、改列类型、枚举值改名、枚举加值（旧版本读到新的枚举值会报错）——做过以后旧版本就用不了了。
 # - 新迁移里有这几种语句，CI（scripts/check-migrations.mjs）要求写在这里，写明原因；
 # - 回滚（deploy/rollback.sh、升级失败的自动回滚）发现库里做过、要回到的旧版本里没有的迁移在这里，就拒绝回滚，
 #   只能修好新版本，或者用升级前的备份恢复（升级后录的数据会丢）。
+# - 例外：原因写“枚举加值”开头的只加了枚举值（迁移里不能有别的上面这些改动，CI 会查）。库里还没有哪一行用到新值
+#   （新版本没健康过、没录过这种单）时，旧版本读不到它不认识的值，回滚脚本照样放行；用到了才拒绝（复查第 92 条）。
 20261016135357_device_three_codes 改列名 imei→imei1、code 改成非空
 20261016181347_trade_in_device_code 改列名 imei→device_code
-20261021100000_repair_orders 枚举 entitlement_status 加 CLAIMED
-20261021300000_subsidy 枚举 payment_method 加 SUBSIDY
-20261021850000_hr_attendance_leave 枚举 approval_action 加 LEAVE、EXPENSE
+20261021100000_repair_orders 枚举加值：entitlement_status 加 CLAIMED
+20261021300000_subsidy 枚举加值：payment_method 加 SUBSIDY
+20261021850000_hr_attendance_leave 枚举加值：approval_action 加 LEAVE、EXPENSE
 20261023100000_pii_encryption 删明文手机号等 5 列（换成密文）
-20261023500000_data_import 枚举 ledger_doc_type 加 OPENING
+20261023500000_data_import 枚举加值：ledger_doc_type 加 OPENING

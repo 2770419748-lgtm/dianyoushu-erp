@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # 部署演练（口径第 24 节）：在 CI 机器上按“一台服务器放两家客户”把 deploy/ 下的脚本真跑一遍——
 # 开两家（站点地址重复、带端口、现有站点文件坏了都不开）→ 经共享 Caddy 按子域名访问 →
-# 升级到带“不能直接回滚”迁移的版本、手动回滚被拒绝 → 没有新迁移的升级能手动回滚 → 坏版本自动回滚 →
+# 升级到带“不能直接回滚”迁移的版本、手动回滚被拒绝 → 没有新迁移的升级能手动回滚 →
+# 只加了枚举值的坏版本照样自动回滚、新值没用上能手动回滚、用上了拒绝且旧版本对账查得出来 → 坏版本自动回滚 →
 # 带不能回滚迁移的坏版本不自动回滚、修好新版本再升 → 定时任务 → 恢复演练 → 备份停了巡检和恢复演练都报 →
-# 批量升级 → 应用停了连续告警、恢复 → 共享 Caddy 停了巡检报 → 备份同步到“异地”（本机目录模拟）→ 下线一家。最后全部拆掉。
+# 批量升级 → 应用停了连续告警、恢复（群机器人不通也不停在半路）→ 共享 Caddy 停了巡检报 → 备份同步到“异地”（本机目录模拟）→
+# 下线一家留库、同代号再开户被拒绝、原样起回来 → 下线删库（代号输错不动）。最后全部拆掉。
 # 前提：已经有 dianyoushu-erp:ci、dianyoushu-erp-backup:ci 镜像（CI 的“打生产镜像”“加密备份”两步打的），装了 rclone。用法：deploy/drill.sh
 set -euo pipefail
 
@@ -47,22 +49,35 @@ mkdir -p "$ERP_ROOT"
 echo "OFFSITE_REMOTE=:local:$ERP_ROOT/offsite" > "$ERP_ROOT/ops.env"
 
 step "准备版本"
-# v1；v2 = v1 加一个标了“不能直接回滚”的迁移（模拟枚举加值）；v3 = v2 之后没有新迁移的小修复；
-# bad = 一起来就退出的坏版本（没有新迁移）；bad-mig = 坏版本，而且带 v2 那个不能回滚的迁移
+# v1；v2 = v1 加一个标了“不能直接回滚”的迁移（模拟删列）；v3 = v2 之后没有新迁移的小修复；
+# v4 = v3 加一个只给枚举加值的迁移（role 加 DRILL_ROLE，清单里原因写“枚举加值”开头）；v5 = v4 之后没有新迁移的小修复；
+# bad = 一起来就退出的坏版本（没有新迁移）；bad-mig = 坏版本，带 v2 那个不能回滚的迁移；bad-enum = 坏版本，带 v4 那个只加枚举值的迁移
 docker tag dianyoushu-erp:ci dianyoushu-erp:v1 || fail "没有 dianyoushu-erp:ci 镜像"
 docker build -q --target build -t dianyoushu-erp-tools:v1 "$APP_DIR" > /dev/null || fail "打工具镜像失败"
-M=20991231000000_drill_enum
+M=20991231000000_drill_drop
 printf '%s\n' "FROM dianyoushu-erp-tools:v1" \
-  "RUN mkdir prisma/migrations/$M && echo 'SELECT 1;' > prisma/migrations/$M/migration.sql && echo '$M 演练：模拟枚举加值' >> prisma/migrations-not-rollback-safe.txt" |
+  "RUN mkdir prisma/migrations/$M && echo 'SELECT 1;' > prisma/migrations/$M/migration.sql && echo '$M 演练：模拟删列' >> prisma/migrations-not-rollback-safe.txt" |
   docker build -q -t dianyoushu-erp-tools:v2 - > /dev/null || fail "打 v2 工具镜像失败"
-printf 'FROM dianyoushu-erp:v1\nCMD ["node", "-e", "process.exit(1)"]\n' | docker build -q -t dianyoushu-erp:bad - > /dev/null || fail "打坏版本失败"
-docker tag dianyoushu-erp:v1 dianyoushu-erp:v2
-docker tag dianyoushu-erp:v1 dianyoushu-erp:v3
-docker tag dianyoushu-erp:bad dianyoushu-erp:bad-mig
 docker tag dianyoushu-erp-tools:v2 dianyoushu-erp-tools:v3
+E=20991231000001_drill_enum_add
+ctx=$(mktemp -d)
+mkdir "$ctx/m"
+printf 'ALTER TYPE "role" ADD VALUE %s;\n' "'DRILL_ROLE'" > "$ctx/m/migration.sql"
+echo "$E 枚举加值：演练，role 加 DRILL_ROLE" > "$ctx/list"
+printf '%s\n' "FROM dianyoushu-erp-tools:v3" "COPY m prisma/migrations/$E" "COPY list /tmp/drill-list" \
+  "RUN cat /tmp/drill-list >> prisma/migrations-not-rollback-safe.txt" > "$ctx/Dockerfile"
+chmod -R a+rX "$ctx"
+docker build -q -t dianyoushu-erp-tools:v4 "$ctx" > /dev/null || fail "打 v4 工具镜像失败"
+rm -rf "$ctx"
+docker tag dianyoushu-erp-tools:v4 dianyoushu-erp-tools:v5
+printf 'FROM dianyoushu-erp:v1\nCMD ["node", "-e", "process.exit(1)"]\n' | docker build -q -t dianyoushu-erp:bad - > /dev/null || fail "打坏版本失败"
+for v in v2 v3 v4 v5; do docker tag dianyoushu-erp:v1 "dianyoushu-erp:$v"; done
+docker tag dianyoushu-erp:bad dianyoushu-erp:bad-mig
+docker tag dianyoushu-erp:bad dianyoushu-erp:bad-enum
 docker tag dianyoushu-erp-tools:v1 dianyoushu-erp-tools:bad
 docker tag dianyoushu-erp-tools:v2 dianyoushu-erp-tools:bad-mig
-for v in v1 v2 v3 bad bad-mig; do docker tag dianyoushu-erp-backup:ci "dianyoushu-erp-backup:$v" || fail "没有 dianyoushu-erp-backup:ci 镜像"; done
+docker tag dianyoushu-erp-tools:v4 dianyoushu-erp-tools:bad-enum
+for v in v1 v2 v3 v4 v5 bad bad-mig bad-enum; do docker tag dianyoushu-erp-backup:ci "dianyoushu-erp-backup:$v" || fail "没有 dianyoushu-erp-backup:ci 镜像"; done
 
 step "开两家客户"
 "$D/tenant-new.sh" t1 http://t1.test v1 --name "演练一号" 2>&1 | mask
@@ -112,6 +127,41 @@ health t1 || fail "t1 回滚后访问不到"
 history_has t1 "回滚 v3 → v2 成功" || fail "发布记录里没有回滚"
 echo "手动回滚成功，回滚后用旧版本对账通过"
 
+step "t1 升级到只加了枚举值的坏版本：库里还没用到新值，照样自动回滚"
+if "$D/deploy.sh" t1 bad-enum --force; then fail "坏版本竟然升级成功了"; fi
+[ "$(current_tag t1)" = v2 ] || fail "只加了枚举值、新值没用上，应该自动回滚到 v2（现在是 $(current_tag t1)）"
+history_has t1 "已回滚到 v2" || fail "发布记录里没有回滚"
+health t1 || fail "t1 回滚后访问不到"
+echo "新版本没健康过、库里没有新值，自动回到 v2，门店第二天照常开门"
+
+step "t1 升级到 v4（只加了枚举值）：新值没用上能手动回滚；用上了就拒绝，旧版本对账也查得出来"
+"$D/deploy.sh" t1 v4 --force || fail "t1 升级到 v4 失败"
+"$D/rollback.sh" t1 || fail "新值没用上，手动回滚却被拒绝了"
+[ "$(current_tag t1)" = v2 ] || fail "t1 没回到 v2"
+"$D/deploy.sh" t1 v4 --force || fail "t1 再升到 v4 失败"
+role=$(tenant_sql t1 "SELECT role FROM users WHERE username = 'admin'")
+tenant_sql t1 "UPDATE users SET role = 'DRILL_ROLE' WHERE username = 'admin'" > /dev/null || fail "改不了 admin 的角色"
+if out=$("$D/rollback.sh" t1 2>&1); then
+  echo "$out"
+  fail "库里已经用上了新值，竟然回滚了"
+fi
+grep -q "库里已经用到了：role.DRILL_ROLE" <<< "$out" || {
+  echo "$out"
+  fail "拒绝回滚却没说用到了哪个值"
+}
+[ "$(current_tag t1)" = v4 ] || fail "拒绝回滚却换了版本"
+# 回滚以后的 read_check 就是用旧版本跑 db:check：旧版本不认识 DRILL_ROLE，要查得出来
+if out=$(DC_TAG=v2 dc t1 run --rm -T tools pnpm -s db:check 2>&1); then
+  echo "$out"
+  fail "旧版本对账没查出库里有它不认识的枚举值"
+fi
+grep -q "users.role=DRILL_ROLE" <<< "$out" || {
+  echo "$out"
+  fail "对账没说是哪张表的哪个值"
+}
+tenant_sql t1 "UPDATE users SET role = '$role' WHERE username = 'admin'" > /dev/null || fail "改不回 admin 的角色"
+echo "没用上新值时回得去；用上了拒绝回滚，旧版本对账也报出 users.role=DRILL_ROLE"
+
 step "t2 升级到坏版本：要自动回滚到 v1"
 if "$D/deploy.sh" t2 bad --force; then fail "坏版本竟然升级成功了"; fi
 [ "$(current_tag t2)" = v1 ] || fail "t2 没回滚到 v1（现在是 $(current_tag t2)）"
@@ -159,9 +209,9 @@ dc t2 exec -T backup bash /backup.sh now > /dev/null || fail "补一份备份失
 "$D/restore-drill.sh" t2 || fail "补了备份以后恢复演练不通过"
 echo "巡检报了备份容器没在跑、备份过期，恢复演练也不通过；补了备份以后通过"
 
-step "批量升级到 v3（没有演示站，跳过演示站检查）"
-"$D/upgrade-all.sh" v3 --force --skip-demo-check || fail "批量升级失败"
-[ "$(current_tag t1)" = v3 ] && [ "$(current_tag t2)" = v3 ] || fail "批量升级后版本不对"
+step "批量升级到 v5（没有演示站，跳过演示站检查）"
+"$D/upgrade-all.sh" v5 --force --skip-demo-check || fail "批量升级失败"
+[ "$(current_tag t1)" = v5 ] && [ "$(current_tag t2)" = v5 ] || fail "批量升级后版本不对"
 health t1 && health t2 || fail "批量升级后访问不到"
 
 step "巡检：t2 的应用停了，连续 3 次告警"
@@ -174,12 +224,19 @@ grep -q "t2 连续 3 次健康检查不通" <<< "$out" || {
 grep -q "t1 连续" <<< "$out" && fail "t1 好好的却告警了"
 dc t2 start app > /dev/null 2>&1
 wait_healthy t2 120 || fail "t2 重新起来不健康"
-out=$("$D/health-check.sh" 2>&1)
-grep -q "t2 恢复了" <<< "$out" || {
+# 这一次群机器人不通（地址指到没人听的端口）：“恢复了”发不出去，巡检也要接着往下查完，不能停在半路（复查第 91 条）
+out=$(ALERT_WEBHOOK_URL=http://127.0.0.1:9/ "$D/health-check.sh" 2>&1)
+s=$?
+[ $s -eq 0 ] || {
   echo "$out"
-  fail "恢复后没说"
+  fail "群机器人不通，巡检中途退出了（退出码 $s）"
 }
-echo "巡检告警、恢复都对"
+grep -q "t2 恢复了" <<< "$out" && grep -q "告警没发出去" <<< "$out" || {
+  echo "$out"
+  fail "恢复后没说，或者没记下告警没发出去"
+}
+[ "$(cat "$(tenant_dir t2)/.ops/health-fails")" = 0 ] || fail "告警没发出去，t2 的计数却没清零（巡检停在了半路）"
+echo "巡检告警、恢复都对；群机器人不通时照样查完"
 
 step "巡检：共享 Caddy 停了"
 proxy_dc stop caddy > /dev/null 2>&1
@@ -203,15 +260,37 @@ step "备份同步到异地（本机目录模拟对象存储）"
 ls "$ERP_ROOT/offsite/t1/"*.dump.enc > /dev/null && ls "$ERP_ROOT/offsite/t2/"*.dump.enc > /dev/null || fail "异地没有备份文件"
 echo "两家的备份都同步过去了"
 
-step "下线 t2"
-"$D/tenant-remove.sh" t2 --purge || fail "下线 t2 失败"
+step "下线 t2（留着库）：同一个代号再开户要拒绝；原样起回来"
+users=$(tenant_sql t2 "SELECT count(*) FROM users")
+"$D/tenant-remove.sh" t2 || fail "下线 t2 失败"
+[ -e "$(tenant_dir t2)" ] && fail "t2 的目录还在"
+[ -n "$(tenant_volumes t2)" ] || fail "没加 --purge，库卷却没了"
+[ -e "$PROXY_DIR/sites/t2.caddy" ] && fail "t2 的站点还在共享 Caddy 上"
+health t2 && fail "下线了还能访问到 t2"
+if out=$("$D/tenant-new.sh" t2 http://t2.test v5 --name "演练二号" 2>&1); then
+  echo "$out"
+  fail "库还留着，同一个代号竟然又开户了"
+fi
+grep -q "下线过，库还留着" <<< "$out" || {
+  echo "$out"
+  fail "拒绝开户却没说库还留着"
+}
+[ -e "$(tenant_dir t2)" ] && fail "拒绝开户却留下了目录"
+"$D/tenant-restore.sh" t2 || fail "起回来失败"
+health t2 || fail "起回来以后访问不到"
+[ "$(tenant_sql t2 "SELECT count(*) FROM users")" = "$users" ] || fail "起回来以后数据对不上"
+echo "下线留库；同一个代号再开户被拒绝（不会接上老库、也不会被引去删库）；起回来数据原样"
+
+step "下线 t2 并删库：代号输错什么都不动；输对了，备份做成以后才删"
+if echo t9 | "$D/tenant-remove.sh" t2 --purge; then fail "代号输错竟然删了"; fi
+[ -d "$(tenant_dir t2)" ] && health t2 || fail "代号输错却动了 t2"
+echo t2 | "$D/tenant-remove.sh" t2 --purge || fail "下线 t2 失败"
 [ -e "$(tenant_dir t2)" ] && fail "t2 的目录还在"
 ls "$ERP_ROOT"/removed/t2-*/backups/*.dump.enc > /dev/null || fail "下线以后备份没留下"
-[ -e "$PROXY_DIR/sites/t2.caddy" ] && fail "t2 的站点还在共享 Caddy 上"
+[ -z "$(tenant_volumes t2)" ] || fail "加了 --purge，库卷还在"
 [ -z "$(docker ps -aq --filter label=com.docker.compose.project=erp-t2)" ] || fail "t2 的容器还在"
-health t2 && fail "下线了还能访问到 t2"
 health t1 || fail "下线 t2 以后 t1 访问不到"
-echo "t2 下线了：容器、库、站点都拿掉，目录（备份、.env）挪到 removed/；t1 照常"
+echo "t2 下线删库：容器、库、站点都拿掉，目录（备份、.env）挪到 removed/；t1 照常"
 
 echo
-echo "部署演练：开户（站点地址重复、带端口、配置坏了都拒绝）、子域名访问、升级、不能直接回滚的迁移拒绝回滚、手动回滚、坏版本自动回滚、带不能回滚迁移的坏版本不回滚、定时任务、恢复演练、备份停了告警、批量升级、巡检告警、共享 Caddy 停了告警、异地备份、下线都通"
+echo "部署演练：开户（站点地址重复、带端口、配置坏了都拒绝）、子域名访问、升级、不能直接回滚的迁移拒绝回滚、手动回滚、只加枚举值的回滚放行与拒绝、坏版本自动回滚、带不能回滚迁移的坏版本不回滚、定时任务、恢复演练、备份停了告警、批量升级、巡检告警（群机器人不通也查完）、共享 Caddy 停了告警、异地备份、下线留库和起回来、下线删库都通"

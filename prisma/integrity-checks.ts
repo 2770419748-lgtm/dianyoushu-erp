@@ -1,4 +1,5 @@
 import type { PrismaClient } from "../src/generated/prisma/client";
+import * as PrismaEnums from "../src/generated/prisma/enums";
 import { maskPhone } from "../src/lib/sales-labels";
 import { decryptPii, maskIdCard, piiFingerprint } from "../src/server/pii/crypto";
 import { checkDataKeys } from "../src/server/pii/key-check";
@@ -34,6 +35,8 @@ import { checkDataKeys } from "../src/server/pii/key-check";
 //     解出来重算的指纹、打码号码和库里存的一样（钥匙换错、哪里绕过工具直接写库，都会在这里露出来）。
 // 15. 数据导入（口径第 22 节）：每条期初入库流水都属于一张没撤销的期初入库单；期初入库单的新建条数 = 它的期初流水条数（机器单只有机器、
 //     配件单只有配件），撤销了的一条流水都不剩；导入的客户属于一次没撤销的客户导入，客户导入的新建条数 = 记着它的客户数；撤销要有人和时间。
+// 16. 枚举值（口径第 24 节，复查第 92 条）：库里每个枚举列用到的值，这个版本的代码都认识。回滚到旧版本以后，新版本录进去的新值
+//     旧版本读不了（Prisma 报 not found in enum，日结、看板打不开）；上面几类都是用 SQL 数行数，查不出这个，这里把每个枚举列的值取出来比。
 
 export interface IntegrityResult {
   accessory: number;
@@ -52,6 +55,7 @@ export interface IntegrityResult {
   pii: number;
   piiKeys: number; // 1 = 钥匙和写这个库时的不一样（整库都解不开）
   imports: number;
+  enums: number; // 第 16 类：这个版本的代码不认识的枚举值有几个
 }
 
 /** 第 14 类：钥匙对不对（只核对、不补记录）；逐行解开个人信息，核对指纹和打码号码（数据量是几千到几万行，解一遍很快） */
@@ -277,7 +281,38 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
     pii: await piiProblems(prisma),
     piiKeys: await piiKeysMismatch(prisma),
     imports: await importProblems(prisma),
+    enums: (await unknownEnumValues(prisma)).length,
   };
+}
+
+/** 这个版本的代码认识的枚举：库里的类型名（schema 里的 @@map，都是名字的蛇形写法，tests/enum-check.db.test.ts 核对）→ 值 */
+export function codeEnums(): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const [name, values] of Object.entries(PrismaEnums)) {
+    if (values && typeof values === "object") out.set(name.replace(/(?<!^)([A-Z])/g, "_$1").toLowerCase(), new Set(Object.values(values as Record<string, string>)));
+  }
+  return out;
+}
+
+/** 第 16 类：库里每个枚举列（含枚举数组列）用到的值里，这个版本的代码不认识的，列成“表.列=值”。
+ *  库里有、代码里没有的枚举类型（更新的版本加的表）不查：这个版本根本不读它们 */
+export async function unknownEnumValues(prisma: PrismaClient, known = codeEnums()): Promise<string[]> {
+  const cols = await prisma.$queryRaw<{ table_name: string; column_name: string; udt_name: string; is_array: boolean }[]>`
+    SELECT c.table_name, c.column_name, c.udt_name, c.data_type = 'ARRAY' AS is_array
+    FROM information_schema.columns c
+    JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name AND t.table_type = 'BASE TABLE'
+    WHERE c.table_schema = 'public' AND c.data_type IN ('USER-DEFINED', 'ARRAY')
+    ORDER BY 1, 2`;
+  const ident = (s: string) => `"${s.replace(/"/g, '""')}"`;
+  const bad: string[] = [];
+  for (const c of cols) {
+    const values = known.get(c.is_array ? c.udt_name.replace(/^_/, "") : c.udt_name);
+    if (!values) continue;
+    const col = c.is_array ? `unnest(${ident(c.column_name)})` : ident(c.column_name);
+    const rows = await prisma.$queryRawUnsafe<{ v: string | null }[]>(`SELECT DISTINCT ${col}::text AS v FROM ${ident(c.table_name)}`);
+    for (const { v } of rows) if (v !== null && !values.has(v)) bad.push(`${c.table_name}.${c.column_name}=${v}`);
+  }
+  return bad;
 }
 
 /** 第 15 类：数据导入 */
@@ -299,9 +334,9 @@ export async function importProblems(prisma: PrismaClient): Promise<number> {
 }
 
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假报销工资对不上 ${r.hr} 处，${r.piiKeys ? "个人信息钥匙和写这个库时的不一样（整库都解不开，先换回原来那两把钥匙）" : `个人信息解不开或对不上 ${r.pii} 处`}，数据导入对不上 ${r.imports} 处。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假报销工资对不上 ${r.hr} 处，${r.piiKeys ? "个人信息钥匙和写这个库时的不一样（整库都解不开，先换回原来那两把钥匙）" : `个人信息解不开或对不上 ${r.pii} 处`}，数据导入对不上 ${r.imports} 处，这个版本不认识的枚举值 ${r.enums} 个。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {
-  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval + r.wecom + r.hr + r.pii + r.piiKeys + r.imports === 0;
+  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval + r.wecom + r.hr + r.pii + r.piiKeys + r.imports + r.enums === 0;
 }

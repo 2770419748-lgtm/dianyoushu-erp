@@ -14,8 +14,9 @@ stale=()
 for t in $(list_tenants); do
   dir=$(tenant_dir "$t")/backups
   [ -d "$dir" ] || continue
-  # 本机最新的备份超过 26 小时：同步过去的也是旧的，算失败（复查第 84 条）
-  if [ -z "$(find "$dir" -maxdepth 1 -name '*.dump.enc' -mmin -1560 2> /dev/null)" ]; then stale+=("$t"); fi
+  # 本机最新的备份超过 26 小时：同步过去的也是旧的，算失败（复查第 84 条）；开户不满 26 小时的还没到第一次备份，不算（第 91 条）
+  born=$(stat -c %Y "$(tenant_dir "$t")/.env")
+  if [ $(($(date +%s) - born)) -gt $((26 * 3600)) ] && [ -z "$(find "$dir" -maxdepth 1 -name '*.dump.enc' -mmin -1560 2> /dev/null)" ]; then stale+=("$t"); fi
   log "$t：同步备份到 $OFFSITE_REMOTE/$t"
   if ! rclone copy "$dir" "$OFFSITE_REMOTE/$t" --include "*.dump.enc" --immutable --checksum; then
     failed+=("$t")

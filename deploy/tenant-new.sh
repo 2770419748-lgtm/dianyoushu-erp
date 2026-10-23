@@ -6,6 +6,7 @@
 # 站点地址写域名（mouxie.example.com，自动 HTTPS；中文域名写成 xn-- 开头的 punycode），没备案时写 http://IP 或 http://名字（只走 HTTP）。
 # 不能带端口：共享 Caddy 只开了 80、443，写别的端口客户也打不开（同一个 IP 没备案只能放一家）。
 # .env 里的 DATA_ENCRYPTION_KEY、DATA_INDEX_KEY、BACKUP_PASSPHRASE 开完马上离线存一份（丢了数据、备份就解不开）。
+# 下线过的老客户回来续费不要用这个重开，用 deploy/tenant-restore.sh 原样起回来（库还在）。
 # 中途失败会留下半家：照提示跑 deploy/tenant-remove.sh <代号> --purge 清掉再重开。
 . "$(dirname "$0")/lib.sh"
 
@@ -27,45 +28,23 @@ while [ $# -gt 0 ]; do
   shift
 done
 valid_code "$CODE" || die "客户代号只能用小写字母、数字、横线，字母开头、2～31 位：$CODE"
-[[ "$SITE" =~ ^(http://)?[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "站点地址只能是域名或 IP（可以带 http://，不能带端口和路径）：$SITE"
 [ -n "$MODE" ] || [ -n "$NAME" ] || die "真用客户要写公司名 --name，演示站写 --demo"
 release_exists "$TAG" || die "没有版本 $TAG 的镜像，先 deploy/build.sh"
 
 DIR=$(tenant_dir "$CODE")
 [ -e "$DIR" ] && die "已经有这家客户（或者上次开了一半）：$DIR；开了一半的先 deploy/tenant-remove.sh $CODE --purge"
+# 同一个代号下线过、库卷还留着：新 .env 的密码连不上老库，建表会失败；照失败提示 --purge 就把老客户的库删了（复查第 93 条）
+LEFT=$(tenant_volumes "$CODE")
+[ -z "$LEFT" ] || die "代号 $CODE 下线过，库还留着（卷 $(echo $LEFT)）：
+  老客户回来了：deploy/tenant-restore.sh $CODE 原样起回来；
+  确定不要了：先确认 $ERP_ROOT/removed/ 里这家的备份能恢复，再 docker volume rm $(echo $LEFT)；
+  或者换一个代号开户"
 
-# 站点地址：不能和别家重复；写进共享 Caddy 之前先连同所有站点校验一遍（一个站点写错，Caddy 一重启所有客户都打不开，复查第 85 条）
-mkdir -p "$PROXY_DIR/sites"
-site_key() { local s=${1#http://}; echo "${s,,}"; }
-for f in "$PROXY_DIR"/sites/*.caddy; do
-  [ -f "$f" ] || continue
-  other=$(basename "$f" .caddy)
-  [ "$(site_key "$(cat "$(tenant_dir "$other")/.deploy/site" 2>/dev/null)")" = "$(site_key "$SITE")" ] && die "站点地址 $SITE 已经给 $other 用了"
-done
-site_block() {
-  cat << EOF
-# 客户 $CODE（deploy/tenant-new.sh 写的）
-$SITE {
-	encode gzip
-	log
-	header Strict-Transport-Security "max-age=31536000"
-	reverse_proxy $CODE-app:3000
-}
-EOF
-}
-CHECK=$(mktemp -d)
-trap 'rm -rf "$CHECK"' EXIT
-cp -r "$PROXY_DIR/sites" "$CHECK/sites"
-site_block > "$CHECK/sites/$CODE.caddy"
-cp "$APP_DIR/deploy/proxy/Caddyfile" "$CHECK/Caddyfile"
-chmod -R a+rX "$CHECK"
-if ! out=$(docker run --rm -v "$CHECK/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$CHECK/sites:/etc/caddy/sites:ro" caddy:2 caddy validate --config /etc/caddy/Caddyfile 2>&1); then
-  echo "$out" | tail -3 >&2
-  die "加上 $SITE 以后共享 Caddy 的配置校验不过（站点地址写错，或者现有的站点文件被改坏了，看上面的报错），没开户"
-fi
+# 站点地址：格式、不和别家重复、连同所有站点一起校验（复查第 85 条）；不行就停，什么都不留
+check_site "$CODE" "$SITE"
 
 mkdir -p "$DIR/backups" "$DIR/exports" "$DIR/.deploy" "$DIR/.ops"
-trap 's=$?; rm -rf "$CHECK"; [ $s -eq 0 ] || echo "开户中途失败：先 deploy/tenant-remove.sh $CODE --purge 清掉这半家，改好再重开" >&2' EXIT
+trap 's=$?; [ $s -eq 0 ] || echo "开户中途失败：先 deploy/tenant-remove.sh $CODE --purge 清掉这半家（要再输一遍代号），改好再重开" >&2' EXIT
 
 secret_hex() { openssl rand -hex 32; }
 secret_b64() { openssl rand -base64 32; }
@@ -109,14 +88,7 @@ dc "$CODE" up -d --no-build app backup
 wait_healthy "$CODE" 180 || die "$CODE 的应用没起来：deploy/dc.sh $CODE logs app"
 
 log "5/5 共享 Caddy 加上 $SITE"
-site_block > "$PROXY_DIR/sites/$CODE.caddy"
-chmod 644 "$PROXY_DIR/sites/$CODE.caddy"
-if [ -z "$(proxy_dc ps -q caddy 2>/dev/null)" ]; then
-  proxy_dc up -d
-elif ! proxy_dc exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
-  # 校验过了还 reload 不了：把这家的站点拿掉，别让共享 Caddy 下次重启时起不来
-  rm -f "$PROXY_DIR/sites/$CODE.caddy"
-  proxy_dc exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true
-  die "共享 Caddy 加不上 $SITE（已拿掉这家的站点，别家不受影响）"
-fi
+install_site "$CODE" "$SITE"
+# 下线脚本据此区分“开好了的客户”（下线前必须备份成功）和“开了一半的”
+record "$CODE" "开户完成"
 log "开好了：$CODE（版本 $TAG，站点 $SITE）。.env 在 $DIR/.env，里面的两把数据钥匙和备份口令现在就离线存一份"

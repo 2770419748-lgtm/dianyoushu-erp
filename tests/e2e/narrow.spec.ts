@@ -6,7 +6,8 @@ import { query } from "./helpers";
 // 手机宽度下每个页面都不能比屏幕宽（2026-10-23 复查第 80～83 条）：表格在自己的框里横向滚，整页不横着滚。
 // 页面清单从 src/app/(main) 下的 page.tsx 来。带参数的页面（/sales/[id] 这种）：先从页面上的链接里找真地址
 // （本身就是清单里的固定页面的不算，比如 /sales/new），找不到就从库里挑一个这个角色看得到的；
-// 两样都没有、又不在“故意不扫”里的，报错——不能悄悄跳过。只看，不点按钮。
+// 两样都没有、又不在“故意不扫”里的，报错——不能悄悄跳过；打开以后核对停在的就是这个地址、不是“没有权限”“找不到”页。
+// 这个角色本来进不了的写进 CANNOT_ENTER。只看，不点按钮。
 
 const WIDTH = Number(process.env.NARROW_WIDTH ?? 320); // 老款小屏手机；放得下 320 就放得下 360、375、390
 const MAIN = path.join(__dirname, "../../src/app/(main)");
@@ -51,6 +52,16 @@ const FROM_DB: Record<string, (w: Who) => [string, unknown[]]> = {
   "/setup/import/[id]": () => [`SELECT id::text AS v FROM import_batches WHERE kind IN ('DEVICES', 'ACCESSORIES') ORDER BY id DESC LIMIT 1`, []],
 };
 
+/** 这个角色本来就进不了的带参数页面（口径第 1 节权限矩阵），不扫；同一个页面 hq 那一遍扫过 */
+const CANNOT_ENTER: Record<string, Record<string, string>> = {
+  staff: {
+    "/purchase/[id]": "店员不管采购",
+    "/purchase/[id]/edit": "店员不管采购",
+    "/carrier/settlements/[id]": "运营商结算单只有总部看",
+    "/setup/import/[id]": "数据导入只有总部做",
+  },
+};
+
 /** 演示数据里可能一条都没有的，没有就不扫（返回原因）；别的找不到要报错 */
 const MAY_BE_EMPTY: Record<string, (w: Who) => string | null> = {
   "/purchase/[id]/edit": () => "演示数据里可能没有草稿采购单",
@@ -70,7 +81,16 @@ async function measure(page: Page, url: string) {
       if (r.width === 0 || r.height === 0) continue;
       if (r.right > de.clientWidth + 1 && (!worst || r.right > worst.right)) worst = { right: Math.round(r.right), tag: el.tagName.toLowerCase(), text: ((el as HTMLElement).innerText || "").trim().slice(0, 16) };
     }
-    return { sw: de.scrollWidth, cw: de.clientWidth, worst, hrefs: [...document.querySelectorAll("a[href^='/']")].map((a) => a.getAttribute("href")!.split("?")[0]!) };
+    // 打开的是“没有权限”“找不到”“出错了”这类结果页（antd Result 403/404/500/error），不算扫到了那一页
+    const blocked = document.querySelector(".ant-result-403, .ant-result-404, .ant-result-500, .ant-result-error");
+    return {
+      sw: de.scrollWidth,
+      cw: de.clientWidth,
+      worst,
+      path: location.pathname,
+      blocked: blocked ? ((blocked.querySelector(".ant-result-title") ?? blocked) as HTMLElement).innerText.trim() : null,
+      hrefs: [...document.querySelectorAll("a[href^='/']")].map((a) => a.getAttribute("href")!.split("?")[0]!),
+    };
   });
 }
 
@@ -91,13 +111,16 @@ for (const who of ["hq", "staff"]) {
     const links = new Set<string>();
     const wide: string[] = [];
     const missing: string[] = [];
+    const notReal: string[] = [];
     const check = async (url: string) => {
       const m = await measure(page, url);
       m.hrefs.forEach((h) => links.add(h));
       if (m.sw > m.cw + 1) wide.push(`${url}：页面 ${m.sw}，最右边是 <${m.worst?.tag}>「${m.worst?.text ?? ""}」到 ${m.worst?.right}`);
+      return m;
     };
     for (const r of fixed) await check(r);
     for (const r of all.filter((x) => x.includes("["))) {
+      if (CANNOT_ENTER[who]?.[r]) continue;
       const re = new RegExp("^" + r.replace(/\[[^\]]+\]/g, "[^/?#]+") + "$");
       let url = [...links].find((h) => re.test(h) && !fixed.has(h));
       if (!url && FROM_DB[r]) {
@@ -105,11 +128,16 @@ for (const who of ["hq", "staff"]) {
         const [row] = await query<{ v: string }>(sql, params);
         if (row) url = r.replace(/\[[^\]]+\]/, encodeURIComponent(row.v));
       }
-      if (url) await check(url);
-      else if (!MAY_BE_EMPTY[r]?.(w)) missing.push(r);
+      if (url) {
+        // 核对真打开了这一页（复查第 89 条）：挑错了地址、被跳走、看到的是“没有权限”，量的就是别的页面
+        const m = await check(url);
+        if (decodeURIComponent(m.path) !== decodeURIComponent(url)) notReal.push(`${r}：打开 ${url} 停在了 ${m.path}`);
+        else if (m.blocked) notReal.push(`${r}：打开 ${url} 看到的是「${m.blocked}」`);
+      } else if (!MAY_BE_EMPTY[r]?.(w)) missing.push(r);
     }
     await context.close();
     expect(missing, `这几个带参数的页面没找到能打开的地址：${missing.join("、")}`).toEqual([]);
+    expect(notReal, `这几个带参数的页面打开的不是那一页（这个角色进不了的写进 CANNOT_ENTER）：\n${notReal.join("\n")}`).toEqual([]);
     expect(wide, wide.join("\n")).toEqual([]);
   });
 }
