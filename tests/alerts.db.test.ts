@@ -127,7 +127,8 @@ describe("智能提醒（连本机库，事务回滚）", () => {
     if (!base) return ctx.skip();
     const b = base;
     await inRolledBackTx(async (tx) => {
-      const now = new Date();
+      // 固定在北京时间今天中午：下面“一小时后再跑”在 23 点以后跑会跨到明天，今日待办本来就该重写（以前 23 点后跑这条测试会失败）
+      const now = new Date(`${formatDate(new Date())}T12:00:00+08:00`);
       const today = formatDate(now);
       const store = await tx.store.create({ data: { code: "ZT-AL2", name: "提醒测试二店", regionId: b.regionId, wecomWebhookUrl: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test-key-654321" } });
       await tx.user.create({ data: { username: "altest_m2", passwordHash: "x", name: "提醒测试店长二", role: "STORE_MANAGER", storeId: store.id } });
