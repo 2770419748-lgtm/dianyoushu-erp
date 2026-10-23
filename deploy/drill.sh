@@ -98,14 +98,19 @@ echo
 step "巡检：t2 的应用停了，连续 3 次告警"
 dc t2 stop app > /dev/null 2>&1
 out=$(for i in 1 2 3; do "$D/health-check.sh" 2>&1; done)
-echo "$out" | grep -q "t2 连续 3 次健康检查不通" || {
+grep -q "t2 连续 3 次健康检查不通" <<< "$out" || {
   echo "$out"
   fail "巡检没告警"
 }
-echo "$out" | grep -q "t1 连续" && fail "t1 好好的却告警了"
+grep -q "t1 连续" <<< "$out" && fail "t1 好好的却告警了"
 dc t2 start app > /dev/null 2>&1
 wait_healthy t2 120 || fail "t2 重新起来不健康"
-"$D/health-check.sh" 2>&1 | grep -q "t2 恢复了" || fail "恢复后没说"
+# 先把输出存下来再找：直接 | grep -q 会在找到后关掉管道，巡检后面再写就收到 SIGPIPE，pipefail 下整条算失败
+out=$("$D/health-check.sh" 2>&1)
+grep -q "t2 恢复了" <<< "$out" || {
+  echo "$out"
+  fail "恢复后没说"
+}
 echo "巡检告警、恢复都对"
 
 step "备份同步到异地（本机目录模拟对象存储）"
