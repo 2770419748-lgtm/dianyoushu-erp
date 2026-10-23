@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { NoticeError, publishNotice, withdrawNotice } from "@/server/notice/notice-service";
 
 // 公告的 Server Function：发布、撤下。
@@ -9,7 +9,7 @@ import { NoticeError, publishNotice, withdrawNotice } from "@/server/notice/noti
 export type NoticeActionResult = { ok: true; message: string; id?: number } | { ok: false; error: string };
 
 export async function publishNoticeAction(input: { title: string; body: string; scope?: string; regionId?: number; storeId?: number }): Promise<NoticeActionResult> {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   try {
     const r = await publishNotice(user, input);
     revalidatePath("/notices");
@@ -22,7 +22,7 @@ export async function publishNoticeAction(input: { title: string; body: string; 
 }
 
 export async function withdrawNoticeAction(id: number): Promise<NoticeActionResult> {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   try {
     await withdrawNotice(user, id);
     revalidatePath("/notices");

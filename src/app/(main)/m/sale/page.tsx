@@ -5,6 +5,7 @@ import { listStoresInScope } from "@/server/org/store-query";
 import { isStoreClosedToday } from "@/server/sales/sales-service";
 import { listAvailableTradeIns, listTradeInSkuOptions } from "@/server/tradein/trade-in-service";
 import { MobileSaleView } from "./mobile-sale-view";
+import { getPaymentMethods, getSwitches } from "@/server/settings/settings-service";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,8 @@ export default async function MobileSalePage({ searchParams }: PageProps<"/m/sal
   return (
     <MobileSaleView
       key={storeId}
+      paymentMethods={await getPaymentMethods()}
+      sellerIdRequired={(await getSwitches()).tradeInIdRequired}
       stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))}
       storeId={storeId}
       availableTradeIns={tradeIns}

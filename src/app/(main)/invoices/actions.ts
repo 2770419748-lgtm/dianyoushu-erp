@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import { isUniqueViolation } from "@/server/db-errors";
 import { invoiceActions, InvoiceError, saveSeller } from "@/server/invoice/invoice-service";
@@ -26,7 +26,7 @@ async function run(fn: () => Promise<{ id?: number; message?: string } | void>):
 }
 
 export async function requestInvoiceAction(input: { salesOrderId: number; kind: string; titleType: string; titleName: string; buyerTaxNo?: string; buyerAddressPhone?: string; buyerBankAccount?: string; receiver?: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await invoiceActions.request(user, input);
     return { id: r.id, message: `已提交开票申请 ${r.requestNo}` };
@@ -34,7 +34,7 @@ export async function requestInvoiceAction(input: { salesOrderId: number; kind: 
 }
 
 export async function cancelInvoiceAction(id: number, reason: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await invoiceActions.cancel(user, id, reason);
     return { message: "已撤回" };
@@ -42,7 +42,7 @@ export async function cancelInvoiceAction(id: number, reason: string) {
 }
 
 export async function issueInvoiceAction(id: number, invoiceNumber: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await invoiceActions.issue(user, id, { invoiceNumber });
     return { message: `已开具，发票号码 ${r.invoiceNumber}` };
@@ -50,7 +50,7 @@ export async function issueInvoiceAction(id: number, invoiceNumber: string) {
 }
 
 export async function redInvoiceAction(id: number, input: { redNumber: string; reason: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await invoiceActions.red(user, id, input);
     return { message: "已红冲" };
@@ -58,7 +58,7 @@ export async function redInvoiceAction(id: number, input: { redNumber: string; r
 }
 
 export async function markDeliveredAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await invoiceActions.delivered(user, id);
     return { message: "已确认到店" };
@@ -66,7 +66,7 @@ export async function markDeliveredAction(id: number) {
 }
 
 export async function saveSellerAction(input: { name: string; taxNo: string; addressPhone: string; bankAccount: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await saveSeller(user, input);
     return { message: "已保存" };

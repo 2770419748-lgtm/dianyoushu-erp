@@ -33,7 +33,7 @@ export async function changeOwnPassword(user: CurrentUser, oldPassword: unknown,
   limiter.reset(key);
   const updated = await prisma.user.update({
     where: { id: user.id },
-    data: { passwordHash: await hashPassword(newText), sessionVersion: { increment: 1 } },
+    data: { passwordHash: await hashPassword(newText), mustChangePassword: false, sessionVersion: { increment: 1 } },
     select: { sessionVersion: true },
   });
   await writeAudit({ userId: user.id, action: "user.change_password", entity: "user", entityId: user.id });

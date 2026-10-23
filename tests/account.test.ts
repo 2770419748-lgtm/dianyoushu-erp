@@ -7,7 +7,7 @@ import { isProtectedDemoAccount } from "@/server/auth/demo-accounts";
 // 公开演示时的保护：4 个演示账号不能改密码；普通账号改密码先过格式检查（这几条都在查库之前就拦下）。
 
 function fakeUser(username: string): CurrentUser {
-  return { id: 999999, username, name: "测试", role: "STAFF", storeId: 1, regionId: null, isActive: true, store: null, region: null };
+  return { id: 999999, username, name: "测试", role: "STAFF", storeId: 1, regionId: null, mustChangePassword: false, isActive: true, store: null, region: null };
 }
 
 describe("演示账号保护", () => {

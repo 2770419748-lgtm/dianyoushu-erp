@@ -314,6 +314,7 @@ const MENU_HQ: MenuEntry[] = [
   ALERTS,
   NOTICES,
   { key: "org", label: "组织管理", href: "/org" },
+  { key: "setup", label: "系统设置", href: "/setup" },
   EMPLOYEES,
   SCHEDULES,
   ATTENDANCE,

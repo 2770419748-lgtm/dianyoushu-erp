@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import * as stocktake from "@/server/stocktake/stocktake-service";
 import { ApprovalRequiredError } from "@/server/approval/approval-check";
@@ -30,12 +30,12 @@ async function run(fn: () => Promise<{ id?: number; info?: string } | void>, onA
 }
 
 export async function createStocktakeAction(input: { storeId: number; note?: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => stocktake.createStocktake(user, input));
 }
 
 export async function enterCountsAction(id: number, input: stocktake.EnterCountsInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const result = await stocktake.enterCounts(user, id, input);
     const info = `识别 ${result.scanned} 个串号，对上 ${result.matched} 个${result.unexpected.length ? `；${result.unexpected.length} 个不在应有清单里（${result.unexpected.slice(0, 3).join("、")}），请核实后由总部走入库` : ""}`;
@@ -44,7 +44,7 @@ export async function enterCountsAction(id: number, input: stocktake.EnterCounts
 }
 
 export async function confirmStocktakeAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(
     () => stocktake.confirmStocktake(user, id),
     (error) => submitForApproval(user, error, { action: "STOCKTAKE", stocktakeId: id, details: [] }),
@@ -52,6 +52,6 @@ export async function confirmStocktakeAction(id: number) {
 }
 
 export async function voidStocktakeAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => stocktake.voidStocktake(user, id));
 }

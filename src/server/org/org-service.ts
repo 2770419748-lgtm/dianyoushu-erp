@@ -5,8 +5,9 @@ import { removeFutureShiftsFor } from "@/server/hr/schedule-service";
 import { todayBizDate } from "@/server/stock/doc-no";
 import { prisma } from "@/lib/prisma";
 import type { Role } from "@/generated/prisma/enums";
-import { DEMO_PROTECTED_MESSAGE, isProtectedDemoAccount } from "@/server/auth/demo-accounts";
+import { DEMO_MODE, DEMO_PROTECTED_MESSAGE, isProtectedDemoAccount } from "@/server/auth/demo-accounts";
 import { hashPassword } from "@/server/auth/password";
+import { getLicense } from "@/server/settings/settings-service";
 import { canManageOrg, ROLE_LABELS } from "@/server/auth/permissions";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { getWecomClient, WecomError } from "@/server/wecom/client";
@@ -162,8 +163,18 @@ function parseStoreInput(input: StoreInput) {
   };
 }
 
+/** 门店数上限（口径第 21 节）：开户信息里的上限到了，就不能再新建、启用门店；试用不限，演示模式不管 */
+export async function assertStoreQuota(db: Db = prisma, demo = DEMO_MODE): Promise<void> {
+  if (demo) return;
+  const limit = (await getLicense(db))?.storeLimit ?? null;
+  if (limit === null) return;
+  const active = await db.store.count({ where: { isActive: true } });
+  if (active >= limit) throw new OrgError(`在用的门店已经 ${active} 家，到了合同里的上限（${limit} 家）；要加门店找服务商调整套餐`);
+}
+
 export async function createStore(actor: Actor, input: StoreInput) {
   assertCanManage(actor);
+  await assertStoreQuota();
   const data = parseStoreInput(input);
   const webhook = parseWebhook(input.wecomWebhookUrl);
   try {
@@ -195,6 +206,8 @@ export async function setStoreActive(actor: Actor, id: number, isActive: boolean
   if (!isActive) {
     const activeUsers = await prisma.user.count({ where: { storeId: id, isActive: true } });
     if (activeUsers > 0) throw new OrgError(`这家店还有 ${activeUsers} 个在职员工，先把员工停用或调到别的店`);
+  } else if (!(await prisma.store.findUnique({ where: { id }, select: { isActive: true } }))?.isActive) {
+    await assertStoreQuota();
   }
   const store = await prisma.store.update({ where: { id }, data: { isActive } });
   await writeAudit({ userId: actor.id, action: isActive ? "store.activate" : "store.deactivate", entity: "store", entityId: id });
@@ -238,7 +251,8 @@ export async function createUser(actor: Actor, input: UserInput & { username: un
   const data = parseUserInput(input);
   const passwordHash = await hashPassword(requirePassword(input.password));
   try {
-    const user = await prisma.user.create({ data: { username, passwordHash, ...data } });
+    // 密码是总部设的：本人第一次登录先改（口径第 21 节）
+    const user = await prisma.user.create({ data: { username, passwordHash, mustChangePassword: true, ...data } });
     await writeAudit({ userId: actor.id, action: "user.create", entity: "user", entityId: user.id, detail: { username, ...data } });
     return user;
   } catch (error) {
@@ -308,7 +322,8 @@ export async function resetUserPassword(actor: Actor, id: number, password: unkn
   await assertNotDemoAccount(id);
   const passwordHash = await hashPassword(requirePassword(password));
   // 版本号 +1：这个人之前的登录（可能在别人手里）马上失效，要用新密码重新登录
-  await prisma.user.update({ where: { id }, data: { passwordHash, sessionVersion: { increment: 1 } } });
+  // 本人下次登录先改密码（新密码是总部知道的，口径第 21 节）
+  await prisma.user.update({ where: { id }, data: { passwordHash, mustChangePassword: true, sessionVersion: { increment: 1 } } });
   await writeAudit({ userId: actor.id, action: "user.reset_password", entity: "user", entityId: id });
 }
 

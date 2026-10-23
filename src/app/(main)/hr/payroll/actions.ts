@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { formatFen } from "@/lib/format";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { generatePayroll, PayrollError, publishPayroll, savePlan, setAdjustment, voidPayroll } from "@/server/hr/payroll-service";
 
 // 提成和工资条（口径第 19 节）：都是总部的操作；规则在服务层。
@@ -22,7 +22,7 @@ async function run(fn: () => Promise<string>): Promise<PayrollActionResult> {
 }
 
 export async function generatePayrollAction(month: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await generatePayroll(user, month);
     const extra = [
@@ -34,7 +34,7 @@ export async function generatePayrollAction(month: string) {
 }
 
 export async function adjustAction(slipId: number, adjustmentFen: number, note: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await setAdjustment(user, slipId, { adjustmentFen, note });
     return "已改奖惩";
@@ -42,7 +42,7 @@ export async function adjustAction(slipId: number, adjustmentFen: number, note: 
 }
 
 export async function publishPayrollAction(runId: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await publishPayroll(user, runId);
     const changed = r.changedFen !== 0 || r.slipsChanged ? `；发布前按最新数据重算了一遍（奖惩照留），现在 ${r.slipCount} 张、应发合计 ${formatFen(r.grossFen)} 元，比草稿${r.changedFen >= 0 ? "多" : "少"} ${formatFen(Math.abs(r.changedFen))} 元` : "";
@@ -51,7 +51,7 @@ export async function publishPayrollAction(runId: number) {
 }
 
 export async function voidPayrollAction(runId: number, reason: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await voidPayroll(user, runId, reason);
     return "已整月作废，可以重新生成";
@@ -59,7 +59,7 @@ export async function voidPayrollAction(runId: number, reason: string) {
 }
 
 export async function savePlanAction(input: { id?: number; name: string; salesRateBp: number; perDeviceFen: number; perServiceFen: number; isActive: boolean; note?: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await savePlan(user, input);
     return "提成方案已保存，下次生成工资条按新方案算";

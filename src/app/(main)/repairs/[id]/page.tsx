@@ -5,6 +5,7 @@ import { requireUser, type CurrentUser } from "@/server/auth/current-user";
 import { PermissionError } from "@/server/auth/scope";
 import { getRepair, RepairError, type RepairDetail } from "@/server/repair/repair-service";
 import { RepairDetailView } from "./repair-detail-view";
+import { getPaymentMethods } from "@/server/settings/settings-service";
 
 export const dynamic = "force-dynamic";
 
@@ -29,5 +30,5 @@ export default async function RepairDetailPage({ params }: PageProps<"/repairs/[
   const loaded = await load(user, repairId);
   if (loaded.kind === "missing") notFound();
   if (loaded.kind === "forbidden") return <NoAccess title="没有权限看这张维修单" />;
-  return <RepairDetailView repair={loaded.repair} />;
+  return <RepairDetailView repair={loaded.repair} paymentMethods={await getPaymentMethods()} />;
 }

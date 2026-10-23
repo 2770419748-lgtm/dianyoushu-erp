@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Breadcrumb, Button, Grid, Layout, Menu, Space, Tag, Typography } from "antd";
+import { Alert, Breadcrumb, Button, Grid, Layout, Menu, Space, Tag, Typography } from "antd";
 import type { MenuEntry } from "@/server/auth/permissions";
 import { breadcrumbFor } from "@/lib/routes";
 import { logout } from "@/app/(auth)/login/actions";
@@ -11,6 +11,14 @@ import type { MyNotifications } from "@/server/alerts/alert-service";
 import { NotificationBell } from "./notification-bell";
 
 const { Header, Sider, Content } = Layout;
+
+/** 页面顶上的提醒（到期、没完成初始化……，口径第 21 节） */
+export interface ShellNotice {
+  level: "info" | "warning" | "error";
+  text: string;
+  href?: string;
+  linkText?: string;
+}
 
 export interface ShellUser {
   name: string;
@@ -25,11 +33,13 @@ export function AppShell({
   user,
   menu,
   notifications,
+  notices = [],
   children,
 }: {
   user: ShellUser;
   menu: MenuEntry[];
   notifications: MyNotifications;
+  notices?: ShellNotice[];
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -91,6 +101,16 @@ export function AppShell({
         </Header>
         <Content style={{ padding: compact ? 12 : 24, minWidth: 0 }}>
           {/* 手机端页面要一屏放下，不显示面包屑 */}
+          {notices.map((n) => (
+            <Alert
+              key={n.text}
+              type={n.level}
+              showIcon
+              style={{ marginBottom: 12 }}
+              title={n.text}
+              action={n.href ? <Link href={n.href}>{n.linkText ?? "去处理"}</Link> : undefined}
+            />
+          ))}
           {pathname.startsWith("/m/") ? null : <Breadcrumb items={crumbs} style={{ marginBottom: compact ? 12 : 16 }} />}
           {children}
         </Content>

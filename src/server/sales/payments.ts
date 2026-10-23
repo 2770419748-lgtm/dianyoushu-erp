@@ -16,7 +16,7 @@ export interface PaymentLine {
  * 校验一张销售单的收款：以旧换新抵扣 + 国补立减 + 若干手工收款，合计必须正好等于应收，差一分都不行。
  * 返回要写进 payments 表的行（抵扣、国补在前）。
  */
-export function buildSalePayments(totalFen: number, tradeInFen: number, manual: { method: unknown; amountFen: unknown }[], subsidyFen = 0): PaymentLine[] {
+export function buildSalePayments(totalFen: number, tradeInFen: number, manual: { method: unknown; amountFen: unknown }[], subsidyFen = 0, allowed: PaymentMethod[] = MANUAL_PAYMENT_METHODS): PaymentLine[] {
   if (!Number.isInteger(totalFen) || totalFen < 0) throw new PaymentError("应收金额不对");
   if (!Number.isInteger(tradeInFen) || tradeInFen < 0) throw new PaymentError("抵扣金额不对");
   if (!Number.isInteger(subsidyFen) || subsidyFen < 0) throw new PaymentError("国补金额不对");
@@ -28,6 +28,8 @@ export function buildSalePayments(totalFen: number, tradeInFen: number, manual: 
   for (const [index, raw] of manual.entries()) {
     const method = raw.method as PaymentMethod;
     if (!MANUAL_PAYMENT_METHODS.includes(method)) throw new PaymentError(`第 ${index + 1} 笔收款方式不对`);
+    // 总部在系统设置里关掉的收款方式不能用（口径第 21 节）
+    if (!allowed.includes(method)) throw new PaymentError(`第 ${index + 1} 笔的收款方式没开，换一种（总部在系统设置里管）`);
     const amountFen = Number(raw.amountFen);
     if (!Number.isInteger(amountFen) || amountFen < 0) throw new PaymentError(`第 ${index + 1} 笔金额不对`);
     if (amountFen === 0) continue;

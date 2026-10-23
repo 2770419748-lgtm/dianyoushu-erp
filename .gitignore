@@ -34,3 +34,6 @@ src/generated/
 
 # 服务器上的数据库备份（docker compose 的 backup 服务写进来），不进仓库
 backups/
+
+# 全量导出（pnpm export:all）：明文个人信息，交接完就删，永远不进仓库
+exports/

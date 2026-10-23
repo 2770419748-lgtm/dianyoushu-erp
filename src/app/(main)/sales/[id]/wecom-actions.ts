@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import { WecomError } from "@/server/wecom/client";
 import { createOrderBindCode, WecomContactError } from "@/server/wecom/contact-service";
@@ -24,14 +24,14 @@ async function run(fn: () => Promise<string | void>): Promise<WecomActionResult>
 }
 
 export async function createBindCodeAction(salesOrderId: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await createOrderBindCode(user, salesOrderId);
   });
 }
 
 export async function simulateScanAction(code: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const result = await simulateScanBindCode(user, code);
     return result.status === "PROCESSED" ? `模拟加好友完成：${result.result}` : `事件没处理成：${result.result}`;

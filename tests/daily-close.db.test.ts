@@ -46,7 +46,7 @@ beforeAll(async () => {
       fixture = {
         storeId: store.id,
         accessorySkuId: accessorySku.id,
-        hq: { id: hq.id, username: hq.username, name: hq.name, role: hq.role, storeId: hq.storeId, regionId: hq.regionId, isActive: hq.isActive, store: null, region: null },
+        hq: { id: hq.id, username: hq.username, name: hq.name, role: hq.role, storeId: hq.storeId, regionId: hq.regionId, mustChangePassword: false, isActive: hq.isActive, store: null, region: null },
       };
       dbReady = true;
     }

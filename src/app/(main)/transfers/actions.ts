@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import * as transfer from "@/server/transfer/transfer-service";
 import { ApprovalRequiredError } from "@/server/approval/approval-check";
@@ -31,7 +32,7 @@ async function run(fn: () => Promise<{ id: number } | void>, onApproval?: (error
 }
 
 export async function createTransferAction(input: transfer.TransferInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(
     () => transfer.createTransfer(user, input),
     (error) => submitForApproval(user, error, { action: "TRANSFER", input, details: [] }),
@@ -39,17 +40,17 @@ export async function createTransferAction(input: transfer.TransferInput) {
 }
 
 export async function shipTransferAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => transfer.shipTransfer(user, id));
 }
 
 export async function receiveTransferAction(id: number, input: transfer.ReceiveTransferInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => transfer.receiveTransfer(user, id, input));
 }
 
 export async function voidTransferAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => transfer.voidTransfer(user, id));
 }
 

@@ -118,6 +118,9 @@ services:
       # 灌演示数据、导入要加密手机号，必须和应用用同一套钥匙
       DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?在 .env 里设置 DATA_ENCRYPTION_KEY}
       DATA_INDEX_KEY: ${DATA_INDEX_KEY:?在 .env 里设置 DATA_INDEX_KEY}
+    # 全量导出（pnpm export:all）写到服务器的 ./exports；里面是明文个人信息，交接完就删
+    volumes:
+      - ./exports:/app/exports
     depends_on:
       db:
         condition: service_healthy

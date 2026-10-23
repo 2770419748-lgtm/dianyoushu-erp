@@ -4,6 +4,7 @@ import { canSell } from "@/server/auth/permissions";
 import { listStoresInScope } from "@/server/org/store-query";
 import { listTradeInSkuOptions } from "@/server/tradein/trade-in-service";
 import { NewTradeInView } from "./new-trade-in-view";
+import { getSwitches } from "@/server/settings/settings-service";
 
 export const dynamic = "force-dynamic";
 
@@ -20,5 +21,5 @@ export default async function NewTradeInPage({ searchParams }: PageProps<"/trade
   const requested = Number(one(params.storeId));
   const storeId = stores.some((s) => s.id === requested) ? requested : (user.storeId ?? stores[0]!.id);
   const skuOptions = await listTradeInSkuOptions();
-  return <NewTradeInView key={storeId} stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))} storeId={storeId} skuOptions={skuOptions} />;
+  return <NewTradeInView key={storeId} stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))} storeId={storeId} skuOptions={skuOptions} sellerIdRequired={(await getSwitches()).tradeInIdRequired} />;
 }

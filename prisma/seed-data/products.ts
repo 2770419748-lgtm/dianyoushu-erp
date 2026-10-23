@@ -140,8 +140,8 @@ export function stableBarcode(key: string): string {
   return `69${digits}`;
 }
 
-export async function seedProducts(prisma: PrismaClient) {
-  // 品类
+/** 品类（手机、平板、配件、服务），返回名字 → id */
+async function seedCategories(prisma: PrismaClient): Promise<Map<string, number>> {
   const categoryIds = new Map<string, number>();
   for (const c of CATEGORY_SEED) {
     const row = await prisma.category.upsert({
@@ -151,6 +151,57 @@ export async function seedProducts(prisma: PrismaClient) {
     });
     categoryIds.set(c.name, row.id);
   }
+  return categoryIds;
+}
+
+/** 默认服务商品（碎屏险、延保）和回收用的“其他机型”，返回建了几个 SKU */
+async function seedBaseItems(prisma: PrismaClient, categoryIds: Map<string, number>): Promise<number> {
+  let skuCount = 0;
+  // 服务类商品：一个服务一个型号一个 SKU，品牌记“门店服务”
+  const serviceBrand = await prisma.brand.upsert({ where: { name: "门店服务" }, update: { isActive: true }, create: { name: "门店服务" } });
+  const serviceCategoryId = categoryIds.get("服务")!;
+  for (const sv of SERVICE_SEED) {
+    const model = await prisma.productModel.upsert({
+      where: { brandId_name: { brandId: serviceBrand.id, name: sv.name } },
+      update: { categoryId: serviceCategoryId, isActive: true },
+      create: { brandId: serviceBrand.id, categoryId: serviceCategoryId, name: sv.name },
+    });
+    const barcode = stableBarcode(`门店服务|${sv.name}`);
+    const data = { modelId: model.id, name: sv.name, guidePriceFen: sv.guideYuan * 100, costPriceFen: sv.costYuan * 100, safetyQty: 0, isService: true, serviceMonths: sv.months, serviceKind: sv.kind };
+    await prisma.sku.upsert({ where: { barcode }, update: { ...data, isActive: true }, create: { ...data, barcode } });
+    skuCount++;
+  }
+
+  // 回收用的"其他机型"：旧机对不上现有型号时选它，真实机型写在回收单上
+  const otherBrand = await prisma.brand.upsert({ where: { name: "其他" }, update: { isActive: true }, create: { name: "其他" } });
+  const otherModel = await prisma.productModel.upsert({
+    where: { brandId_name: { brandId: otherBrand.id, name: "其他回收机" } },
+    update: { categoryId: categoryIds.get("手机")!, isActive: true },
+    create: { brandId: otherBrand.id, categoryId: categoryIds.get("手机")!, name: "其他回收机" },
+  });
+  const genericBarcode = stableBarcode("其他|回收机（其他机型）");
+  await prisma.sku.upsert({
+    where: { barcode: genericBarcode },
+    update: { modelId: otherModel.id, name: "回收机（其他机型）", guidePriceFen: 0, costPriceFen: 0, isActive: true },
+    create: { modelId: otherModel.id, name: "回收机（其他机型）", barcode: genericBarcode, guidePriceFen: 0, costPriceFen: 0 },
+  });
+  skuCount++;
+
+  return skuCount;
+}
+
+/**
+ * 开户（pnpm tenant:init，口径第 21 节）和演示都要的基础数据：品类、默认服务商品、回收用的“其他机型”。
+ * 不含机型库和配件（开户后在商品页从机型库勾选）。可反复运行。
+ */
+export async function seedBaseline(prisma: PrismaClient): Promise<{ skus: number }> {
+  const categoryIds = await seedCategories(prisma);
+  return { skus: await seedBaseItems(prisma, categoryIds) };
+}
+
+export async function seedProducts(prisma: PrismaClient) {
+  // 品类
+  const categoryIds = await seedCategories(prisma);
 
   // 品牌
   const brandNames = new Set<string>([...DEVICE_MODEL_SEED.map((m) => m.brand), ...ACCESSORY_SEED.map((a) => a.brand)]);
@@ -205,35 +256,7 @@ export async function seedProducts(prisma: PrismaClient) {
     skuCount++;
   }
 
-  // 服务类商品：一个服务一个型号一个 SKU，品牌记“门店服务”
-  const serviceBrand = await prisma.brand.upsert({ where: { name: "门店服务" }, update: { isActive: true }, create: { name: "门店服务" } });
-  const serviceCategoryId = categoryIds.get("服务")!;
-  for (const sv of SERVICE_SEED) {
-    const model = await prisma.productModel.upsert({
-      where: { brandId_name: { brandId: serviceBrand.id, name: sv.name } },
-      update: { categoryId: serviceCategoryId, isActive: true },
-      create: { brandId: serviceBrand.id, categoryId: serviceCategoryId, name: sv.name },
-    });
-    const barcode = stableBarcode(`门店服务|${sv.name}`);
-    const data = { modelId: model.id, name: sv.name, guidePriceFen: sv.guideYuan * 100, costPriceFen: sv.costYuan * 100, safetyQty: 0, isService: true, serviceMonths: sv.months, serviceKind: sv.kind };
-    await prisma.sku.upsert({ where: { barcode }, update: { ...data, isActive: true }, create: { ...data, barcode } });
-    skuCount++;
-  }
-
-  // 回收用的"其他机型"：旧机对不上现有型号时选它，真实机型写在回收单上
-  const otherBrand = await prisma.brand.upsert({ where: { name: "其他" }, update: { isActive: true }, create: { name: "其他" } });
-  const otherModel = await prisma.productModel.upsert({
-    where: { brandId_name: { brandId: otherBrand.id, name: "其他回收机" } },
-    update: { categoryId: categoryIds.get("手机")!, isActive: true },
-    create: { brandId: otherBrand.id, categoryId: categoryIds.get("手机")!, name: "其他回收机" },
-  });
-  const genericBarcode = stableBarcode("其他|回收机（其他机型）");
-  await prisma.sku.upsert({
-    where: { barcode: genericBarcode },
-    update: { modelId: otherModel.id, name: "回收机（其他机型）", guidePriceFen: 0, costPriceFen: 0, isActive: true },
-    create: { modelId: otherModel.id, name: "回收机（其他机型）", barcode: genericBarcode, guidePriceFen: 0, costPriceFen: 0 },
-  });
-  skuCount++;
+  skuCount += await seedBaseItems(prisma, categoryIds);
 
   return { models: DEVICE_MODEL_SEED.length + ACCESSORY_SEED.length + SERVICE_SEED.length, deviceModels: DEVICE_MODEL_SEED.length, accessories: ACCESSORY_SEED.length, services: SERVICE_SEED.length, skus: skuCount };
 }

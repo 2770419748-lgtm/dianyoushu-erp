@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import * as customers from "@/server/customers/customer-service";
 
 export type CustomerActionResult = { ok: true; customer?: { id: number; name: string; phoneMasked: string } } | { ok: false; error: string };
@@ -19,12 +20,12 @@ async function run(fn: () => Promise<{ id: number; name: string; phoneMasked: st
 }
 
 export async function createCustomerAction(input: customers.CustomerInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => customers.createCustomer(user, input));
 }
 
 export async function updateCustomerAction(id: number, input: customers.CustomerInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => customers.updateCustomer(user, id, input));
 }
 

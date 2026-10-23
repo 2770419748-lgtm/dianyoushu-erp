@@ -7,6 +7,7 @@ import { listAvailableTradeIns, listTradeInSkuOptions } from "@/server/tradein/t
 import { DEMO_MODE } from "@/server/auth/demo-accounts";
 import { subsidyHint } from "@/server/subsidy/subsidy-service";
 import { SaleForm } from "./sale-form";
+import { getPaymentMethods, getSwitches } from "@/server/settings/settings-service";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,8 @@ export default async function NewSalePage({ searchParams }: PageProps<"/sales/ne
     // key：换门店时重建，不会把别家店的机器和回收单带过来
     <SaleForm
       key={storeId}
+      paymentMethods={await getPaymentMethods()}
+      sellerIdRequired={(await getSwitches()).tradeInIdRequired}
       stores={stores.map((s) => ({ id: s.id, label: `${s.code} ${s.name}` }))}
       storeId={storeId}
       accessories={accessories}

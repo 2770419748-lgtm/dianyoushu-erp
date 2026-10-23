@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import { importPlatformResults, savePolicy, simulateReview, simulateSettle, subsidyActions, SubsidyError } from "@/server/subsidy/subsidy-service";
 
@@ -26,7 +26,7 @@ function summary(r: { applied: number; skipped: unknown[]; unmatched: unknown[];
 }
 
 export async function submitClaimAction(id: number, invoiceNo: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await subsidyActions.submit(user, id, invoiceNo);
     return "已提交平台审核";
@@ -34,7 +34,7 @@ export async function submitClaimAction(id: number, invoiceNo: string) {
 }
 
 export async function markReturnedAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await subsidyActions.markReturned(user, id);
     return "已标记退回平台";
@@ -42,22 +42,22 @@ export async function markReturnedAction(id: number) {
 }
 
 export async function importResultsAction(csv: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => summary(await importPlatformResults(user, csv)));
 }
 
 export async function simulateReviewAction() {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => `平台审核（模拟）：${summary(await simulateReview(user))}`);
 }
 
 export async function simulateSettleAction() {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => `平台到账（模拟）：${summary(await simulateSettle(user))}`);
 }
 
 export async function savePolicyAction(input: { categoryId: number; rateBp: number; capFen: number; priceCapFen: number; startsOn: string; endsOn: string; isActive: boolean; note?: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await savePolicy(user, input);
     return "已保存，以后开单按新政策算";

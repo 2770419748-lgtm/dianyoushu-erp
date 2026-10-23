@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { APPROVER_ROLE_LABELS } from "@/lib/approval";
 import type { ExpenseCategoryKey, ExpensePayMethodKey } from "@/lib/expense";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { cancelExpense, changeExpensePayment, ExpenseError, markExpensePaid, submitExpense } from "@/server/finance/expense-service";
 
 // 费用报销（口径第 19 节）：提交、撤回自己的；总部登记付款。审批在“审批”里批。
@@ -24,7 +24,7 @@ async function run(fn: () => Promise<string>): Promise<ExpenseActionResult> {
 }
 
 export async function submitExpenseAction(input: { category: ExpenseCategoryKey; amountFen: number; occurredOn: string; description: string; storeId?: number | null }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await submitExpense(user, input);
     if (r.autoApproved) return `已登记报销单 ${r.claimNo}：总部本人的报销不用批，等登记付款`;
@@ -33,7 +33,7 @@ export async function submitExpenseAction(input: { category: ExpenseCategoryKey;
 }
 
 export async function cancelExpenseAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await cancelExpense(user, id);
     return "已撤回";
@@ -41,7 +41,7 @@ export async function cancelExpenseAction(id: number) {
 }
 
 export async function changePaymentAction(id: number, input: { action: "EDIT" | "UNDO"; reason: string; payMethod?: ExpensePayMethodKey; paidOn?: string; note?: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await changeExpensePayment(user, id, input);
     return input.action === "UNDO" ? "已撤销付款，回到待付款" : "已改好付款信息";
@@ -49,7 +49,7 @@ export async function changePaymentAction(id: number, input: { action: "EDIT" | 
 }
 
 export async function payExpenseAction(id: number, input: { payMethod: ExpensePayMethodKey; paidOn: string; note: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await markExpensePaid(user, id, input);
     return "已登记付款";

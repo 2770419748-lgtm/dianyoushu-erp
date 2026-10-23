@@ -42,12 +42,14 @@ export function TradeInForm({
   skuOptions,
   onCreated,
   submitText = "提交回收单",
+  sellerIdRequired = true,
 }: {
   storeId: number;
   customerId?: number;
   skuOptions: TradeInSkuOption[];
   onCreated: (t: CreatedTradeIn) => void;
   submitText?: string;
+  sellerIdRequired?: boolean; // 总部在系统设置里关了“回收登记身份证必填”时为 false（口径第 21 节）
 }) {
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
@@ -122,15 +124,15 @@ export function TradeInForm({
         </Form.Item>
       </Space>
       <Space size="large" wrap>
-        <Form.Item name="sellerName" label="卖家姓名" rules={[{ required: true, whitespace: true, message: "填卖家姓名" }]}>
+        <Form.Item name="sellerName" label="卖家姓名" rules={[{ required: sellerIdRequired, whitespace: true, message: "填卖家姓名" }]}>
           <Input maxLength={30} style={{ width: 180 }} placeholder="和身份证上的一致" />
         </Form.Item>
         <Form.Item
           name="sellerIdNo"
           label="卖家身份证号"
-          extra="收旧手机要登记卖家身份；加密保存，店员只看到打码的"
+          extra={sellerIdRequired ? "收旧手机要登记卖家身份；加密保存，店员只看到打码的" : "选填（总部关了必填）；填了就加密保存，店员只看到打码的"}
           rules={[
-            { required: true, message: "填卖家身份证号" },
+            { required: sellerIdRequired, message: "填卖家身份证号" },
             { validator: (_, v: string | undefined) => (!v || isValidIdCard(normalizeIdCard(v)) ? Promise.resolve() : Promise.reject(new Error("身份证号不对，核对一下"))) },
           ]}
         >

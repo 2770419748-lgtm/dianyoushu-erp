@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import { WecomError } from "@/server/wecom/client";
 import { cancelTransfer, createResignedTransfers, processTransfersNow, WecomTransferError } from "@/server/wecom/transfer-service";
@@ -23,7 +23,7 @@ async function run(fn: () => Promise<string>): Promise<TransferActionResult> {
 }
 
 export async function processTransfersAction() {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await processTransfersNow(user);
     const parts = [`提交 ${r.submitted} 个`, `接替完毕 ${r.done} 个`, `客户拒绝 ${r.refused} 个`, `失败 ${r.failed} 个`, `还在等 ${r.pending + r.waitingDelete} 个`];
@@ -32,7 +32,7 @@ export async function processTransfersAction() {
 }
 
 export async function cancelTransferAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await cancelTransfer(user, id);
     return "取消了";
@@ -40,7 +40,7 @@ export async function cancelTransferAction(id: number) {
 }
 
 export async function assignResignedAction(fromUserId: number, toUserId: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await createResignedTransfers(user, { fromUserId, toUserId });
     return `${r.from}的 ${r.count} 个客户交给${r.to}：企业微信后台删掉${r.from}之后提交`;

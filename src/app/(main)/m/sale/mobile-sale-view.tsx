@@ -8,7 +8,7 @@ import type { InputRef } from "antd";
 import type { PaymentMethod } from "@/generated/prisma/enums";
 import { ScanButton } from "@/components/scan-button";
 import { formatFen, yuanToFen } from "@/lib/format";
-import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS_FOR_SALE } from "@/lib/sales-labels";
+import { PAYMENT_METHOD_LABELS } from "@/lib/sales-labels";
 import type { AvailableTradeIn } from "@/server/tradein/trade-in-service";
 import { searchCustomersAction } from "../../customers/actions";
 import { TradeInForm, type CreatedTradeIn, type TradeInSkuOption } from "../../trade-ins/trade-in-form";
@@ -50,12 +50,16 @@ export function MobileSaleView({
   availableTradeIns,
   tradeInSkuOptions,
   dayClosed,
+  paymentMethods,
+  sellerIdRequired,
 }: {
   stores: { id: number; label: string }[];
   storeId: number;
   availableTradeIns: AvailableTradeIn[];
   tradeInSkuOptions: TradeInSkuOption[];
   dayClosed: boolean; // 这家店今天已经日结确认：一进来就提示，不用等到提交才报错
+  paymentMethods: PaymentMethod[]; // 总部在系统设置里开着的收款方式（口径第 21 节）
+  sellerIdRequired: boolean; // 以旧换新登记卖家身份证必填（系统设置的业务开关）
 }) {
   const router = useRouter();
   const { message } = App.useApp();
@@ -76,7 +80,7 @@ export function MobileSaleView({
     return [...createdTradeIns, ...availableTradeIns].filter((t) => !usedTradeInIds.includes(t.id) && !seen.has(t.id) && seen.add(t.id));
   }, [createdTradeIns, availableTradeIns, usedTradeInIds]);
   const [tradeInModalOpen, setTradeInModalOpen] = useState(false);
-  const [method, setMethod] = useState<PaymentMethod>("WECHAT");
+  const [method, setMethod] = useState<PaymentMethod>((paymentMethods.includes("WECHAT") ? "WECHAT" : paymentMethods[0]!));
   // 拆两种收款：第二种填金额，主收款方式收剩下的（演示路径“微信 + 现金”就是这样）
   const [split, setSplit] = useState<{ method: PaymentMethod; amountYuan: number | null } | null>(null);
   const [done, setDone] = useState<{ id: number; orderNo: string; totalFen: number; tradeInFen: number; paidFen: number; payText: string } | null>(null);
@@ -146,7 +150,7 @@ export function MobileSaleView({
     setLines([]);
     setCustomer(null);
     setTradeIn(null);
-    setMethod("WECHAT");
+    setMethod((paymentMethods.includes("WECHAT") ? "WECHAT" : paymentMethods[0]!));
     setSplit(null);
     setDone(null);
     router.refresh(); // 重新取一遍本店未用的回收单
@@ -346,7 +350,7 @@ export function MobileSaleView({
           size="small"
           title={split ? `主收款：收剩下的 ${formatFen(Math.max(mainFen, 0))} 元` : "收款方式"}
           extra={
-            <Button size="small" onClick={() => setSplit(split ? null : { method: PAYMENT_METHODS_FOR_SALE.find((m) => m !== method)!, amountYuan: null })}>
+            <Button size="small" onClick={() => setSplit(split ? null : { method: paymentMethods.find((m) => m !== method)!, amountYuan: null })}>
               {split ? "不拆了" : "拆成两种收"}
             </Button>
           }
@@ -355,12 +359,12 @@ export function MobileSaleView({
             value={method}
             onChange={(e) => {
               setMethod(e.target.value);
-              if (split && split.method === e.target.value) setSplit({ ...split, method: PAYMENT_METHODS_FOR_SALE.find((m) => m !== e.target.value)! });
+              if (split && split.method === e.target.value) setSplit({ ...split, method: paymentMethods.find((m) => m !== e.target.value)! });
             }}
             buttonStyle="solid"
             style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}
           >
-            {PAYMENT_METHODS_FOR_SALE.map((m) => (
+            {paymentMethods.map((m) => (
               <Radio.Button key={m} value={m} style={{ ...BIG, lineHeight: "46px", textAlign: "center", borderRadius: 6, borderInlineStartWidth: 1 }}>
                 {PAYMENT_METHOD_LABELS[m]}
               </Radio.Button>
@@ -377,7 +381,7 @@ export function MobileSaleView({
                   value={split.method}
                   style={{ width: 120 }}
                   onChange={(m) => setSplit({ ...split, method: m })}
-                  options={PAYMENT_METHODS_FOR_SALE.filter((m) => m !== method).map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] }))}
+                  options={paymentMethods.filter((m) => m !== method).map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] }))}
                 />
                 <InputNumber
                   size="large"
@@ -437,7 +441,7 @@ export function MobileSaleView({
       </div>
 
       <Modal title="现场收旧机" open={tradeInModalOpen} onCancel={() => setTradeInModalOpen(false)} footer={null} destroyOnHidden>
-        <TradeInForm storeId={storeId} customerId={customer?.id} skuOptions={tradeInSkuOptions} onCreated={onTradeInCreated} submitText="收下旧机并用来抵扣" />
+        <TradeInForm storeId={storeId} customerId={customer?.id} skuOptions={tradeInSkuOptions} sellerIdRequired={sellerIdRequired} onCreated={onTradeInCreated} submitText="收下旧机并用来抵扣" />
       </Modal>
     </div>
   );

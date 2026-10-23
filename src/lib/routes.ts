@@ -3,6 +3,8 @@
 export const ROUTE_TITLES: Record<string, string> = {
   "/": "首页",
   "/org": "组织管理",
+  "/setup": "系统设置",
+  "/expired": "服务已到期",
   "/stores": "门店",
   "/logs": "操作日志",
   "/products": "商品",

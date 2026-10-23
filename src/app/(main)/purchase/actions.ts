@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import * as purchase from "@/server/purchase/purchase-service";
 
 export type PurchaseActionResult = { ok: true; id?: number } | { ok: false; error: string };
@@ -22,26 +22,26 @@ async function run(fn: () => Promise<{ id: number } | void>): Promise<PurchaseAc
 }
 
 export async function createPurchaseOrderAction(input: purchase.PurchaseOrderInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => purchase.createPurchaseOrder(user, input));
 }
 
 export async function updatePurchaseOrderAction(id: number, input: purchase.PurchaseOrderInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => purchase.updatePurchaseOrder(user, id, input));
 }
 
 export async function submitPurchaseOrderAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => purchase.submitPurchaseOrder(user, id));
 }
 
 export async function voidPurchaseOrderAction(id: number, reason: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => purchase.voidPurchaseOrder(user, id, reason));
 }
 
 export async function receiveGoodsAction(input: purchase.ReceiveGoodsInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => purchase.receiveGoods(user, input));
 }

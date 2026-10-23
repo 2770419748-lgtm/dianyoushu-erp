@@ -33,7 +33,7 @@ async function inRolledBackTx(fn: (tx: Prisma.TransactionClient) => Promise<void
 beforeAll(async () => {
   try {
     const u = await prisma.user.findFirst({ where: { role: "HQ" }, orderBy: { id: "asc" } });
-    if (u) hq = { id: u.id, username: u.username, name: u.name, role: u.role, storeId: u.storeId, regionId: u.regionId, isActive: u.isActive, store: null, region: null };
+    if (u) hq = { id: u.id, username: u.username, name: u.name, role: u.role, storeId: u.storeId, regionId: u.regionId, mustChangePassword: false, isActive: u.isActive, store: null, region: null };
   } catch {
     hq = null;
   }

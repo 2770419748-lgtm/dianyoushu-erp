@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import { isUniqueViolation } from "@/server/db-errors";
 import {
@@ -33,7 +33,7 @@ async function run(fn: () => Promise<{ id?: number; message?: string } | void>):
 }
 
 export async function registerBusinessAction(input: CarrierBusinessInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await carrierActions.register(user, input);
     return { id: r.id, message: `已登记 ${r.orderNo}` };
@@ -41,17 +41,17 @@ export async function registerBusinessAction(input: CarrierBusinessInput) {
 }
 
 export async function confirmBusinessAction(id: number, activated: boolean, extra: { carrierOrderNo?: string; reason?: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => carrierActions.confirm(user, id, { activated, ...extra }));
 }
 
 export async function voidBusinessAction(id: number, reason: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => carrierActions.void(user, id, reason));
 }
 
 export async function syncSimulatedAction() {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await syncSimulatedStatus(user);
     return { message: r.activated + r.failed === 0 ? "没有等着确认的业务" : `运营商系统（模拟）回来了：开通 ${r.activated} 笔，失败 ${r.failed} 笔` };
@@ -59,14 +59,14 @@ export async function syncSimulatedAction() {
 }
 
 export async function saveRuleAction(input: { carrier: string; bizType: string; commissionFen: number; clawbackMonths: number; isActive: boolean; note?: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     await saveCommissionRule(user, input);
   });
 }
 
 export async function importSettlementAction(input: { carrier: string; month: string; csv: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await importSettlementCsv(user, input);
     return { id: r.id, message: `已导入 ${r.settlementNo}` };
@@ -74,7 +74,7 @@ export async function importSettlementAction(input: { carrier: string; month: st
 }
 
 export async function simulateSettlementAction(input: { carrier: string; month: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await generateSimulatedSettlement(user, input);
     return { id: r.id, message: `已生成模拟结算单 ${r.settlementNo} 并对完账` };

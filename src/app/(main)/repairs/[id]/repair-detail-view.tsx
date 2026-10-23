@@ -7,7 +7,7 @@ import { Alert, App, Button, Card, Descriptions, Form, Input, InputNumber, Modal
 import type { PaymentMethod } from "@/generated/prisma/enums";
 import { formatDate, formatDateTime, formatFen, yuanToFen } from "@/lib/format";
 import { FAULT_LABELS, REPAIR_PAYER_LABELS, REPAIR_STATUS_COLORS, REPAIR_STATUS_LABELS, type RepairPayerKey } from "@/lib/repair";
-import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS_FOR_SALE } from "@/lib/sales-labels";
+import { PAYMENT_METHOD_LABELS } from "@/lib/sales-labels";
 import type { RepairDetail } from "@/server/repair/repair-service";
 import { approveRepairAction, declineRepairAction, finishRepairAction, pickupRepairAction, quoteRepairAction, voidRepairAction, type RepairActionResult } from "../actions";
 
@@ -16,14 +16,14 @@ const STEP_ORDER = ["RECEIVED", "QUOTED", "REPAIRING", "READY", "CLOSED"] as con
 type QuoteValues = { partsYuan?: number; laborYuan?: number; costYuan?: number; payer: RepairPayerKey; note?: string };
 type PayRow = { key: number; method: PaymentMethod; amountYuan: number | null };
 
-export function RepairDetailView({ repair }: { repair: RepairDetail }) {
+export function RepairDetailView({ repair, paymentMethods }: { repair: RepairDetail; paymentMethods: PaymentMethod[] }) {
   const router = useRouter();
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [quoteForm] = Form.useForm<QuoteValues>();
   const [noteModal, setNoteModal] = useState<{ open: boolean; kind?: "decline" | "repaired" | "failed" | "void" }>({ open: false });
   const [note, setNote] = useState("");
-  const [pays, setPays] = useState<PayRow[]>([{ key: 1, method: "WECHAT", amountYuan: null }]);
+  const [pays, setPays] = useState<PayRow[]>([{ key: 1, method: (paymentMethods.includes("WECHAT") ? "WECHAT" : paymentMethods[0]!), amountYuan: null }]);
 
   function act(fn: () => Promise<RepairActionResult>, done: string, after?: () => void) {
     startTransition(async () => {
@@ -198,7 +198,7 @@ export function RepairDetailView({ repair }: { repair: RepairDetail }) {
               </Typography.Text>
               {pays.map((p) => (
                 <Space key={p.key} wrap>
-                  <Select value={p.method} style={{ width: 140 }} options={PAYMENT_METHODS_FOR_SALE.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] }))} onChange={(m) => setPays(pays.map((x) => (x.key === p.key ? { ...x, method: m } : x)))} />
+                  <Select value={p.method} style={{ width: 140 }} options={paymentMethods.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] }))} onChange={(m) => setPays(pays.map((x) => (x.key === p.key ? { ...x, method: m } : x)))} />
                   <InputNumber min={0} precision={2} placeholder={pays.length === 1 ? formatFen(repair.chargeFen) : "金额"} value={p.amountYuan} style={{ width: 140 }} onChange={(v) => setPays(pays.map((x) => (x.key === p.key ? { ...x, amountYuan: v === null ? null : Number(v) } : x)))} />
                   {pays.length > 1 ? <Button type="link" danger onClick={() => setPays(pays.filter((x) => x.key !== p.key))}>删</Button> : null}
                 </Space>

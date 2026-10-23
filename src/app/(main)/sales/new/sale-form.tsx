@@ -7,7 +7,7 @@ import type { TableColumnsType } from "antd";
 import type { PaymentMethod } from "@/generated/prisma/enums";
 import { ScanButton } from "@/components/scan-button";
 import { formatFen, yuanToFen } from "@/lib/format";
-import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS_FOR_SALE } from "@/lib/sales-labels";
+import { PAYMENT_METHOD_LABELS } from "@/lib/sales-labels";
 import type { SellableAccessory, SellableDevice, SellableService } from "@/server/sales/sales-service";
 import type { AvailableTradeIn } from "@/server/tradein/trade-in-service";
 import { createCustomerAction, searchCustomersAction } from "../../customers/actions";
@@ -61,6 +61,8 @@ export function SaleForm({
   tradeInSkuOptions,
   subsidyHint,
   demo,
+  paymentMethods,
+  sellerIdRequired,
 }: {
   stores: { id: number; label: string }[];
   storeId: number;
@@ -70,6 +72,8 @@ export function SaleForm({
   tradeInSkuOptions: TradeInSkuOption[];
   subsidyHint: string | null; // 有在用的国补政策时的说明；null 就不显示国补
   demo: boolean;
+  paymentMethods: PaymentMethod[]; // 总部在系统设置里开着的收款方式（口径第 21 节）
+  sellerIdRequired: boolean; // 以旧换新登记卖家身份证必填（系统设置的业务开关）
 }) {
   const router = useRouter();
   const { message } = App.useApp();
@@ -89,7 +93,7 @@ export function SaleForm({
 
   const [lines, setLines] = useState<Line[]>([]);
   const [discountYuan, setDiscountYuan] = useState<number>(0);
-  const [payments, setPayments] = useState<PaymentRow[]>([{ key: 1, method: "WECHAT", amountYuan: null }]);
+  const [payments, setPayments] = useState<PaymentRow[]>([{ key: 1, method: (paymentMethods.includes("WECHAT") ? "WECHAT" : paymentMethods[0]!), amountYuan: null }]);
   const [note, setNote] = useState("");
 
   const [tradeIn, setTradeIn] = useState<TradeInPick | null>(null);
@@ -451,7 +455,7 @@ export function SaleForm({
                       value={p.method}
                       style={{ width: 120 }}
                       onChange={(m) => updatePayment(p.key, { method: m })}
-                      options={PAYMENT_METHODS_FOR_SALE.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m], disabled: payments.some((x) => x.key !== p.key && x.method === m) }))}
+                      options={paymentMethods.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m], disabled: payments.some((x) => x.key !== p.key && x.method === m) }))}
                     />
                     <InputNumber
                       min={0}
@@ -474,10 +478,10 @@ export function SaleForm({
                 <Space wrap>
                   <Button
                     size="small"
-                    disabled={payments.length >= PAYMENT_METHODS_FOR_SALE.length}
+                    disabled={payments.length >= paymentMethods.length}
                     onClick={() => {
                       const used = new Set(payments.map((x) => x.method));
-                      const method = PAYMENT_METHODS_FOR_SALE.find((m) => !used.has(m))!;
+                      const method = paymentMethods.find((m) => !used.has(m))!;
                       setPayments([...payments.map((x) => (x.amountYuan === null ? { ...x, amountYuan: paymentFen(x) / 100 } : x)), { key: Date.now(), method, amountYuan: null }]);
                     }}
                   >
@@ -497,7 +501,7 @@ export function SaleForm({
       </Col>
 
       <Modal title="以旧换新：现场收旧机" open={tradeInModalOpen} onCancel={() => setTradeInModalOpen(false)} footer={null} destroyOnHidden width={640}>
-        <TradeInForm storeId={storeId} customerId={customer?.id} skuOptions={tradeInSkuOptions} onCreated={onTradeInCreated} submitText="收下旧机并用来抵扣" />
+        <TradeInForm storeId={storeId} customerId={customer?.id} skuOptions={tradeInSkuOptions} sellerIdRequired={sellerIdRequired} onCreated={onTradeInCreated} submitText="收下旧机并用来抵扣" />
       </Modal>
 
       <Modal title="新建客户" open={customerModalOpen} confirmLoading={pending} onCancel={() => setCustomerModalOpen(false)} onOk={() => customerForm.submit()} destroyOnHidden>

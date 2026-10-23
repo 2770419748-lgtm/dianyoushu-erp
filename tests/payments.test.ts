@@ -34,6 +34,11 @@ describe("收款拆分：合计必须等于应收", () => {
     ).toThrow(/合并/);
     expect(buildSalePayments(1000, 0, [{ method: "CASH", amountFen: 1000 }, { method: "WECHAT", amountFen: 0 }])).toEqual([{ method: "CASH", amountFen: 1000 }]);
   });
+
+  it("总部在系统设置里关掉的收款方式不能用（口径第 21 节）", () => {
+    expect(() => buildSalePayments(1000, 0, [{ method: "CASH", amountFen: 1000 }], 0, ["WECHAT", "ALIPAY"])).toThrow(/没开/);
+    expect(buildSalePayments(1000, 0, [{ method: "WECHAT", amountFen: 1000 }], 0, ["WECHAT", "ALIPAY"])).toEqual([{ method: "WECHAT", amountFen: 1000 }]);
+  });
 });
 
 describe("退款", () => {

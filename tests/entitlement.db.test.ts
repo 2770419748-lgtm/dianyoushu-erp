@@ -52,7 +52,7 @@ beforeAll(async () => {
         serviceSkuId: serviceSku.id,
         serviceMonths: serviceSku.serviceMonths!,
         serviceCostFen: serviceSku.costPriceFen,
-        user: { id: hq.id, username: hq.username, name: hq.name, role: hq.role, storeId: hq.storeId, regionId: hq.regionId, isActive: hq.isActive, store: null, region: null },
+        user: { id: hq.id, username: hq.username, name: hq.name, role: hq.role, storeId: hq.storeId, regionId: hq.regionId, mustChangePassword: false, isActive: hq.isActive, store: null, region: null },
       };
     }
   } catch {

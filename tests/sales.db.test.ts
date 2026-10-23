@@ -54,7 +54,7 @@ beforeAll(async () => {
           role: hq.role,
           storeId: hq.storeId,
           regionId: hq.regionId,
-          isActive: hq.isActive,
+          mustChangePassword: false, isActive: hq.isActive,
           store: null,
           region: null,
         },

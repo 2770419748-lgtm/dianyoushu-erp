@@ -51,7 +51,7 @@ beforeAll(async () => {
         storeId: store.id,
         deviceSkuId: deviceSku.id,
         accessorySkuId: accessorySku.id,
-        user: { id: hq.id, username: hq.username, name: hq.name, role: hq.role, storeId: hq.storeId, regionId: hq.regionId, isActive: hq.isActive, store: null, region: null },
+        user: { id: hq.id, username: hq.username, name: hq.name, role: hq.role, storeId: hq.storeId, regionId: hq.regionId, mustChangePassword: false, isActive: hq.isActive, store: null, region: null },
       };
       dbReady = true;
     }

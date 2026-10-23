@@ -19,6 +19,7 @@ import { lineBaseFen, type SubsidyPick } from "@/lib/subsidy";
 import { cancelClaimsTx, createClaimsTx, prepareSubsidyTx, SubsidyError } from "@/server/subsidy/subsidy-service";
 import { onOrderChangedTx } from "@/server/invoice/invoice-service";
 import { checkApproval, type ApprovalCheckOptions } from "@/server/approval/approval-check";
+import { getPaymentMethods } from "@/server/settings/settings-service";
 
 const yuan = (fen: number) => (fen / 100).toFixed(2);
 
@@ -208,7 +209,7 @@ export async function createSalesOrderTx(tx: Tx, user: CurrentUser, input: Sales
       : [];
   let payments;
   try {
-    payments = buildSalePayments(totalFen, tradeIn?.appraisedFen ?? 0, manual, subsidyFen);
+    payments = buildSalePayments(totalFen, tradeIn?.appraisedFen ?? 0, manual, subsidyFen, await getPaymentMethods(tx));
   } catch (error) {
     if (error instanceof PaymentError) throw new SalesError(error.message);
     throw error;

@@ -19,6 +19,7 @@ export async function findSessionUser(session: SessionPayload) {
       isActive: true,
       sessionVersion: true,
       mfaEnabledAt: true,
+      mustChangePassword: true,
       store: { select: { id: true, name: true, regionId: true } },
       region: { select: { id: true, name: true } },
     },

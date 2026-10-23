@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { PUNCH_LABELS, type PunchKindKey } from "@/lib/attendance";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { addManualPunch, AttendanceError, punch } from "@/server/hr/attendance-service";
 
 // 考勤打卡（口径第 19 节）：员工自己打卡；店长、总部补卡。规则都在服务层。
@@ -23,7 +23,7 @@ async function run(fn: () => Promise<string>): Promise<AttendanceActionResult> {
 }
 
 export async function punchAction(kind: PunchKindKey) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await punch(user, kind);
     return `${PUNCH_LABELS[r.kind]}打卡成功：${r.label}`;
@@ -31,7 +31,7 @@ export async function punchAction(kind: PunchKindKey) {
 }
 
 export async function manualPunchAction(input: { userId: number; date: string; kind: PunchKindKey; time: string; note: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const r = await addManualPunch(user, input);
     return `已给${r.name}补录${PUNCH_LABELS[input.kind]}卡`;

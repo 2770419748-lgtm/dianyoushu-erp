@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { WecomError } from "@/server/wecom/client";
 import { WecomContactError } from "@/server/wecom/contact-service";
 import { simulateKfMessage } from "@/server/wecom/simulator";
@@ -11,7 +11,7 @@ import { simulateKfMessage } from "@/server/wecom/simulator";
 export type KfActionResult = { ok: true; sessionId: number } | { ok: false; error: string };
 
 export async function simulateKfAction(input: { externalUserid?: string; persona?: "bound" | "anon"; text?: string; asServicer?: boolean; endSession?: boolean }): Promise<KfActionResult> {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   try {
     const result = await simulateKfMessage(user, input);
     revalidatePath("/wecom/kf");

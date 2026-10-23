@@ -82,6 +82,30 @@ jobs:
       - name: 对账自检（浏览器测试跑完账还对得上）
         run: pnpm db:check
 
+      # 开户（口径第 21 节）：新客户的空库上开户；演示模式、重复开户被拒；改套餐；全量导出不带密码
+      - name: 开户脚本（空库开户、改套餐、全量导出）
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci_tenant?schema=public
+          DEMO_MODE: "0"
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d ci -q -c "CREATE DATABASE ci_tenant"
+          pnpm exec prisma migrate deploy > /dev/null
+          if DEMO_MODE=1 pnpm -s tenant:init --name "CI 试点通讯" > /dev/null 2>&1; then echo "演示模式下开户没被拒"; exit 1; fi
+          out=$(pnpm -s tenant:init --name "CI 试点通讯")
+          pw=$(echo "$out" | grep -oE "初始密码 [A-Za-z0-9]{12}" | cut -d' ' -f2)
+          test -n "$pw"
+          echo "::add-mask::$pw"
+          echo "$out"
+          PGPASSWORD=postgres psql -h localhost -U postgres -d ci_tenant -tAc "SELECT username, role, must_change_password FROM users" | grep -qx "admin|HQ|t"
+          PGPASSWORD=postgres psql -h localhost -U postgres -d ci_tenant -tAc "SELECT value->>'plan' FROM system_settings WHERE key = 'license'" | grep -qx TRIAL
+          if pnpm -s tenant:init --name "再开一次" > /dev/null 2>&1; then echo "重复开户没被拒"; exit 1; fi
+          pnpm -s license:set --plan PAID --days 365 --stores 3 | tee /tmp/license.txt
+          grep -q "改之后：正式" /tmp/license.txt
+          pnpm -s export:all --out /tmp/ci-export > /dev/null
+          grep -q ",admin," /tmp/ci-export/users.csv
+          if grep -q "password_hash\|mfa_secret" /tmp/ci-export/users.csv; then echo "导出里有密码哈希"; exit 1; fi
+          echo "开户：空库开得出、演示模式和重复开户被拒、改套餐、全量导出不带密码"
+
       - name: 生产构建
         run: pnpm build
 

@@ -1,14 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import { KpiError, saveKpiTargets, type KpiTargetInput } from "@/server/kpi/kpi-service";
 
 export type KpiActionResult = { ok: true; saved: number } | { ok: false; error: string };
 
 export async function saveKpiTargetsAction(year: number, month: number, rows: KpiTargetInput[]): Promise<KpiActionResult> {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   try {
     const result = await saveKpiTargets(user, year, month, rows);
     revalidatePath("/kpi");

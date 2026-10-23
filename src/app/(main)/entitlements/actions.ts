@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { EntitlementError, markReminderContacted, runReminderScan } from "@/server/entitlement/entitlement-service";
 
 // 到期名单页的 Server Function：只做"取当前用户 → 调服务层 → 刷新页面"，规则都在服务层。
@@ -21,7 +21,7 @@ async function run(fn: () => Promise<string | void>): Promise<EntitlementActionR
 }
 
 export async function runReminderScanAction() {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(async () => {
     const created = await runReminderScan(user);
     const total = created.T30 + created.T7;
@@ -30,6 +30,6 @@ export async function runReminderScanAction() {
 }
 
 export async function markContactedAction(reminderId: number, note: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => markReminderContacted(user, reminderId, note));
 }

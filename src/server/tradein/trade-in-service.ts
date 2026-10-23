@@ -9,6 +9,7 @@ import { assertStoreAccess, PermissionError, storeScopeWhere } from "@/server/au
 import { decryptPii, encryptPii, maskIdCard, piiFingerprint } from "@/server/pii/crypto";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { writeAudit } from "@/server/audit";
+import { getSwitches } from "@/server/settings/settings-service";
 import { asTx, type Db } from "@/server/db-tx";
 import { nextDocNo } from "@/server/stock/doc-no";
 import { DeviceStateError } from "@/server/stock/device-state";
@@ -49,12 +50,16 @@ export interface TradeInInput {
   note?: unknown;
 }
 
-/** 卖家身份：姓名 1～30 字，身份证号 18 位且校验位对 */
-function parseSeller(input: TradeInInput) {
+/**
+ * 卖家身份：姓名 1～30 字，身份证号 18 位且校验位对。默认必填；总部在系统设置里关了“必填”（口径第 21 节）以后，
+ * 两样都不填可以，填了就要填对、两样都填。
+ */
+function parseSeller(input: TradeInInput, required: boolean) {
   const sellerName = typeof input.sellerName === "string" ? input.sellerName.trim() : "";
+  const idNo = normalizeIdCard(typeof input.sellerIdNo === "string" ? input.sellerIdNo : "");
+  if (!required && !sellerName && !idNo) return null;
   if (!sellerName) throw new TradeInError("请填卖家姓名（收旧手机要登记卖家身份）");
   if (sellerName.length > 30) throw new TradeInError("卖家姓名最多 30 个字");
-  const idNo = normalizeIdCard(typeof input.sellerIdNo === "string" ? input.sellerIdNo : "");
   if (!idNo) throw new TradeInError("请填卖家身份证号（收旧手机要登记卖家身份）");
   if (!isValidIdCard(idNo)) throw new TradeInError("身份证号不对：要 18 位，出生日期不能晚于今天、最后一位校验码要对得上（核对一下有没有输错）");
   return { sellerName, sellerIdEnc: encryptPii(idNo), sellerIdFp: piiFingerprint("idcard", idNo), sellerIdMasked: maskIdCard(idNo) };
@@ -88,7 +93,7 @@ export async function createTradeInTx(tx: Tx, user: CurrentUser, input: TradeInI
   const appraisedFen = Number(input.appraisedFen);
   if (!Number.isInteger(appraisedFen) || appraisedFen <= 0) throw new TradeInError("估价要大于 0");
   if (appraisedFen > 5_000_000) throw new TradeInError("估价太大了，检查一下");
-  const seller = parseSeller(input);
+  const seller = parseSeller(input, (await getSwitches(tx)).tradeInIdRequired);
 
   let customerId: number | null = null;
   if (input.customerId) {
@@ -101,7 +106,7 @@ export async function createTradeInTx(tx: Tx, user: CurrentUser, input: TradeInI
   const orderNo = await nextDocNo(tx, "RC");
   const deviceCode = sold ? sold.device.code : codes.code;
   const order = await tx.tradeInOrder.create({
-    data: { orderNo, storeId, customerId, handledById: user.id, deviceCode, modelName, skuId: sku.id, condition, appraisedFen, note, ...seller },
+    data: { orderNo, storeId, customerId, handledById: user.id, deviceCode, modelName, skuId: sku.id, condition, appraisedFen, note, ...(seller ?? {}) },
   });
   try {
     if (sold) {
@@ -131,7 +136,7 @@ export async function createTradeInTx(tx: Tx, user: CurrentUser, input: TradeInI
   } catch (error) {
     wrap(error);
   }
-  await writeAudit({ userId: user.id, action: "trade_in.create", entity: "trade_in_order", entityId: order.id, detail: { orderNo, appraisedFen, deviceCode, retake: sold !== null, sellerName: seller.sellerName, sellerIdMasked: seller.sellerIdMasked } }, tx);
+  await writeAudit({ userId: user.id, action: "trade_in.create", entity: "trade_in_order", entityId: order.id, detail: { orderNo, appraisedFen, deviceCode, retake: sold !== null, sellerName: seller?.sellerName ?? null, sellerIdMasked: seller?.sellerIdMasked ?? null } }, tx);
   return { id: order.id, orderNo, appraisedFen, deviceCode, modelName };
 }
 

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import * as tradeIn from "@/server/tradein/trade-in-service";
 
@@ -23,7 +24,7 @@ function toError(error: unknown): TradeInActionResult {
 }
 
 export async function createTradeInAction(input: tradeIn.TradeInInput): Promise<TradeInActionResult> {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   try {
     const created = await tradeIn.createTradeIn(user, input);
     refresh();
@@ -45,7 +46,7 @@ export async function revealSellerIdAction(tradeInId: number): Promise<{ ok: tru
 }
 
 export async function refurbishAction(deviceId: number): Promise<TradeInActionResult> {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   try {
     await tradeIn.refurbish(user, deviceId);
     refresh();

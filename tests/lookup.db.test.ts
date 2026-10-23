@@ -33,7 +33,7 @@ beforeAll(async () => {
     ]);
     if (!device || !otherStore) return;
     f = {
-      staff: { id: staffRow.id, username: staffRow.username, name: staffRow.name, role: staffRow.role, storeId, regionId: staffRow.regionId, isActive: true, store: null, region: null },
+      staff: { id: staffRow.id, username: staffRow.username, name: staffRow.name, role: staffRow.role, storeId, regionId: staffRow.regionId, mustChangePassword: false, isActive: true, store: null, region: null },
       storeId,
       device,
       otherStoreDeviceCode: other?.code ?? null,

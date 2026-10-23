@@ -62,7 +62,7 @@ beforeAll(async () => {
       prisma.user.findFirst({ where: { role: "HQ" }, orderBy: { id: "asc" } }),
     ]);
     if (store && deviceSku && hq) {
-      fixture = { storeId: store.id, deviceSkuId: deviceSku.id, user: { id: hq.id, username: hq.username, name: hq.name, role: hq.role, storeId: hq.storeId, regionId: hq.regionId, isActive: hq.isActive, store: null, region: null } };
+      fixture = { storeId: store.id, deviceSkuId: deviceSku.id, user: { id: hq.id, username: hq.username, name: hq.name, role: hq.role, storeId: hq.storeId, regionId: hq.regionId, mustChangePassword: false, isActive: hq.isActive, store: null, region: null } };
     }
   } catch {
     fixture = null;

@@ -18,6 +18,7 @@ import { type Db, withTx } from "@/server/db-tx";
 import { buildSalePayments, PaymentError } from "@/server/sales/payments";
 import { nextDocNo, todayBizDate } from "@/server/stock/doc-no";
 import { deviceCodeWhere } from "@/server/stock/stock-service";
+import { getPaymentMethods } from "@/server/settings/settings-service";
 
 // 售后维修（口径第 13 节）：接件 → 检测报价 → 维修 → 取机结算。
 // 客户的机器不算门店库存：全程不动库存、不写库存流水，机器状态不变；按码找到本系统卖出的机器，带出购买记录、保修和碎屏险 / 延保。
@@ -330,7 +331,7 @@ export async function pickupRepairTx(tx: Tx, user: CurrentUser, id: number, paym
   if (stale) throw new RepairError(`报价时选的“${REPAIR_PAYER_LABELS[repair.payer!]}”现在用不了：${stale}。请重新报价（比如改成自费）再结算`);
   let lines;
   try {
-    lines = buildSalePayments(repair.chargeFen, 0, Array.isArray(payments) ? payments : []);
+    lines = buildSalePayments(repair.chargeFen, 0, Array.isArray(payments) ? payments : [], 0, await getPaymentMethods(tx));
   } catch (error) {
     if (error instanceof PaymentError) throw new RepairError(error.message);
     throw error;

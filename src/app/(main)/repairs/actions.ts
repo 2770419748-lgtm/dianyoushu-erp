@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import { createRepair, lookupRepairDevice, repairActions, RepairError, type RepairIntakeInput, type RepairQuoteInput } from "@/server/repair/repair-service";
 
@@ -33,36 +34,36 @@ export async function lookupRepairDeviceAction(code: string) {
 }
 
 export async function createRepairAction(input: RepairIntakeInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => createRepair(user, input));
 }
 
 export async function quoteRepairAction(id: number, input: RepairQuoteInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => repairActions.quote(user, id, input));
 }
 
 export async function approveRepairAction(id: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => repairActions.approve(user, id));
 }
 
 export async function declineRepairAction(id: number, note: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => repairActions.decline(user, id, note));
 }
 
 export async function finishRepairAction(id: number, outcome: "REPAIRED" | "NOT_REPAIRED", note: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => repairActions.finish(user, id, outcome, note));
 }
 
 export async function pickupRepairAction(id: number, payments: { method: string; amountFen: number }[]) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => repairActions.pickup(user, id, payments));
 }
 
 export async function voidRepairAction(id: number, reason: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => repairActions.void(user, id, reason));
 }

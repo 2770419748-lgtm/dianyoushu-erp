@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import * as org from "@/server/org/org-service";
 
 // 组织管理页的 Server Function：只做"取当前用户 → 调服务层 → 刷新页面"，规则都在服务层。
@@ -21,42 +21,42 @@ async function run(fn: () => Promise<unknown>): Promise<ActionResult> {
 }
 
 export async function createRegionAction(input: { name: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => org.createRegion(user, input));
 }
 
 export async function updateRegionAction(id: number, input: { name: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => org.updateRegion(user, id, input));
 }
 
 export async function setRegionActiveAction(id: number, isActive: boolean) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => org.setRegionActive(user, id, isActive));
 }
 
 export async function createStoreAction(input: org.StoreInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => org.createStore(user, input));
 }
 
 export async function updateStoreAction(id: number, input: org.StoreInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => org.updateStore(user, id, input));
 }
 
 export async function setStoreActiveAction(id: number, isActive: boolean) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => org.setStoreActive(user, id, isActive));
 }
 
 export async function createUserAction(input: org.UserInput & { username: string; password: string }) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => org.createUser(user, input));
 }
 
 export async function updateUserAction(id: number, input: org.UserInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   let notice: string | undefined;
   const result = await run(async () => {
     notice = (await org.updateUser(user, id, input)).notice;
@@ -65,17 +65,17 @@ export async function updateUserAction(id: number, input: org.UserInput) {
 }
 
 export async function resetUserPasswordAction(id: number, password: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => org.resetUserPassword(user, id, password));
 }
 
 export async function resetUserMfaAction(id: number, reason: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(() => org.resetUserMfa(user, id, reason));
 }
 
 export async function setUserActiveAction(id: number, isActive: boolean, takeoverUserId?: number) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   let notice: string | undefined;
   const result = await run(async () => {
     notice = (await org.setUserActive(user, id, isActive, { takeoverUserId })).notice;

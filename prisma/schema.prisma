@@ -597,6 +597,7 @@ model User {
   mfaSecretEnc   String?   @map("mfa_secret_enc")
   mfaEnabledAt   DateTime? @map("mfa_enabled_at")
   mfaLastStep    Int?      @map("mfa_last_step")
+  mustChangePassword Boolean @default(false) @map("must_change_password") // 开户的管理员、总部新建或重置过密码的人：下次登录先改密码（口径第 21 节）
   wecomUserid    String? @unique @map("wecom_userid") // 员工在企业微信里的账号（userid），组织管理里填
   name         String // 姓名
   role         Role

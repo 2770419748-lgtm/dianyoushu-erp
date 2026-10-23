@@ -2,13 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import type { FixedExpenseCategoryKey } from "@/lib/pnl";
-import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PnlError, saveFixedExpenses } from "@/server/finance/pnl-service";
 
 // 门店收支和利润表（口径第 19 节）：录门店固定支出（店长本店、总部）。
 
 export async function saveFixedAction(storeId: number, month: string, items: { category: FixedExpenseCategoryKey; amountFen: number; note: string }[]): Promise<{ ok: true } | { ok: false; error: string }> {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   try {
     await saveFixedExpenses(user, { storeId, month, items });
     revalidatePath("/finance/pnl");

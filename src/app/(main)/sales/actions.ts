@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/current-user";
+import { requireWritableUser } from "@/server/license/license-service";
 import { PermissionError } from "@/server/auth/scope";
 import * as sales from "@/server/sales/sales-service";
 import { createReturn, ReturnError, type ReturnInput } from "@/server/sales/return-service";
@@ -33,7 +34,7 @@ async function run(fn: () => Promise<{ id: number; orderNo: string } | void>, on
 }
 
 export async function createSalesOrderAction(input: sales.SalesOrderInput) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(
     () => sales.createSalesOrder(user, input),
     (error) => submitForApproval(user, error, { action: "SALE", input, details: [] }),
@@ -41,7 +42,7 @@ export async function createSalesOrderAction(input: sales.SalesOrderInput) {
 }
 
 export async function voidSalesOrderAction(id: number, reason: string) {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   return run(
     () => sales.voidSalesOrder(user, id, reason),
     (error) => submitForApproval(user, error, { action: "SALE_VOID", orderId: id, reason, details: [] }),
@@ -84,7 +85,7 @@ export async function lookupForSaleAction(storeId: number, code: string): Promis
 
 /** 退货：选原单明细退回、按原收款方式退款 */
 export async function createReturnAction(input: ReturnInput): Promise<SalesActionResult> {
-  const user = await requireUser();
+  const user = await requireWritableUser();
   try {
     const result = await createReturn(user, input);
     revalidatePath("/sales");

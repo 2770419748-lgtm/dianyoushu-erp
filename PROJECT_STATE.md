@@ -57,6 +57,7 @@
 - 产品化阶段 1 第 1 项之一（2026-10-23，口径第 20 节）：2026-10-23 坤总决定拿去卖、先"一家一套"找熟人试点（方案文档第 17 节）。手机号加密存：客户、运营商业务、运营商结算明细、员工档案、发票接收方从明文换成密文（AES-256-GCM）+ 指纹（HMAC，整号查找和唯一）+ 打码号码（迁移 `pii_encryption`，`src/server/pii/crypto.ts`），钥匙 `DATA_ENCRYPTION_KEY`、`DATA_INDEX_KEY`（生产必配，公开的开发和 CI 钥匙会被拒绝）；客户、运营商搜索改成整号或尾号 4 位。回收单必填卖家姓名和身份证号（`src/lib/id-card.ts` 校验位和日期），身份证号同样三列存，店长及以上在回收单列表点"显示"看全号、记日志。清失效登录 `/api/session/clear` 改成只认本站发的 POST，登录失效跳 `/login?reason=expired`。
 - 产品化阶段 1 第 1 项之二（2026-10-23）：二次验证。`src/server/auth/totp.ts`（RFC 6238，按 RFC 测试向量测过）、`src/server/auth/mfa-service.ts`（密码对了先发 5 分钟的待验证票 `erp_mfa`，输对动态码才发登录票；真用时店长及以上没绑定的先扫码绑定；同一个码条件写入防重放）；用户表加 `mfa_secret_enc`、`mfa_enabled_at`、`mfa_last_step`（迁移 `user_mfa`）；“我的”页能自己开（演示账号不能开）；组织管理“重置二次验证”（写原因、下线、记日志，不能重置自己）；服务器脚本 `pnpm mfa:reset`；二维码用 `qrcode` 库在服务端生成 data 图片。浏览器测试 `tests/e2e/mfa.spec.ts` 走一遍开启和两步登录。
 - 产品化阶段 1 第 1 项之三（2026-10-23）：备份加密和数据库分账号。`docker/backup.sh` 导出和加密走管道（openssl AES-256-CBC + PBKDF2，`BACKUP_PASSPHRASE`，没配拒绝启动，pg_dump 失败不留坏备份），备份服务换成 `docker/backup.Dockerfile`（postgres:17 加 openssl）；`docker/db-roles.sh` 建 `erp_app`（应用，只能增删改查）、`erp_readonly`（只读），默认授权管住以后迁移新建的表，第一次初始化时自动跑，已有的库手动跑一次；compose 里应用改连 `erp_app`。CI 最后用同一个脚本建账号、实测删不了表写不进去，应用容器连 `erp_app`，再实测加密备份能备、错口令解不开、对的口令能恢复。
+- 产品化阶段 1 第 2 项（2026-10-23，口径第 21 节）：开户脚本 `pnpm tenant:init`（空库、真用模式才能跑；建品类、默认服务商品、回收用的“其他机型”和总部管理员，随机初始密码只打印一次，开 30 天试用）、改套餐 `pnpm license:set`、停用后整库导出 `pnpm export:all`（一张表一个 CSV，个人信息解开，不导密码和令牌）。开户信息、公司信息、收款方式、业务开关存 `system_settings`（`src/server/settings/settings-service.ts`），到期规则是纯函数 `src/lib/license.ts`：到期前 7 天提醒，到期后 15 天宽限，之后只读——所有改数据的服务端动作开头改用 `requireWritableUser`（`src/server/license/license-service.ts`），只读时跳 `/expired`。用户表加 `must_change_password`（迁移 `must_change_password`）：开户的管理员、总部新建或重置过密码的人第一次登录先改密码。系统设置页 `/setup`（总部）一页清单；门店数上限拦新建、启用门店；收款方式关掉的开单、维修收款都不让用；回收登记身份证可以关掉必填。CI 加了空库开户、改套餐、导出的检查。
 - 产品化阶段 1 第 1 项之四（2026-10-23）：浏览器端到端测试补四条（`tests/e2e/permissions.spec.ts`、`return.spec.ts`、`transfer.spec.ts`、`stocktake.spec.ts`，共用 `helpers.ts`）：四种角色的页面权限矩阵（含越区看看板）、开单再退货库存回来、店长申请发出总部收货再调回、盘点建任务录实盘没差异确认。测试用 pg 直接查库对答案（Playwright 按 CommonJS 跑，Prisma 生成的客户端加载不了）。本机 `pnpm test:e2e` 共 10 条（权限矩阵按角色算 4 条）。
 - 第 1 项复查后补（2026-10-23，第 55～57 条）：个人信息钥匙核对（`src/server/pii/key-check.ts`，`system_settings` 表存核对记录，迁移 `system_settings`）：应用启动（`src/instrumentation.ts`）、灌演示数据、`pnpm daily`、`pnpm alerts:run` 先核对，对不上拒绝启动或停下；`db:check` 第 14 类逐行核对个人信息；CI 起容器改用新建的空库 `ci_app`，另外实测随机钥匙连灌过数据的库会拒绝启动。迁移失败的恢复步骤写进报错和踩坑。身份证出生日期不能晚于今天（北京时间）。
 - 二次验证、备份复查后补（2026-10-23，第 58～62 条）：限流器加 `consume`/`refund`（先占名额再核对），登录密码、动态码、改密码都改成这样，测试里同时发 300 个只放过 5 个；数据库密码改用 `openssl rand -hex 32`（base64 带 `/` 会让连接串解析失败），配置检查认出解析不了的连接串，部署文档写清改密码要进库改、旧库补建账号先 `up -d db`；`docker/backup.sh` 改用 bash + pipefail、umask 077、mktemp，写完解开整份读一遍核对，CI 加了盘满、权限、截断检查；首次绑定的待验证票 15 分钟、票里带二维码标识，换了二维码说清楚、不算输错；真用时店长及以上没绑二次验证的老登录票当作没登录（`src/server/auth/mfa-policy.ts` 的 `needsMfaBinding`）。
@@ -68,7 +69,7 @@
 
 ## 进行中
 
-- 产品化阶段 1（方案文档第 17.10 节，约 4～6 周）：1 真用收尾（口径第 20 节：手机号加密和回收登记身份已做；二次验证、备份加密、数据库分账号、权限矩阵和退货调拨盘点端到端测试在做）→ 2 开户脚本、初始化向导、试用和到期只读 → 3 Excel 导入、预检、期初入库单、机型库 → 4 小票和保修卡打印 → 5 自动部署回滚、批量升级、异地备份、拨测、定时任务（要服务器的等买了再做）。每项先写口径，推 main 后协调者安排自检复查。仓库改私有是坤总自己的事，还没说改。
+- 产品化阶段 1（方案文档第 17.10 节，约 4～6 周）：1 真用收尾（口径第 20 节，已做完）→ 2 开户脚本、初始化向导、试用和到期只读（口径第 21 节，已做完，等自检复查）→ 3 Excel 导入、预检、期初入库单、机型库 → 4 小票和保修卡打印 → 5 自动部署回滚、批量升级、异地备份、拨测、定时任务（要服务器的等买了再做）。每项先写口径，推 main 后协调者安排自检复查。仓库改私有是坤总自己的事，还没说改。
 - 演示排练 3 次计时：脚本在 `docs/演示脚本.md`，要坤总本人来。
 
 - 服务器和域名坤总决定先不买，等找工作前约 3 周再买（任务清单“找工作前再做”）。
@@ -136,6 +137,7 @@ code/
 - `pnpm daily`：每日任务（生成到期提醒；真对接企业微信时重放失败事件、清过期二维码配置），用 `tsx --conditions=react-server` 跑
 - `pnpm db:reset`：清空全部业务表 → 基础种子 → 生成 3 个月模拟经营数据（只允许本机库，约 30 秒）
 - `pnpm db:studio`：Prisma 自带的看表界面
+- `pnpm tenant:init --name 公司名`：开户（空库、`DEMO_MODE=0`）；`pnpm license:set`：看、改套餐和到期日；`pnpm export:all`：整库导出成 CSV（口径第 21 节，服务器上的用法见 `docs/部署.md`）
 
 ## 已定的环境事实
 
