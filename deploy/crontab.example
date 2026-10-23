@@ -1,0 +1,19 @@
+# 店有数 ERP 服务器的定时任务（口径第 24 节）。装法：sudo crontab -e，把下面几行贴进去（路径按实际改）；
+# 日志在 /var/log/erp/，先 sudo mkdir -p /var/log/erp。时间是服务器时区，先 sudo timedatectl set-timezone Asia/Shanghai。
+# 每家每天 03:00 的备份由各家的 backup 容器自己做，不在这里。
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# 每分钟巡检：健康检查、定时任务有没有在跑、硬盘
+* * * * *   /srv/erp/app/deploy/health-check.sh >> /var/log/erp/health.log 2>&1
+# 每日任务（到期提醒、企业微信补处理和清理、离职继承）
+0 9 * * *   /srv/erp/app/deploy/run-all.sh daily >> /var/log/erp/daily.log 2>&1
+# 智能提醒（今日待办、推门店群）
+0 9,21 * * * /srv/erp/app/deploy/run-all.sh alerts:run >> /var/log/erp/alerts.log 2>&1
+# 对账
+30 4 * * *  /srv/erp/app/deploy/run-all.sh db:check >> /var/log/erp/db-check.log 2>&1
+# 备份同步到另一个地域的对象存储
+0 5 * * *   /srv/erp/app/deploy/offsite-sync.sh >> /var/log/erp/offsite.log 2>&1
+# 每月 1 号恢复演练
+30 5 1 * *  /srv/erp/app/deploy/restore-drill.sh >> /var/log/erp/restore-drill.log 2>&1
+# 这些日志只留 30 天：把 deploy/logrotate.example 复制成 /etc/logrotate.d/erp（系统每天自动轮转）

@@ -1,0 +1,3 @@
+# 共享 Caddy 的总配置：每家客户的站点在 sites/ 里一家一个文件（deploy/tenant-new.sh 写），这里全部引进来。
+# 站点地址写域名（某某通讯.example.com）时 Caddy 自动申请并续期 HTTPS 证书；写 http://地址 时只走 HTTP（演练、没备案时）。
+import /etc/caddy/sites/*.caddy

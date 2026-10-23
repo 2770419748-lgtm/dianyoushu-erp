@@ -39,6 +39,8 @@ services:
       retries: 10
 
   app:
+    # 发布时所有客户用同一个打好的镜像（标签是提交号，见 deploy/），不在每家重新打；单独一套时照旧 up --build 现打
+    image: ${APP_IMAGE:-dianyoushu-erp:local}
     build: .
     restart: unless-stopped
     logging: *default-logging
@@ -63,7 +65,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 60s
+      # 起步的 60 秒里每 2 秒查一次（Docker 25 起支持），发布时能尽快知道新版本起没起来
+      start_interval: 2s
 
   # 备案没下来时用 IP 访问：SITE_ADDRESS 设成 :80；有域名后设成域名，Caddy 自动上 HTTPS
   caddy:
@@ -83,6 +87,7 @@ services:
 
   # 每天凌晨 3 点备份数据库到 ./backups，加密（口径第 20 节），留 14 天；手动备份：docker compose exec backup bash /backup.sh now
   backup:
+    image: ${BACKUP_IMAGE:-dianyoushu-erp-backup:local}
     build:
       context: ./docker
       dockerfile: backup.Dockerfile
@@ -96,13 +101,15 @@ services:
     entrypoint: ["bash", "/backup.sh"]
     volumes:
       - ./docker/backup.sh:/backup.sh:ro
-      - ./backups:/backups
+      # 一台服务器放几家时，每家的备份放在自己的目录（deploy/ 脚本传 BACKUP_DIR）
+      - ${BACKUP_DIR:-./backups}:/backups
     depends_on:
       db:
         condition: service_healthy
 
   # 迁移、灌演示数据、对账、每日任务：docker compose run --rm tools pnpm exec prisma migrate deploy / pnpm db:check / pnpm daily
   tools:
+    image: ${TOOLS_IMAGE:-dianyoushu-erp-tools:local}
     build:
       context: .
       target: build
@@ -120,7 +127,7 @@ services:
       DATA_INDEX_KEY: ${DATA_INDEX_KEY:?在 .env 里设置 DATA_INDEX_KEY}
     # 全量导出（pnpm export:all）写到服务器的 ./exports；里面是明文个人信息，交接完就删
     volumes:
-      - ./exports:/app/exports
+      - ${EXPORT_DIR:-./exports}:/app/exports
     depends_on:
       db:
         condition: service_healthy

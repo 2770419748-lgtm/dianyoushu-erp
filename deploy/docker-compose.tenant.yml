@@ -1,0 +1,15 @@
+# 一台服务器放几家客户时，每家在 docker-compose.yml 上叠这个文件（deploy/lib.sh 的 dc 函数自动叠，口径第 24 节）：
+# - 不起自己的 Caddy（80、443 端口只有一个），由共享的 Caddy（deploy/proxy/）按子域名转到各家的应用；
+# - 应用接到共享网络 erp-proxy 上，别名 <代号>-app，共享 Caddy 按这个名字找到它。
+services:
+  caddy:
+    profiles: ["single-site"]
+  app:
+    networks:
+      default: {}
+      erp-proxy:
+        aliases: ["${TENANT:?deploy 脚本会设置 TENANT}-app"]
+
+networks:
+  erp-proxy:
+    external: true

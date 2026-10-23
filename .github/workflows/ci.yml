@@ -224,6 +224,14 @@ jobs:
           '
           echo "加密备份：备得出、只有属主能读、没口令拒绝、盘满报失败不留文件、错口令解不开、对的口令能完整恢复"
 
+      # 部署脚本演练（口径第 24 节）：按“一台服务器放两家客户”把 deploy/ 下的脚本真跑一遍，用上面打好的两个镜像
+      - name: 部署演练（两家客户、升级、坏版本自动回滚、定时任务、恢复演练、异地备份）
+        run: |
+          docker version --format '服务端 Docker {{.Server.Version}}'
+          sudo apt-get install -y -qq rclone > /dev/null
+          # 服务器上脚本用 root 跑（备份文件只有 root 能读），这里也一样
+          sudo -E env "PATH=$PATH" bash deploy/drill.sh
+
       - name: 容器日志（上一步失败时看）
         if: failure()
         run: docker logs erp-ci || true

@@ -1,0 +1,10 @@
+# /var/log/erp 下定时任务日志的轮转（口径第 24 节）：复制成 /etc/logrotate.d/erp。每天一份、留 30 天、压缩。
+/var/log/erp/*.log {
+	daily
+	rotate 30
+	compress
+	delaycompress
+	missingok
+	notifempty
+	copytruncate
+}
