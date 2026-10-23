@@ -243,15 +243,43 @@ release_migrations() { docker run --rm "$TOOLS_REPO:$1" ls prisma/migrations | g
 # 这家库里做过的迁移
 applied_migrations() { tenant_sql "$1" "SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY 1"; }
 
-# 版本 $1 的镜像里，迁移 $2 给哪些枚举加了值：一行一个“类型 值”
+# 版本 $1 的镜像里迁移 $2 的 SQL（去掉 -- 注释）
+migration_sql() { docker run --rm "$TOOLS_REPO:$1" cat "prisma/migrations/$2/migration.sql" | sed -E 's/--.*$//'; }
+
+# 从迁移 SQL（标准输入）认出给哪些枚举加了值：一行一个“类型 值”。大小写、带不带 schema 和引号、多几个空格都认；
+# 一句拆成几行的认不出——调用方拿 ADD VALUE 出现的次数比，认少了就当成挡着（复查第 95 条）
 enum_values_added() {
-  docker run --rm "$TOOLS_REPO:$1" cat "prisma/migrations/$2/migration.sql" |
-    sed -nE "s/.*ALTER TYPE \"?([a-z0-9_]+)\"? ADD VALUE (IF NOT EXISTS )?'([^']+)'.*/\1 \3/p"
+  sed -nE "s/.*ALTER[[:space:]]+TYPE[[:space:]]+(\"?[A-Za-z0-9_]+\"?\.)?\"?([A-Za-z0-9_]+)\"?[[:space:]]+ADD[[:space:]]+VALUE[[:space:]]+(IF[[:space:]]+NOT[[:space:]]+EXISTS[[:space:]]+)?'([^']+)'.*/\2 \4/Ip"
 }
 
-# 这家库里有没有哪一行用到了枚举类型 $2 的值 $3（所有用这个类型的列，数组列也算）；用到了返回 0
+# 这家（$1）回到旧版本前，版本 $2 镜像里“枚举加值”这一类的迁移 $3 挡不挡：挡着就打印说明（括号括起来），不挡什么都不打印。
+# 读不到迁移、认不全加了哪些值、库里已经用到了新值，都算挡着
+enum_add_blocker() {
+  local t=$1 tag=$2 m=$3 sql pairs total n type value used=""
+  sql=$(migration_sql "$tag" "$m") || {
+    echo "（读不到这个迁移，当成挡着）"
+    return 0
+  }
+  pairs=$(enum_values_added <<< "$sql")
+  total=$(tr '\n' ' ' <<< "$sql" | { grep -oiE 'ADD[[:space:]]+VALUE' || true; } | wc -l)
+  n=$(grep -c . <<< "$pairs" || true)
+  if [ "$n" -lt "$total" ]; then
+    echo "（认不全这个迁移加了哪些枚举值，当成挡着）"
+    return 0
+  fi
+  while read -r type value; do
+    [ -n "$type" ] || continue
+    if enum_value_used "$t" "$type" "$value"; then used="$used $type.$value"; fi
+  done <<< "$pairs"
+  [ -z "$used" ] || echo "（库里已经用到了：${used# }）"
+  return 0
+}
+
+# 这家库里有没有哪一行用到了枚举类型 $2 的值 $3（所有用这个类型的列，数组列也算）；用到了返回 0。
+# 库里没有这个类型（名字认错了）也返回 0：当成用到了，宁可挡着
 enum_value_used() {
   local t=$1 type=$2 value=$3 q
+  [ -n "$(tenant_sql "$t" "SELECT 1 FROM pg_type WHERE typname = '$type' AND typtype = 'e'")" ] || return 0
   q=$(tenant_sql "$t" "SELECT string_agg(format('(SELECT 1 FROM %I WHERE %s LIMIT 1)', table_name,
       CASE WHEN data_type = 'ARRAY' THEN format('%L = ANY(%I::text[])', '$value', column_name) ELSE format('%I::text = %L', column_name, '$value') END), ' UNION ALL ')
     FROM information_schema.columns WHERE table_schema = 'public' AND udt_name IN ('$type', '_$type')")
@@ -262,9 +290,9 @@ enum_value_used() {
 # 回到 $2 版本前要看：库里做过、$2 里没有、而且标了“不能直接回滚”的迁移（清单取自较新的版本 $3 的镜像）。
 # 打印挡着回滚的迁移（迁移名 原因），没有就什么都不打印（口径第 24 节、复查第 86 条）。
 # 原因写“枚举加值”开头的只加了枚举值：库里还没有哪一行用到新值（新版本没健康过、没录过这种单），旧版本就读不到它不认识的值，
-# 照样能回滚；用到了才挡（复查第 92 条）
+# 照样能回滚；用到了（或者认不全加了哪些值）才挡（复查第 92、95 条）
 irreversible_since() {
-  local t=$1 target=$2 newer=$3 applied old list m line used type value
+  local t=$1 target=$2 newer=$3 applied old list m line note
   applied=$(applied_migrations "$t") || die "$t 读不到库里的迁移记录"
   old=$(release_migrations "$target") || die "读不到版本 $target 的迁移清单"
   list=$(docker run --rm "$TOOLS_REPO:$newer" cat prisma/migrations-not-rollback-safe.txt 2>/dev/null || true)
@@ -273,13 +301,9 @@ irreversible_since() {
     line=$(grep -E "^$m( |$)" <<< "$list" || true)
     [ -n "$line" ] || continue
     if [[ "${line#* }" == 枚举加值* ]]; then
-      used=""
-      while read -r type value; do
-        [ -n "$type" ] || continue
-        if enum_value_used "$t" "$type" "$value"; then used="$used $type.$value"; fi
-      done < <(enum_values_added "$newer" "$m")
-      [ -n "$used" ] || continue
-      line="$line（库里已经用到了：${used# }）"
+      note=$(enum_add_blocker "$t" "$newer" "$m")
+      [ -n "$note" ] || continue
+      line="$line$note"
     fi
     echo "$line"
   done

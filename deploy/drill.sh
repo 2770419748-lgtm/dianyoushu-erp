@@ -162,6 +162,23 @@ grep -q "users.role=DRILL_ROLE" <<< "$out" || {
 tenant_sql t1 "UPDATE users SET role = '$role' WHERE username = 'admin'" > /dev/null || fail "改不回 admin 的角色"
 echo "没用上新值时回得去；用上了拒绝回滚，旧版本对账也报出 users.role=DRILL_ROLE"
 
+step "认枚举加值的写法：小写、带 schema 的认得出；拆成几行认不全的，当成挡着（复查第 95 条）"
+ctx=$(mktemp -d)
+mkdir "$ctx/a" "$ctx/b"
+printf '%s\n' "alter type public.role  add value 'DRILL_LOWER';" > "$ctx/a/migration.sql"
+printf '%s\n' 'ALTER TYPE "role"' "  ADD VALUE 'DRILL_SPLIT';" > "$ctx/b/migration.sql"
+printf '%s\n' "FROM dianyoushu-erp-tools:v1" "COPY a prisma/migrations/20991231000002_hand_lower" \
+  "COPY b prisma/migrations/20991231000003_hand_split" > "$ctx/Dockerfile"
+chmod -R a+rX "$ctx"
+docker build -q -t dianyoushu-erp-tools:vhand "$ctx" > /dev/null || fail "打手写迁移的工具镜像失败"
+rm -rf "$ctx"
+note=$(enum_add_blocker t1 vhand 20991231000002_hand_lower)
+[ -z "$note" ] || fail "小写、带 schema 的写法新值没用上，却挡着了：$note"
+note=$(enum_add_blocker t1 vhand 20991231000003_hand_split)
+[[ "$note" == *认不全* ]] || fail "拆成几行的写法认不全，却没当成挡着：${note:-（放行了）}"
+docker rmi dianyoushu-erp-tools:vhand > /dev/null
+echo "小写、带 schema 的认出了加的值；拆成几行的认不全，当成挡着"
+
 step "t2 升级到坏版本：要自动回滚到 v1"
 if "$D/deploy.sh" t2 bad --force; then fail "坏版本竟然升级成功了"; fi
 [ "$(current_tag t2)" = v1 ] || fail "t2 没回滚到 v1（现在是 $(current_tag t2)）"
@@ -253,7 +270,16 @@ grep -q "Caddy" <<< "$out" && {
   echo "$out"
   fail "共享 Caddy 起来以后巡检还在报"
 }
-echo "巡检报了共享 Caddy 没在跑、每家经 Caddy 访问不通；起来以后不报了"
+# 站点文件没了（开户、起回来没做完）：应用好好的，客户却打不开，也要算不通（复查第 94 条）
+mv "$PROXY_DIR/sites/t1.caddy" "$ERP_ROOT/t1.caddy.bak"
+out=$("$D/health-check.sh" 2>&1)
+grep -q "t1 健康检查不通（应用正常，但共享 Caddy 上没有这家的站点" <<< "$out" || {
+  echo "$out"
+  fail "共享 Caddy 上没有 t1 的站点，巡检没发现"
+}
+mv "$ERP_ROOT/t1.caddy.bak" "$PROXY_DIR/sites/t1.caddy"
+"$D/health-check.sh" > /dev/null 2>&1
+echo "巡检报了共享 Caddy 没在跑、每家经 Caddy 访问不通、站点文件没了；恢复以后不报了"
 
 step "备份同步到异地（本机目录模拟对象存储）"
 "$D/offsite-sync.sh" || fail "备份同步失败"
@@ -276,10 +302,22 @@ grep -q "下线过，库还留着" <<< "$out" || {
   fail "拒绝开户却没说库还留着"
 }
 [ -e "$(tenant_dir t2)" ] && fail "拒绝开户却留下了目录"
+# 模拟下线了 40 天：最新的备份、定时任务的成功时间都停在那时候
+R="$ERP_ROOT/removed/$(ls -1 "$ERP_ROOT/removed" | grep -E '^t2-' | sort | tail -1)"
+touch -d '40 days ago' "$R"/backups/*.dump.enc
+for task in daily db-check alerts-run; do echo $(($(date +%s) - 40 * 86400)) > "$R/.ops/last-$task"; done
 "$D/tenant-restore.sh" t2 || fail "起回来失败"
 health t2 || fail "起回来以后访问不到"
 [ "$(tenant_sql t2 "SELECT count(*) FROM users")" = "$users" ] || fail "起回来以后数据对不上"
-echo "下线留库；同一个代号再开户被拒绝（不会接上老库、也不会被引去删库）；起回来数据原样"
+history_has t2 "起回来完成" || fail "发布记录里没有起回来完成"
+[ -e "$(tenant_dir t2)/.deploy/restoring" ] && fail "起回来做完了，起了一半的标记还在"
+rm -f "$ERP_ROOT"/.ops/alert-*t2* # 节流记号清掉，这次巡检该报的都报得出来
+out=$("$D/health-check.sh" 2>&1)
+grep -E "t2 (最新一份备份|一份备份都没有|的备份容器|的定时任务)" <<< "$out" && {
+  echo "$out"
+  fail "起回来以后巡检还在报备份、定时任务（停在下线那天）"
+}
+echo "下线留库；同一个代号再开户被拒绝（不会接上老库、也不会被引去删库）；起回来马上备份、对账，数据原样，巡检不误报"
 
 step "下线 t2 并删库：代号输错什么都不动；输对了，备份做成以后才删"
 if echo t9 | "$D/tenant-remove.sh" t2 --purge; then fail "代号输错竟然删了"; fi

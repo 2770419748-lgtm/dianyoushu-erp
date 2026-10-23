@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 每分钟的巡检（口径第 24 节，crontab 调）。在服务器自己身上看，所以服务器整个死机时它也发不出告警——外部拨测是另一道。
 # - 共享 Caddy 在不在跑；每家：应用的健康检查、经共享 Caddy 按这家的站点地址请求 /api/health（和客户从外面访问走同一条路），
-#   连续 3 次不通告警，恢复了再说一声；
+#   共享 Caddy 上没有这家的站点（开户、起回来没做完）也算不通；连续 3 次不通告警，恢复了再说一声；
 # - 每家的备份：备份容器在不在跑、最新一份备份超过 26 小时（复查第 84 条）；
 # - 定时任务好久没成功跑过：每日任务、对账超过 26 小时，智能提醒超过 14 小时；备份同步配了却超过 26 小时没成功（包括从来没成功过）；
 # - 硬盘用了 80% 以上。
@@ -33,7 +33,10 @@ for t in $(list_tenants); do
   why=""
   if [ "$status" != healthy ]; then
     why="应用 $status"
-  elif [ -f "$PROXY_DIR/sites/$t.caddy" ] && ! site_health "$t"; then
+  elif [ -n "$(tenant_site "$t")" ] && [ ! -f "$PROXY_DIR/sites/$t.caddy" ]; then
+    # 记着站点地址、共享 Caddy 上却没有这家的站点：开户、起回来没做完，客户打不开（复查第 94 条）
+    why="应用正常，但共享 Caddy 上没有这家的站点（开户或起回来没做完？），客户打不开 $(tenant_site "$t")"
+  elif ! site_health "$t"; then
     why="应用正常，但经共享 Caddy 访问 $(tenant_site "$t") 不通"
   fi
   fails=$(cat "$dir/.ops/health-fails" 2> /dev/null || echo 0)

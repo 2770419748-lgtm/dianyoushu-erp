@@ -1,6 +1,7 @@
 // 迁移回滚检查（口径第 24 节，CI 跑）：迁移里有删列、删表、改名、枚举值改名、改成非空、加必填列、去掉默认值、改列类型、
 // 枚举加值、删类型的，必须写进 prisma/migrations-not-rollback-safe.txt（写明原因）——这些做过以后旧版本用不了，回滚脚本要据此拒绝回滚。
-// 只加了枚举值的，原因写“枚举加值”开头：库里还没用到新值时回滚脚本放行（复查第 92 条），所以这一类里不能夹别的改动。
+// 只加了枚举值的，原因写“枚举加值”开头：库里还没用到新值时回滚脚本放行（复查第 92 条），所以这一类里不能夹别的改动，
+// 每一句还得是 Prisma 生成的写法（回滚脚本靠它认出加了哪些值，第 95 条）。
 // 清单里写了、实际不存在的迁移名也报错（防写错名字）。用法：node scripts/check-migrations.mjs
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -8,6 +9,8 @@ import { join } from "node:path";
 const DIR = "prisma/migrations";
 const LIST = "prisma/migrations-not-rollback-safe.txt";
 const ENUM_ADD = "枚举加值";
+// Prisma 生成的枚举加值语句（一句一行）；“枚举加值”这一类只许这种写法，回滚脚本才认得全加了哪些值（复查第 95 条）
+const STD_ENUM_ADD = /^[ \t]*ALTER TYPE "[a-z0-9_]+" ADD VALUE '[^']+'([ \t]+(BEFORE|AFTER)[ \t]+'[^']+')?;[ \t]*$/gm;
 
 // 加必填列：ADD COLUMN … NOT NULL 又没有默认值。旧版本往这张表插数据时不填这一列，插不进去（复查第 92 条）
 const requiredColumn = {
@@ -53,6 +56,8 @@ for (const name of names) {
     problems.push(`${name}：有${found.join("、")}，不能直接回滚，要写进 ${LIST}（迁移名 原因；只加了枚举值的原因写“${ENUM_ADD}”开头）`);
   } else if (reason?.startsWith(ENUM_ADD) && (found.length !== 1 || found[0] !== ENUM_ADD)) {
     problems.push(`${name}：原因写了“${ENUM_ADD}”开头，回滚脚本会在没用到新值时放行，但它${found.length ? `还有${found.filter((f) => f !== ENUM_ADD).join("、")}` : "里没有枚举加值"}——原因换个说法`);
+  } else if (reason?.startsWith(ENUM_ADD) && (sql.match(STD_ENUM_ADD) ?? []).length !== (sql.match(/\bADD\s+VALUE\b/gi) ?? []).length) {
+    problems.push(`${name}：“${ENUM_ADD}”这一类的每一句都要写成 Prisma 生成的样子，一句一行：ALTER TYPE "类型" ADD VALUE '值';——回滚脚本靠它认出加了哪些值`);
   }
 }
 for (const name of listed.keys()) {
