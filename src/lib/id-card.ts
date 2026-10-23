@@ -1,4 +1,4 @@
-// 居民身份证号（18 位）校验：GB 11643 的校验位 + 出生日期是真实日期。回收登记卖家身份用（口径第 20 节）。
+// 居民身份证号（18 位）校验：GB 11643 的校验位 + 出生日期是真实日期、不晚于今天。回收登记卖家身份用（口径第 20 节）。
 // 纯函数，页面和服务层都能用。
 
 const WEIGHTS = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
@@ -15,12 +15,15 @@ export function idCardCheckChar(first17: string): string {
   return CHECK_CHARS[sum % 11]!;
 }
 
-export function isValidIdCard(id: string): boolean {
+export function isValidIdCard(id: string, now = new Date()): boolean {
   if (!/^\d{17}[\dX]$/.test(id)) return false;
   const y = Number(id.slice(6, 10));
   const m = Number(id.slice(10, 12));
   const d = Number(id.slice(12, 14));
   const date = new Date(Date.UTC(y, m - 1, d));
   if (y < 1900 || date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return false;
+  // 出生日期不能晚于今天（按北京时间）
+  const today = new Date(now.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, "");
+  if (id.slice(6, 14) > today) return false;
   return idCardCheckChar(id.slice(0, 17)) === id[17];
 }

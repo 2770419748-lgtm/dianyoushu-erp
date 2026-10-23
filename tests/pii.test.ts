@@ -56,6 +56,13 @@ describe("身份证号", () => {
     const feb30 = "11010519490230002";
     expect(isValidIdCard(feb30 + idCardCheckChar(feb30))).toBe(false); // 校验位对，日期不存在
     expect(isValidIdCard("1101051949123100")).toBe(false); // 位数不够
+    // 出生日期不能晚于今天（北京时间）：2030-01-01 出生的号，在 2026 年不认，到 2030 年就认
+    const future = "11010520300101001";
+    const id = future + idCardCheckChar(future);
+    expect(isValidIdCard(id, new Date("2026-10-23T04:00:00Z"))).toBe(false);
+    expect(isValidIdCard(id, new Date("2030-01-01T04:00:00Z"))).toBe(true);
+    expect(isValidIdCard(id, new Date("2029-12-31T15:00:00Z"))).toBe(false); // 北京时间 12-31 23:00，还没到生日
+    expect(isValidIdCard(id, new Date("2029-12-31T16:00:00Z"))).toBe(true); // 北京时间 1-1 0:00（UTC 还是 12-31）
   });
 
   it("打码：前 3 后 4", () => {

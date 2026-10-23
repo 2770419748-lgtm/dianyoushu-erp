@@ -60,7 +60,7 @@ export function decryptPii(sealed: string): string {
 }
 
 /** 指纹：同一类、同一个值算出来一样；不同类（手机号、身份证号）分开，免得撞在一起 */
-export function piiFingerprint(kind: "phone" | "idcard", value: string): string {
+export function piiFingerprint(kind: "phone" | "idcard" | "check", value: string): string {
   return createHmac("sha256", key("DATA_INDEX_KEY")).update(`${kind}:${value}`).digest("base64url");
 }
 

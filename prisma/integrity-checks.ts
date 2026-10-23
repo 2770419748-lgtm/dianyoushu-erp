@@ -1,4 +1,7 @@
 import type { PrismaClient } from "../src/generated/prisma/client";
+import { maskPhone } from "../src/lib/sales-labels";
+import { decryptPii, maskIdCard, piiFingerprint } from "../src/server/pii/crypto";
+import { checkDataKeys } from "../src/server/pii/key-check";
 
 // 对账自检：账对得上，数字才可信。模拟数据生成完会跑一遍；上线后每天跑一遍（pnpm db:check），对不上要告警。
 // 1. 配件余额 = 这家店这个配件所有流水的累计（余额永远能从流水算出来），也等于最后一条流水记的变动后余额；有流水就要有余额行
@@ -26,6 +29,8 @@ import type { PrismaClient } from "../src/generated/prisma/client";
 //     继承的原跟进关系要是这个客户的；客服会话里“客户发消息后回了几条”不超过 5。
 // 13. 人事 OA（口径第 19 节）：请假单、报销单和它的审批单对得上（金额、门店一致；已付款的有付款日期；审批中↔待审批，已批（待付款、已付款）↔已通过且做出来的就是这张单，驳回↔驳回，撤回↔撤回或批了没做成）；
 //     同一个人审批中、已批的假日期不重叠；两级审批还在批的，前面几级的记录条数 = 现在是第几级 − 1；每个月工资的人数、应发合计 = 工资条加起来。
+// 14. 个人信息加密（口径第 20 节）：钥匙和写这个库时的一样；每个手机号、身份证号、发票接收方、二次验证密钥都解得开，
+//     解出来重算的指纹、打码号码和库里存的一样（钥匙换错、哪里绕过工具直接写库，都会在这里露出来）。
 
 export interface IntegrityResult {
   accessory: number;
@@ -41,6 +46,36 @@ export interface IntegrityResult {
   approval: number;
   wecom: number;
   hr: number;
+  pii: number;
+}
+
+/** 第 14 类：逐行解开个人信息，核对指纹和打码号码（数据量是几千到几万行，解一遍很快） */
+async function piiProblems(prisma: PrismaClient): Promise<number> {
+  const keys = await checkDataKeys(prisma);
+  if (!keys.ok) return 1;
+  let bad = 0;
+  const open = (enc: string): string | null => {
+    try {
+      return decryptPii(enc);
+    } catch {
+      return null;
+    }
+  };
+  const phoneRow = (r: { phoneEnc: string; phoneFp?: string; phoneMasked: string | null }) => {
+    const plain = open(r.phoneEnc);
+    if (plain === null || (r.phoneFp !== undefined && r.phoneFp !== piiFingerprint("phone", plain)) || r.phoneMasked !== maskPhone(plain)) bad++;
+  };
+  for (const r of await prisma.customer.findMany({ select: { phoneEnc: true, phoneFp: true, phoneMasked: true } })) phoneRow(r);
+  for (const r of await prisma.carrierBusiness.findMany({ select: { phoneEnc: true, phoneFp: true, phoneMasked: true } })) phoneRow(r);
+  for (const r of await prisma.carrierSettlementLine.findMany({ where: { phoneEnc: { not: null } }, select: { phoneEnc: true, phoneMasked: true } })) phoneRow({ phoneEnc: r.phoneEnc!, phoneMasked: r.phoneMasked });
+  for (const r of await prisma.employeeProfile.findMany({ where: { phoneEnc: { not: null } }, select: { phoneEnc: true, phoneMasked: true } })) phoneRow({ phoneEnc: r.phoneEnc!, phoneMasked: r.phoneMasked });
+  for (const r of await prisma.invoice.findMany({ where: { receiverEnc: { not: null } }, select: { receiverEnc: true } })) if (open(r.receiverEnc!) === null) bad++;
+  for (const r of await prisma.user.findMany({ where: { mfaSecretEnc: { not: null } }, select: { mfaSecretEnc: true } })) if (open(r.mfaSecretEnc!) === null) bad++;
+  for (const r of await prisma.tradeInOrder.findMany({ where: { sellerIdEnc: { not: null } }, select: { sellerIdEnc: true, sellerIdFp: true, sellerIdMasked: true } })) {
+    const plain = open(r.sellerIdEnc!);
+    if (plain === null || r.sellerIdFp !== piiFingerprint("idcard", plain) || r.sellerIdMasked !== maskIdCard(plain)) bad++;
+  }
+  return bad;
 }
 
 export async function runIntegrityChecks(prisma: PrismaClient): Promise<IntegrityResult> {
@@ -225,13 +260,14 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
     approval: Number(approval!.n),
     wecom: Number(wecom!.n),
     hr: Number(hr!.n),
+    pii: await piiProblems(prisma),
   };
 }
 
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假报销工资对不上 ${r.hr} 处。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假报销工资对不上 ${r.hr} 处，个人信息解不开或对不上 ${r.pii} 处。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {
-  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval + r.wecom + r.hr === 0;
+  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval + r.wecom + r.hr + r.pii === 0;
 }

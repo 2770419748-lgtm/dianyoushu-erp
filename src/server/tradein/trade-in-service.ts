@@ -56,7 +56,7 @@ function parseSeller(input: TradeInInput) {
   if (sellerName.length > 30) throw new TradeInError("卖家姓名最多 30 个字");
   const idNo = normalizeIdCard(typeof input.sellerIdNo === "string" ? input.sellerIdNo : "");
   if (!idNo) throw new TradeInError("请填卖家身份证号（收旧手机要登记卖家身份）");
-  if (!isValidIdCard(idNo)) throw new TradeInError("身份证号不对：要 18 位，最后一位校验码对得上（核对一下有没有输错）");
+  if (!isValidIdCard(idNo)) throw new TradeInError("身份证号不对：要 18 位，出生日期不能晚于今天、最后一位校验码要对得上（核对一下有没有输错）");
   return { sellerName, sellerIdEnc: encryptPii(idNo), sellerIdFp: piiFingerprint("idcard", idNo), sellerIdMasked: maskIdCard(idNo) };
 }
 

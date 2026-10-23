@@ -13,6 +13,7 @@ import { bjMinuteOfDay, LEAVE_HQ_DAYS, LEAVE_KIND_LABELS, LEAVE_KINDS, leaveChai
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS, expenseChain, type ExpenseCategoryKey } from "../src/lib/expense";
 import { SIMULATED_KF_ID } from "../src/server/wecom/config";
 import { encryptPii, maskIdCard, phoneColumns, piiFingerprint } from "../src/server/pii/crypto";
+import { assertDataKeys } from "../src/server/pii/key-check";
 import { maskPhone } from "../src/lib/sales-labels";
 import { idCardCheckChar } from "../src/lib/id-card";
 import { buildInvoiceLines, simulateInvoiceNumber, usccCheckChar, type InvoiceKindKey, type InvoiceStatusKey, type InvoiceTitleTypeKey } from "../src/lib/invoice";
@@ -440,6 +441,8 @@ async function main() {
     console.error(`已经有 ${existing} 张销售单了。模拟数据要在空库上生成，请用 pnpm db:reset（会清空再重建）。`);
     process.exit(1);
   }
+  // 个人信息钥匙（口径第 20 节）：空库这一步会记下现在的钥匙，应用以后启动就按它核对
+  await assertDataKeys(prisma, "灌演示数据");
 
   const [stores, users, skus, hq] = await Promise.all([
     prisma.store.findMany({ where: { isActive: true }, orderBy: { id: "asc" } }),

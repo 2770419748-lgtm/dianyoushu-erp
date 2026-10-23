@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { prisma } from "@/lib/prisma";
+import { assertDataKeys } from "@/server/pii/key-check";
 import { writeAudit } from "@/server/audit";
 import { scanEntitlementReminders } from "@/server/entitlement/entitlement-service";
 import { getWecomClient } from "@/server/wecom/client";
@@ -17,6 +18,7 @@ import { processTransfers } from "@/server/wecom/transfer-service";
 // 脚本里要用服务层（带 server-only 标记），所以 package.json 里用 tsx --conditions=react-server 跑。
 
 async function main() {
+  await assertDataKeys(prisma, "每日任务"); // 钥匙对不上就停（口径第 20 节），不然生成的提醒里客户对不上
   const report: Record<string, unknown> = {};
   let failed = false;
 

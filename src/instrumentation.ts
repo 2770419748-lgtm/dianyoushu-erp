@@ -5,5 +5,12 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { enforceProductionEnv } = await import("./server/config-check");
     enforceProductionEnv();
+    // 个人信息钥匙要和写这个库时用的一样（口径第 20 节），对不上拒绝启动：不然照常启动、健康检查也正常，但手机号搜不到、页面报错
+    const [{ prisma }, { checkDataKeys }] = await Promise.all([import("./lib/prisma"), import("./server/pii/key-check")]);
+    const keys = await checkDataKeys(prisma);
+    if (!keys.ok) {
+      console.error(`[店有数 ERP] 个人信息钥匙对不上，拒绝启动：${keys.reason}`);
+      process.exit(1);
+    }
   }
 }

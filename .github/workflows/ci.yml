@@ -87,13 +87,26 @@ jobs:
           # 分账号（口径第 20 节）：用部署时同一个脚本建 erp_app（应用用，只能增删改查）和 erp_readonly（只读）
           PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres POSTGRES_DB=ci DB_OWNER=postgres \
             APP_DB_PASSWORD="$DB_PW" READONLY_DB_PASSWORD="$RO_PW" sh docker/db-roles.sh
+          # 容器用的是新生成的随机钥匙，和灌演示数据时的 CI 钥匙不一样：另建一个空库给它（像一次全新部署），
+          # 灌了数据的 ci 库留着测“钥匙对不上拒绝启动”
+          PGPASSWORD=postgres psql -h localhost -U postgres -d ci -q -c "CREATE DATABASE ci_app"
+          DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ci_app?schema=public" pnpm exec prisma migrate deploy > /dev/null
+          PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres POSTGRES_DB=ci_app DB_OWNER=postgres \
+            APP_DB_PASSWORD="$DB_PW" READONLY_DB_PASSWORD="$RO_PW" sh docker/db-roles.sh
           # 业务账号删不了表，只读账号写不进去，但都能查
           if PGPASSWORD="$DB_PW" psql -h localhost -U erp_app -d ci -q -c "DROP TABLE audit_logs" 2>/dev/null; then echo "erp_app 竟然能删表"; exit 1; fi
           if PGPASSWORD="$RO_PW" psql -h localhost -U erp_readonly -d ci -q -c "DELETE FROM audit_logs WHERE false" 2>/dev/null; then echo "erp_readonly 竟然能写"; exit 1; fi
           PGPASSWORD="$RO_PW" psql -h localhost -U erp_readonly -d ci -At -c "SELECT count(*) > 0 FROM customers" | grep -q t
-          # 应用容器连业务账号（生产模式下会拒绝默认密码 postgres）
-          docker run -d --name erp-ci --network host \
+          # 个人信息钥匙对不上拒绝启动（口径第 20 节）：随机钥匙连灌过数据的 ci 库，容器要自己退出、日志里说钥匙对不上
+          if timeout 90 docker run --rm --network host \
             -e DATABASE_URL="postgresql://erp_app:$DB_PW@localhost:5432/ci?schema=public" \
+            -e SESSION_SECRET="$SECRET" -e DEMO_MODE=1 -e DATA_ENCRYPTION_KEY="$ENC_KEY" -e DATA_INDEX_KEY="$IDX_KEY" \
+            dianyoushu-erp:ci > /tmp/mismatch.log 2>&1; then echo "钥匙对不上竟然启动了"; exit 1; fi
+          grep -q "个人信息钥匙对不上，拒绝启动" /tmp/mismatch.log
+          echo "钥匙对不上：拒绝启动"
+          # 应用容器连业务账号（生产模式下会拒绝默认密码 postgres），用空库 ci_app，第一次启动记下这套钥匙
+          docker run -d --name erp-ci --network host \
+            -e DATABASE_URL="postgresql://erp_app:$DB_PW@localhost:5432/ci_app?schema=public" \
             -e SESSION_SECRET="$SECRET" -e DEMO_MODE=1 \
             -e DATA_ENCRYPTION_KEY="$ENC_KEY" -e DATA_INDEX_KEY="$IDX_KEY" \
             dianyoushu-erp:ci

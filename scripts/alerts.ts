@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { prisma } from "@/lib/prisma";
+import { assertDataKeys } from "@/server/pii/key-check";
 import { writeAudit } from "@/server/audit";
 import { runAlerts } from "@/server/alerts/alert-service";
 
@@ -8,6 +9,7 @@ import { runAlerts } from "@/server/alerts/alert-service";
 // 脚本里要用服务层（带 server-only 标记），所以 package.json 里用 tsx --conditions=react-server 跑。
 
 async function main() {
+  await assertDataKeys(prisma, "智能提醒"); // 钥匙对不上就停（口径第 20 节）
   const report = await runAlerts();
   await writeAudit({ userId: null, action: "alerts.run", detail: { scope: "all", ...report } as never });
   console.log(`智能提醒：命中 ${report.items} 条，今日待办 ${report.digests} 份（内容有变 ${report.changed} 份），新消息 ${report.notified} 条，推门店群 ${JSON.stringify(report.pushed)}，写法 ${JSON.stringify(report.sources)}`);

@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@/generated/prisma/client";
+import { checkDataKeys } from "@/server/pii/key-check";
 import type { CurrentUser } from "@/server/auth/current-user";
 import { searchCustomers } from "@/server/customers/customer-service";
 import { decryptPii } from "@/server/pii/crypto";
@@ -20,6 +22,48 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await prisma.$disconnect();
+});
+
+class Rollback extends Error {}
+async function inRolledBackTx(fn: (tx: Prisma.TransactionClient) => Promise<void>) {
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        await fn(tx);
+        throw new Rollback();
+      },
+      { timeout: 30000 },
+    );
+  } catch (error) {
+    if (!(error instanceof Rollback)) throw error;
+  }
+}
+
+describe("个人信息钥匙核对（连本机库，事务回滚）", () => {
+  it("现在的钥匙对得上；核对记录被换成别的钥匙写的、或老库客户的指纹对不上，都报对不上", async (ctx) => {
+    if (!hq) return ctx.skip();
+    expect(await checkDataKeys(prisma)).toMatchObject({ ok: true });
+    await inRolledBackTx(async (tx) => {
+      await tx.systemSetting.update({ where: { key: "data_key_check" }, data: { value: { enc: "v1.AAAA.BBBB.CCCC", fp: "别的钥匙" } } });
+      const r = await checkDataKeys(tx);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("和写这个库时用的不一样");
+    });
+    await inRolledBackTx(async (tx) => {
+      // 老库：没有核对记录，拿第一个客户核对
+      await tx.systemSetting.delete({ where: { key: "data_key_check" } });
+      const first = await tx.customer.findFirstOrThrow({ orderBy: { id: "asc" } });
+      await tx.customer.update({ where: { id: first.id }, data: { phoneFp: "换过钥匙算出来的" } });
+      expect((await checkDataKeys(tx)).ok).toBe(false);
+      expect(await tx.systemSetting.count({ where: { key: "data_key_check" } })).toBe(0); // 对不上不补记录
+    });
+    await inRolledBackTx(async (tx) => {
+      // 老库客户对得上：补一条核对记录
+      await tx.systemSetting.delete({ where: { key: "data_key_check" } });
+      expect(await checkDataKeys(tx)).toEqual({ ok: true, created: true });
+      expect(await tx.systemSetting.count({ where: { key: "data_key_check" } })).toBe(1);
+    });
+  });
 });
 
 describe("手机号加密存（连本机库，只读）", () => {

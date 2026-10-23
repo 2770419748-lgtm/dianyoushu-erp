@@ -1,11 +1,12 @@
 -- 个人信息加密（口径第 20 节）：手机号、发票接收方从明文换成密文 + 指纹 + 打码号码；回收单加卖家身份。
 -- 明文没法在 SQL 里加密（密钥只在应用里），这次之前也没有真实数据，所以直接换列。
--- 库里已经有数据的（本机、演示库）要先清空：tsx prisma/reset.ts，迁移完再灌演示数据（pnpm db:reset 的后几步）。
+-- 库里已经有数据的（本机、演示库）这次迁移会失败并被 Prisma 记为失败：先 prisma migrate resolve --rolled-back 这个迁移，
+-- 再 tsx prisma/reset.ts 清空、prisma migrate deploy、pnpm db:reset（直接重跑会报 P3009）。
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM customers) OR EXISTS (SELECT 1 FROM carrier_business) OR EXISTS (SELECT 1 FROM carrier_settlement_lines)
      OR EXISTS (SELECT 1 FROM employee_profiles WHERE phone IS NOT NULL) OR EXISTS (SELECT 1 FROM invoices WHERE receiver IS NOT NULL) THEN
-    RAISE EXCEPTION '库里已经有手机号明文数据：这是演示库就先跑 tsx prisma/reset.ts 清空再迁移；真实数据不能直接迁，先联系开发加密导入';
+    RAISE EXCEPTION '库里已经有手机号明文数据：这是演示库就按顺序跑 pnpm exec prisma migrate resolve --rolled-back 20261023100000_pii_encryption、tsx prisma/reset.ts、pnpm exec prisma migrate deploy、pnpm db:reset；真实数据不能直接迁，先联系开发加密导入';
   END IF;
 END $$;
 
