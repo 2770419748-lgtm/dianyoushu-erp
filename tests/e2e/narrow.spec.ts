@@ -51,10 +51,13 @@ const FROM_DB: Record<string, (w: Who) => [string, unknown[]]> = {
   "/setup/import/[id]": () => [`SELECT id::text AS v FROM import_batches WHERE kind IN ('DEVICES', 'ACCESSORIES') ORDER BY id DESC LIMIT 1`, []],
 };
 
-/** 演示数据里可能一条都没有的，没有就不扫（写明原因）；别的找不到要报错 */
-const MAY_BE_EMPTY: Record<string, string> = {
-  "/purchase/[id]/edit": "演示数据里可能没有草稿采购单",
-  "/setup/import/[id]": "演示数据里没有期初入库单（端到端导入测试跑完会删掉）",
+/** 演示数据里可能一条都没有的，没有就不扫（返回原因）；别的找不到要报错 */
+const MAY_BE_EMPTY: Record<string, (w: Who) => string | null> = {
+  "/purchase/[id]/edit": () => "演示数据里可能没有草稿采购单",
+  "/setup/import/[id]": () => "演示数据里没有期初入库单（端到端导入测试跑完会删掉）",
+  // 门店账号只看得到自己店的：刚灌的演示数据里这家店没有盘点单、调拨单（盘点、调拨的端到端测试排在后面才建），同一个页面 hq 那一遍扫过
+  "/stocktakes/[id]": (w) => (w.storeId ? "这家店还没有盘点单" : null),
+  "/transfers/[id]": (w) => (w.storeId ? "这家店还没有调拨单" : null),
 };
 
 async function measure(page: Page, url: string) {
@@ -103,7 +106,7 @@ for (const who of ["hq", "staff"]) {
         if (row) url = r.replace(/\[[^\]]+\]/, encodeURIComponent(row.v));
       }
       if (url) await check(url);
-      else if (!MAY_BE_EMPTY[r]) missing.push(r);
+      else if (!MAY_BE_EMPTY[r]?.(w)) missing.push(r);
     }
     await context.close();
     expect(missing, `这几个带参数的页面没找到能打开的地址：${missing.join("、")}`).toEqual([]);
