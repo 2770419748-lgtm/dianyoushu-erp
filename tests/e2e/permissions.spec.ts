@@ -38,6 +38,7 @@ for (const role of ALL) {
       const denied = page.locator(".ant-result-403");
       if (p.allow.includes(role)) {
         await expect(denied, `${role} 应该能打开 ${p.path}`).toHaveCount(0);
+        expect(new URL(page.url()).pathname, `${role} 打开 ${p.path} 不该被跳走（比如跳回登录页）`).toBe(p.path.split("?")[0]);
         await expect(page.getByText("这一页出了点问题"), `${role} 打开 ${p.path} 不该报错`).toHaveCount(0);
       } else {
         await expect(denied, `${role} 不该能打开 ${p.path}`).toHaveCount(1);

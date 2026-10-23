@@ -47,12 +47,15 @@ export interface IntegrityResult {
   wecom: number;
   hr: number;
   pii: number;
+  piiKeys: number; // 1 = 钥匙和写这个库时的不一样（整库都解不开）
 }
 
-/** 第 14 类：逐行解开个人信息，核对指纹和打码号码（数据量是几千到几万行，解一遍很快） */
+/** 第 14 类：钥匙对不对（只核对、不补记录）；逐行解开个人信息，核对指纹和打码号码（数据量是几千到几万行，解一遍很快） */
+async function piiKeysMismatch(prisma: PrismaClient): Promise<number> {
+  return (await checkDataKeys(prisma, { write: false })).ok ? 0 : 1;
+}
+
 async function piiProblems(prisma: PrismaClient): Promise<number> {
-  const keys = await checkDataKeys(prisma);
-  if (!keys.ok) return 1;
   let bad = 0;
   const open = (enc: string): string | null => {
     try {
@@ -261,13 +264,14 @@ export async function runIntegrityChecks(prisma: PrismaClient): Promise<Integrit
     wecom: Number(wecom!.n),
     hr: Number(hr!.n),
     pii: await piiProblems(prisma),
+    piiKeys: await piiKeysMismatch(prisma),
   };
 }
 
 export function describeIntegrity(r: IntegrityResult): string {
-  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假报销工资对不上 ${r.hr} 处，个人信息解不开或对不上 ${r.pii} 处。`;
+  return `配件余额对不上 ${r.accessory} 处，机器数对不上 ${r.device} 处，收款 ≠ 应收 ${r.payment} 单，日结系统数对不上 ${r.dailyClose} 行，机器状态和流水、销售单对不上 ${r.deviceState} 台，服务权益和单据对不上 ${r.entitlement} 处，维修单收款对不上 ${r.repair} 张，运营商结算对不上 ${r.carrier} 处，国补对不上 ${r.subsidy} 处，发票对不上 ${r.invoice} 处，审批单对不上 ${r.approval} 张，企业微信对不上 ${r.wecom} 处，请假报销工资对不上 ${r.hr} 处，${r.piiKeys ? "个人信息钥匙和写这个库时的不一样（整库都解不开，先换回原来那两把钥匙）" : `个人信息解不开或对不上 ${r.pii} 处`}。`;
 }
 
 export function integrityOk(r: IntegrityResult): boolean {
-  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval + r.wecom + r.hr + r.pii === 0;
+  return r.accessory + r.device + r.payment + r.dailyClose + r.deviceState + r.entitlement + r.repair + r.carrier + r.subsidy + r.invoice + r.approval + r.wecom + r.hr + r.pii + r.piiKeys === 0;
 }

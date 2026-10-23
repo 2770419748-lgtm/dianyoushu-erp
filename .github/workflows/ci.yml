@@ -64,6 +64,24 @@ jobs:
       - name: 对账自检（测试跑完账还对得上）
         run: pnpm db:check
 
+      # 浏览器端到端测试（tests/e2e，2026-10-23 起进 CI）：用 Playwright 自带的 Chromium，开发服务器由 Playwright 自己起
+      - name: 装浏览器（端到端测试用）
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: 浏览器端到端测试
+        run: pnpm test:e2e
+
+      - name: 浏览器测试失败时留下现场
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: test-results
+          retention-days: 7
+
+      - name: 对账自检（浏览器测试跑完账还对得上）
+        run: pnpm db:check
+
       - name: 生产构建
         run: pnpm build
 
@@ -104,6 +122,26 @@ jobs:
             dianyoushu-erp:ci > /tmp/mismatch.log 2>&1; then echo "钥匙对不上竟然启动了"; exit 1; fi
           grep -q "个人信息钥匙对不上，拒绝启动" /tmp/mismatch.log
           echo "钥匙对不上：拒绝启动"
+          # 先没库、再有库（服务器重启时应用常比数据库先起来，快核第 63 条）：容器连一个暂时没人听的端口，
+          # 8 秒后才把这个端口转到真库；应用要自己等到库、核对通过、能正常服务，不能一直 500
+          docker run -d --name erp-late --network host -e PORT=3001 \
+            -e DATABASE_URL="postgresql://erp_app:$DB_PW@localhost:5439/ci_app?schema=public" \
+            -e SESSION_SECRET="$SECRET" -e DEMO_MODE=1 -e DATA_ENCRYPTION_KEY="$ENC_KEY" -e DATA_INDEX_KEY="$IDX_KEY" \
+            dianyoushu-erp:ci
+          sleep 8
+          node -e "const net=require('net');net.createServer(c=>{const d=net.connect(5432,'127.0.0.1');c.pipe(d);d.pipe(c);c.on('error',()=>d.destroy());d.on('error',()=>c.destroy())}).listen(5439)" &
+          PROXY=$!
+          for i in $(seq 1 45); do
+            if curl -fsS http://localhost:3001/api/health > /dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3001/api/health
+          echo
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/login)" = "200"
+          docker logs erp-late 2>&1 | grep -q "启动时连不上数据库"
+          docker rm -f erp-late > /dev/null
+          kill $PROXY
+          echo "先没库再有库：等到库以后正常服务"
           # 应用容器连业务账号（生产模式下会拒绝默认密码 postgres），用空库 ci_app，第一次启动记下这套钥匙
           docker run -d --name erp-ci --network host \
             -e DATABASE_URL="postgresql://erp_app:$DB_PW@localhost:5432/ci_app?schema=public" \

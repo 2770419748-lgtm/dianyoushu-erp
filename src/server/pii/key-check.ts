@@ -28,7 +28,8 @@ function matches(record: unknown): boolean {
 
 const MISMATCH = "DATA_ENCRYPTION_KEY / DATA_INDEX_KEY 和写这个库时用的不一样（换了服务器、恢复了别处的备份，或者 .env 抄错了）。要用原来那两把钥匙，对不上会导致手机号搜不到、能重复建客户、页面报错";
 
-export async function checkDataKeys(db: Db): Promise<KeyCheckResult> {
+/** write=false（对账自检用）：没有核对记录时只核对、不补记录 */
+export async function checkDataKeys(db: Db, options: { write?: boolean } = {}): Promise<KeyCheckResult> {
   const row = await db.systemSetting.findUnique({ where: { key: SETTING_KEY } });
   if (row) return matches(row.value) ? { ok: true, created: false } : { ok: false, reason: MISMATCH };
   // 没有核对记录：老库先拿一个客户核对，新库直接记下现在的钥匙
@@ -42,6 +43,7 @@ export async function checkDataKeys(db: Db): Promise<KeyCheckResult> {
     }
     if (!ok) return { ok: false, reason: MISMATCH };
   }
+  if (options.write === false) return { ok: true, created: false };
   await db.systemSetting.createMany({ data: [{ key: SETTING_KEY, value: { enc: encryptPii(PROBE), fp: piiFingerprint("check", PROBE) } }], skipDuplicates: true });
   // 两个程序同时第一次启动：以先写进去的那条为准再核对一次
   const saved = await db.systemSetting.findUniqueOrThrow({ where: { key: SETTING_KEY } });

@@ -59,7 +59,7 @@ Next.js 16（App Router）+ TypeScript + Prisma 7 + PostgreSQL 17 + Ant Design 6
 1. 装好 Node 24、pnpm、PostgreSQL 17，在 PostgreSQL 里建一个空库 `dianyoushu_erp`。
 2. 把 `.env.example` 复制一份改名 `.env`，填上数据库密码、一串随机的会话密钥和两把个人信息加密钥匙（`DATA_ENCRYPTION_KEY`、`DATA_INDEX_KEY`，生成方法写在 `.env.example` 里）。
 3. `pnpm install`（装完会自动生成 Prisma 客户端）。
-4. `pnpm db:migrate` 建表。
+4. `pnpm db:migrate` 建表（`prisma migrate deploy`，只按迁移文件建，不会问要不要重置库；新建迁移的做法见 PROJECT_STATE.md 常用命令）。
 5. `pnpm db:reset` 灌入模拟数据，约 30 秒。
 6. `pnpm dev`，浏览器打开 http://localhost:3000 。
 
