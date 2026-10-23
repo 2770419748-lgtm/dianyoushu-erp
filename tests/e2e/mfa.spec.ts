@@ -51,3 +51,25 @@ test("店长自己开二次验证；再登录要输动态码，错的不让进",
   await page.locator('button[type="submit"]').click(); // Ant Design 会把两个字的按钮写成“登 录”，按类型找
   await page.waitForURL("/");
 });
+
+test("“我的”页两个标签页先后点开启：先开的那个二维码作废，说清楚", async ({ context }) => {
+  await clearMfa();
+  const first = await context.newPage();
+  await first.goto("/login");
+  await first.locator('input[name="username"]').fill(USERNAME);
+  await first.locator('input[name="password"]').fill("demo1234");
+  await first.locator('button[type="submit"]').click();
+  await first.waitForURL("/");
+  await first.goto("/me");
+  await first.getByRole("button", { name: "开启二次验证" }).click();
+  const oldSecret = (await first.locator("code").first().innerText()).trim();
+  // 另一个标签页又点了一次开启：换了新二维码
+  const second = await context.newPage();
+  await second.goto("/me");
+  await second.getByRole("button", { name: "开启二次验证" }).click();
+  await expect(second.locator("code").first()).toBeVisible();
+  // 回到第一个标签页，用旧二维码的码确认
+  await first.getByPlaceholder("6 位动态码").fill(totpAt(oldSecret, totpStep(new Date())));
+  await first.getByRole("button", { name: "确认开启" }).click();
+  await expect(first.getByText("这个二维码已经作废了")).toBeVisible();
+});

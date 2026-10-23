@@ -15,11 +15,14 @@ const PLACEHOLDER_SECRETS = ["换成你自己的随机字符串", "ci-only-place
 const CI_DATA_KEYS = ["Y2ktb25seS1kYXRhLWVuY3J5cHRpb24ta2V5LTMyYnk=", "Y2ktb25seS1kYXRhLWluZGV4LWtleS0zMmJ5dGVzISE="];
 const PUBLIC_DATA_KEYS = [...Object.values(DEV_DATA_KEYS), ...CI_DATA_KEYS];
 
-/** 连接串能不能解析：主机、端口、库名都要有（密码里带 / 会把端口位置弄乱，Prisma 报 P1013 invalid port） */
+/**
+ * 连接串能不能解析：账号、主机、端口、库名都要有。密码里带 / 会把端口位置弄乱（Prisma 报 P1013 invalid port）；
+ * 密码以 / 开头、或 / 前面全是数字时，账号会被当成主机名、账号变成空的，所以账号不能为空（快核第 65 条）
+ */
 function parsableDatabaseUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    if (!/^postgres(ql)?:$/.test(url.protocol) || !url.hostname || url.pathname.length <= 1) return false;
+    if (!/^postgres(ql)?:$/.test(url.protocol) || !url.username || !url.hostname || url.pathname.length <= 1) return false;
     return url.port === "" || /^\d+$/.test(url.port);
   } catch {
     return false;

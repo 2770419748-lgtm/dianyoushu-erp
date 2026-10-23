@@ -11,7 +11,7 @@ export function MfaCard({ status }: { status: { enabledAt: Date | null; required
   const { message } = App.useApp();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [setup, setSetup] = useState<{ qr: string; secret: string } | null>(null);
+  const [setup, setSetup] = useState<{ qr: string; secret: string; sid: string } | null>(null);
   const [code, setCode] = useState("");
 
   return (
@@ -37,7 +37,7 @@ export function MfaCard({ status }: { status: { enabledAt: Date | null; required
               disabled={code.replace(/\s/g, "").length !== 6}
               onClick={() =>
                 startTransition(async () => {
-                  const r = await confirmMfaSetupAction(code);
+                  const r = await confirmMfaSetupAction(code, setup.sid);
                   if (!r.ok) return void message.error(r.error);
                   message.success("二次验证已开启，下次登录要输动态码");
                   setSetup(null);

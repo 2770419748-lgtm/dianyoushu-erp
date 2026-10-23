@@ -32,6 +32,9 @@ describe("checkProductionEnv", () => {
     const base = { SESSION_SECRET: goodSecret, DEMO_MODE: "1", ...keys };
     expect(checkProductionEnv({ ...base, DATABASE_URL: "postgresql://erp_app:ab/cd+ef=@db:5432/dianyoushu_erp" })[0]).toContain("openssl rand -hex 32");
     expect(checkProductionEnv({ ...base, DATABASE_URL: "not a url" })[0]).toContain("解析不了");
+    // 密码以 / 开头、/ 前面全是数字：账号被当成主机名（快核第 65 条）
+    expect(checkProductionEnv({ ...base, DATABASE_URL: "postgresql://erp_app:/abc@db:5432/dianyoushu_erp" })[0]).toContain("解析不了");
+    expect(checkProductionEnv({ ...base, DATABASE_URL: "postgresql://erp_app:123/abc@db:5432/dianyoushu_erp" })[0]).toContain("解析不了");
     expect(checkProductionEnv({ ...base, DATABASE_URL: "postgresql://erp_app:0123abcd@db:5432/dianyoushu_erp?schema=public" })).toEqual([]);
   });
 

@@ -146,6 +146,13 @@ jobs:
             dianyoushu-erp:ci > /tmp/mismatch.log 2>&1; then echo "钥匙对不上竟然启动了"; exit 1; fi
           grep -q "个人信息钥匙对不上，拒绝启动" /tmp/mismatch.log
           echo "钥匙对不上：拒绝启动"
+          # 数据库密码错（快核第 64 条）：等多久都不会好，要马上退出（20 秒内），日志写明是密码不对、带错误代码
+          if timeout 20 docker run --rm --network host \
+            -e DATABASE_URL="postgresql://erp_app:wrongpassword0000@localhost:5432/ci_app?schema=public" \
+            -e SESSION_SECRET="$SECRET" -e DEMO_MODE=1 -e DATA_ENCRYPTION_KEY="$ENC_KEY" -e DATA_INDEX_KEY="$IDX_KEY" \
+            dianyoushu-erp:ci > /tmp/badpw.log 2>&1; then echo "密码错竟然启动了"; exit 1; fi
+          grep -q "账号或密码不对.*P1000" /tmp/badpw.log || { echo "密码错没马上说清楚"; cat /tmp/badpw.log; exit 1; }
+          echo "数据库密码错：马上拒绝启动"
           # 先没库、再有库（服务器重启时应用常比数据库先起来，快核第 63 条）：容器连一个暂时没人听的端口，
           # 8 秒后才把这个端口转到真库；应用要自己等到库、核对通过、能正常服务，不能一直 500
           docker run -d --name erp-late --network host -e PORT=3001 \

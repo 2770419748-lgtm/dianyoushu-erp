@@ -7,8 +7,13 @@ export async function register() {
     enforceProductionEnv();
     // 个人信息钥匙要和写这个库时用的一样（口径第 20 节），对不上拒绝启动：不然照常启动、健康检查也正常，但手机号搜不到、页面报错。
     // 连不上库（服务器重启时应用常比数据库先起来）：每 2 秒重试、最多 2 分钟，还连不上就退出，让 Docker 按 restart 策略重拉；
-    // 不能吞掉错误接着跑，那样以后每个请求都 500、库好了也不恢复（2026-10-23 快核第 63 条）
-    const [{ prisma }, { checkDataKeys }] = await Promise.all([import("./lib/prisma"), import("./server/pii/key-check")]);
+    // 不能吞掉错误接着跑，那样以后每个请求都 500、库好了也不恢复（2026-10-23 快核第 63 条）。
+    // 密码错、库名错、没跑迁移等多久都不会好：直接退出，日志写明原因（快核第 64 条）
+    const [{ prisma }, { checkDataKeys }, { describeDbStartupError }] = await Promise.all([
+      import("./lib/prisma"),
+      import("./server/pii/key-check"),
+      import("./server/startup-db"),
+    ]);
     for (let attempt = 1; ; attempt++) {
       try {
         const keys = await checkDataKeys(prisma);
@@ -19,7 +24,11 @@ export async function register() {
         if (attempt > 1) console.warn("[店有数 ERP] 数据库连上了，钥匙核对通过");
         break;
       } catch (error) {
-        const reason = error instanceof Error ? error.message.split("\n")[0] : String(error);
+        const { fatal, reason } = describeDbStartupError(error);
+        if (fatal) {
+          console.error(`[店有数 ERP] 数据库连得上但用不了，拒绝启动：${reason}`);
+          process.exit(1);
+        }
         if (attempt >= 60) {
           console.error(`[店有数 ERP] 2 分钟还连不上数据库，退出等重启：${reason}`);
           process.exit(1);

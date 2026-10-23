@@ -118,11 +118,18 @@ export async function completeLoginWithCode(code: unknown, ip: string): Promise<
     return { ok: false, error: "登录已失效，请重新输一次密码", restart: true };
   }
   const enabling = user.mfaEnabledAt === null;
-  // 绑定中又在别处输过一次密码：系统换了新二维码，手机上扫的旧的作废——说清楚，不算输错
-  if (enabling && ticket.sid !== secretId(user.mfaSecretEnc)) {
+  // 拿着旧二维码的票：说清楚，不算输错。两种情况——绑定中又在别处输过一次密码，系统换了新二维码；
+  // 两个浏览器同时首次绑定，另一边已经用新二维码绑上了（快核：以前这里提示“动态码不对”还算一次输错）
+  if (ticket.sid !== secretId(user.mfaSecretEnc) && (enabling || ticket.sid !== null)) {
     loginLimiter.refund(key);
     await clearTicket();
-    return { ok: false, error: "这个二维码已经作废了：后来又输过一次密码，系统换了新的二维码。请重新输密码，在手机验证器里删掉旧的、扫新的", restart: true };
+    return {
+      ok: false,
+      error: enabling
+        ? "这个二维码已经作废了：后来又输过一次密码，系统换了新的二维码。请重新输密码，在手机验证器里删掉旧的、扫新的"
+        : "这个二维码已经作废了：这个账号已经在别处用新的二维码绑定好了。请重新输密码，输绑定好的那个验证器上的动态码",
+      restart: true,
+    };
   }
   if (!(await acceptCode({ id: user.id, mfaSecretEnc: user.mfaSecretEnc, mfaLastStep: user.mfaLastStep }, code, enabling))) {
     // 输错已经在 consume 时记过了
@@ -148,15 +155,15 @@ export async function getOwnMfaStatus(user: CurrentUser) {
 }
 
 /** 自己开启：先生成二维码，确认后才算开 */
-export async function startOwnMfaSetup(user: CurrentUser): Promise<{ qr: string; secret: string }> {
+export async function startOwnMfaSetup(user: CurrentUser): Promise<{ qr: string; secret: string; sid: string }> {
   if (isProtectedDemoAccount(user.username)) throw new MfaError(DEMO_PROTECTED_MESSAGE);
   const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id }, select: { mfaEnabledAt: true } });
   if (row.mfaEnabledAt) throw new MfaError("已经开了二次验证；换手机要找总部重置后重新绑定");
-  const { qr, secret } = await prepareSetup(user);
-  return { qr, secret };
+  return prepareSetup(user);
 }
 
-export async function confirmOwnMfaSetup(user: CurrentUser, code: unknown): Promise<void> {
+/** sid：页面拿到的是哪个二维码（两个页面先后点了开启，先开的那个二维码已经作废，说清楚、不算输错） */
+export async function confirmOwnMfaSetup(user: CurrentUser, code: unknown, sid?: unknown): Promise<void> {
   const key = `mfa:${user.id}`;
   const gate = loginLimiter.consume(key); // 先占名额再核对（同上）
   if (!gate.allowed) throw new MfaError(`动态码错太多次了，请 ${Math.max(1, Math.ceil(gate.retryAfterMs / 60000))} 分钟后再试`);
@@ -164,6 +171,10 @@ export async function confirmOwnMfaSetup(user: CurrentUser, code: unknown): Prom
   if (row.mfaEnabledAt || !row.mfaSecretEnc) {
     loginLimiter.refund(key);
     throw new MfaError(row.mfaEnabledAt ? "已经开了二次验证" : "先点“开启二次验证”扫二维码");
+  }
+  if (typeof sid === "string" && sid !== secretId(row.mfaSecretEnc)) {
+    loginLimiter.refund(key);
+    throw new MfaError("这个二维码已经作废了：后来在别的页面又点过一次“开启二次验证”。刷新页面重新点开启，在手机验证器里删掉旧的、扫新的");
   }
   if (!(await acceptCode({ id: row.id, mfaSecretEnc: row.mfaSecretEnc, mfaLastStep: row.mfaLastStep }, code, true))) {
     throw new MfaError("动态码不对：看手机验证器上这个账号现在的 6 位数");

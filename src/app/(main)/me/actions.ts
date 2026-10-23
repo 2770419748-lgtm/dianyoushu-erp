@@ -8,7 +8,7 @@ import { createSession } from "@/server/auth/session";
 export type AccountActionResult = { ok: true } | { ok: false; error: string };
 
 /** 自己开二次验证：先拿二维码（口径第 20 节） */
-export async function startMfaSetupAction(): Promise<{ ok: true; setup: { qr: string; secret: string } } | { ok: false; error: string }> {
+export async function startMfaSetupAction(): Promise<{ ok: true; setup: { qr: string; secret: string; sid: string } } | { ok: false; error: string }> {
   const user = await requireUser();
   try {
     return { ok: true, setup: await startOwnMfaSetup(user) };
@@ -20,10 +20,10 @@ export async function startMfaSetupAction(): Promise<{ ok: true; setup: { qr: st
 }
 
 /** 输一次动态码确认，才算开启 */
-export async function confirmMfaSetupAction(code: string): Promise<AccountActionResult> {
+export async function confirmMfaSetupAction(code: string, sid: string): Promise<AccountActionResult> {
   const user = await requireUser();
   try {
-    await confirmOwnMfaSetup(user, code);
+    await confirmOwnMfaSetup(user, code, sid);
     return { ok: true };
   } catch (error) {
     if (error instanceof MfaError) return { ok: false, error: error.message };
