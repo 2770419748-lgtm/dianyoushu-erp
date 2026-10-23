@@ -69,6 +69,11 @@ export async function resetUserPasswordAction(id: number, password: string) {
   return run(() => org.resetUserPassword(user, id, password));
 }
 
+export async function resetUserMfaAction(id: number, reason: string) {
+  const user = await requireUser();
+  return run(() => org.resetUserMfa(user, id, reason));
+}
+
 export async function setUserActiveAction(id: number, isActive: boolean, takeoverUserId?: number) {
   const user = await requireUser();
   let notice: string | undefined;

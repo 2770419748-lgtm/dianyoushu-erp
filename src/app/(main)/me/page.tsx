@@ -1,5 +1,6 @@
 import { requireUser } from "@/server/auth/current-user";
 import { isProtectedDemoAccount } from "@/server/auth/demo-accounts";
+import { getOwnMfaStatus } from "@/server/auth/mfa-service";
 import { ROLE_LABELS } from "@/server/auth/permissions";
 import { getMyProfile } from "@/server/hr/employee-service";
 import { getMyWeek } from "@/server/hr/schedule-service";
@@ -21,6 +22,7 @@ export default async function MePage() {
       isDemo={isProtectedDemoAccount(user.username)}
       profile={await getMyProfile(user.id)}
       week={user.storeId ? await getMyWeek(user.id) : null}
+      mfa={await getOwnMfaStatus(user)}
     />
   );
 }

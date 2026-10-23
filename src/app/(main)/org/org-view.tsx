@@ -27,6 +27,7 @@ import {
   createRegionAction,
   createStoreAction,
   createUserAction,
+  resetUserMfaAction,
   resetUserPasswordAction,
   setRegionActiveAction,
   setStoreActiveAction,
@@ -69,6 +70,8 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
   const [storeModal, setStoreModal] = useState<{ open: boolean; record?: OrgStore }>({ open: false });
   const [userModal, setUserModal] = useState<{ open: boolean; record?: OrgUser }>({ open: false });
   const [passwordModal, setPasswordModal] = useState<{ open: boolean; record?: OrgUser }>({ open: false });
+  // 重置二次验证（口径第 20 节）：写原因
+  const [mfaModal, setMfaModal] = useState<{ open: boolean; record?: OrgUser }>({ open: false });
   // 停用有企业微信客户的员工：选接手人（口径第 12 节第三步）
   const [leaveModal, setLeaveModal] = useState<{ open: boolean; record?: OrgUser }>({ open: false });
   const [takeoverId, setTakeoverId] = useState<number | undefined>(undefined);
@@ -77,6 +80,7 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
   const [storeForm] = Form.useForm<{ code: string; name: string; regionId: number; address?: string; wecomWebhookUrl?: string }>();
   const [userForm] = Form.useForm<{ username: string; name: string; role: Role; storeId?: number; regionId?: number; password?: string; wecomUserid?: string }>();
   const [passwordForm] = Form.useForm<{ password: string }>();
+  const [mfaForm] = Form.useForm<{ reason: string }>();
   const watchedRole = Form.useWatch("role", userForm);
 
   const allStores = useMemo(() => data.regions.flatMap((r) => r.stores), [data.regions]);
@@ -269,6 +273,19 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
           <Button size="small" onClick={() => openPassword(u)}>
             重置密码
           </Button>
+          {u.mfaEnabled ? (
+            <Button
+              size="small"
+              disabled={u.id === currentUserId}
+              title={u.id === currentUserId ? "自己的二次验证要另一个总部账号来重置" : "手机丢了、换手机时用：清掉绑定，所有设备下线，下次登录重新绑定"}
+              onClick={() => {
+                mfaForm.resetFields();
+                setMfaModal({ open: true, record: u });
+              }}
+            >
+              重置二次验证
+            </Button>
+          ) : null}
           {showWecom && u.isActive && u.activeFollows > 0 ? (
             <Button
               size="small"
@@ -523,6 +540,33 @@ export function OrgView({ data, currentUserId, showWecom }: { data: OrgTree; cur
             .filter((x) => x.isActive && x.wecomUserid && x.id !== leaveModal.record?.id && (x.role === "STAFF" || x.role === "STORE_MANAGER" || x.role === "HQ"))
             .map((x) => ({ value: x.id, label: `${x.name}（${x.storeId ? (storeById.get(x.storeId)?.name ?? "") : ROLE_LABELS[x.role]}）` }))}
         />
+      </Modal>
+
+      {/* 重置二次验证 */}
+      <Modal
+        title={`重置二次验证：${mfaModal.record?.name ?? ""}`}
+        open={mfaModal.open}
+        confirmLoading={pending}
+        onCancel={() => setMfaModal({ open: false })}
+        onOk={() => mfaForm.submit()}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">清掉这个人手机验证器的绑定，他所有已登录的设备马上下线，下次登录重新扫码绑定。</Typography.Paragraph>
+        <Form
+          form={mfaForm}
+          name="mfa-reset"
+          layout="vertical"
+          onFinish={(values) =>
+            submit(
+              () => resetUserMfaAction(mfaModal.record!.id, values.reason),
+              () => setMfaModal({ open: false }),
+            )
+          }
+        >
+          <Form.Item name="reason" label="原因（记进操作日志）" rules={[{ required: true, whitespace: true, message: "写一下原因" }]}>
+            <Input maxLength={100} placeholder="如 换手机、手机丢了" />
+          </Form.Item>
+        </Form>
       </Modal>
 
       {/* 重置密码 */}

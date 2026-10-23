@@ -593,6 +593,10 @@ model User {
   username     String   @unique // 登录账号
   passwordHash String   @map("password_hash") // bcrypt 哈希，永远不存明文
   sessionVersion Int    @default(0) @map("session_version") // 会话版本号：改密码、停用、启用时 +1，之前签发的登录令牌立刻作废
+  // 二次验证（口径第 20 节）：验证器 App 的密钥加密存；绑定确认后才记开启时间；上次用过的时间窗防重放
+  mfaSecretEnc   String?   @map("mfa_secret_enc")
+  mfaEnabledAt   DateTime? @map("mfa_enabled_at")
+  mfaLastStep    Int?      @map("mfa_last_step")
   wecomUserid    String? @unique @map("wecom_userid") // 员工在企业微信里的账号（userid），组织管理里填
   name         String // 姓名
   role         Role

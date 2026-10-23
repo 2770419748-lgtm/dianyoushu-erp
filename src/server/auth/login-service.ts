@@ -56,6 +56,6 @@ export async function authenticate(usernameInput: string, password: string, ip: 
   }
 
   if (limited) loginLimiter.reset(key);
-  await writeAudit({ userId: user.id, action: "login", ip });
+  // 成功的“登录”日志由调用方在真正发登录票时写：开了二次验证的，密码对了还不算登录（口径第 20 节）
   return { ok: true, userId: user.id, sessionVersion: user.sessionVersion };
 }

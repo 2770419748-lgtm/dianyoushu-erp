@@ -6,6 +6,7 @@ import { Alert, App, Button, Card, Descriptions, Form, Input, Space, Tag, Typogr
 import { dayLabel, LEAVE_KIND_LABELS, SHIFT_COLORS, SHIFT_LABELS, type LeaveKindKey, type ShiftKindKey } from "@/lib/attendance";
 import { formatDate, formatFen } from "@/lib/format";
 import { changePasswordAction } from "./actions";
+import { MfaCard } from "./mfa-card";
 
 interface Values {
   oldPassword: string;
@@ -17,7 +18,19 @@ type Profile = { hireDate: Date | null; position: string | null; phone: string |
 
 type WeekDay = { date: string; shift: ShiftKindKey | null; leave: LeaveKindKey | null; isToday: boolean };
 
-export function MeView({ info, isDemo, profile = null, week = null }: { info: { username: string; name: string; role: string; scope: string }; isDemo: boolean; profile?: Profile; week?: WeekDay[] | null }) {
+export function MeView({
+  info,
+  isDemo,
+  profile = null,
+  week = null,
+  mfa,
+}: {
+  info: { username: string; name: string; role: string; scope: string };
+  isDemo: boolean;
+  profile?: Profile;
+  week?: WeekDay[] | null;
+  mfa: { enabledAt: Date | null; required: boolean; canEnable: boolean };
+}) {
   const { message } = App.useApp();
   const [pending, startTransition] = useTransition();
   const [form] = Form.useForm<Values>();
@@ -109,6 +122,7 @@ export function MeView({ info, isDemo, profile = null, week = null }: { info: { 
           </Form>
         )}
       </Card>
+      <MfaCard status={mfa} />
     </Space>
   );
 }

@@ -12,7 +12,7 @@ import type { CurrentUser } from "@/server/auth/current-user";
 import { getWecomClient, WecomError } from "@/server/wecom/client";
 import { WECOM_USERID_PATTERN, wecomMode } from "@/server/wecom/config";
 import { writeAudit } from "@/server/audit";
-import { type Db, withTx } from "@/server/db-tx";
+import { asTx, type Db, withTx } from "@/server/db-tx";
 import { isWecomWebhookUrl } from "@/lib/alerts";
 import { cancelResignedTransfersFor, createResignedTransfers, WecomTransferError } from "@/server/wecom/transfer-service";
 
@@ -76,14 +76,14 @@ export async function getOrgTree(actor: Actor) {
     }),
     prisma.user.findMany({
       orderBy: { id: "asc" },
-      select: { id: true, username: true, name: true, role: true, storeId: true, regionId: true, isActive: true, wecomUserid: true, _count: { select: { wecomFollows: { where: { status: "ACTIVE" } } } } },
+      select: { id: true, username: true, name: true, role: true, storeId: true, regionId: true, isActive: true, wecomUserid: true, mfaEnabledAt: true, _count: { select: { wecomFollows: { where: { status: "ACTIVE" } } } } },
     }),
   ]);
   // activeFollows：跟进中的企业微信客户数，停用时提示安排接手人（口径第 12 节第三步）
   // 群机器人地址带密钥，不发到浏览器，只说有没有填
   return {
     regions: regions.map((r) => ({ ...r, stores: r.stores.map(({ wecomWebhookUrl, ...s }) => ({ ...s, hasWebhook: wecomWebhookUrl !== null })) })),
-    users: users.map(({ _count, ...u }) => ({ ...u, activeFollows: _count.wecomFollows })),
+    users: users.map(({ _count, mfaEnabledAt, ...u }) => ({ ...u, mfaEnabled: mfaEnabledAt !== null, activeFollows: _count.wecomFollows })),
   };
 }
 
@@ -310,6 +310,22 @@ export async function resetUserPassword(actor: Actor, id: number, password: unkn
   // 版本号 +1：这个人之前的登录（可能在别人手里）马上失效，要用新密码重新登录
   await prisma.user.update({ where: { id }, data: { passwordHash, sessionVersion: { increment: 1 } } });
   await writeAudit({ userId: actor.id, action: "user.reset_password", entity: "user", entityId: id });
+}
+
+/**
+ * 重置二次验证（口径第 20 节）：手机丢了、换手机时总部给别人清掉绑定，那个人所有已登录的设备下线，下次登录重新绑定。
+ * 总部自己的由另一个总部重置；只有一个总部时在服务器上跑 pnpm mfa:reset。
+ */
+export async function resetUserMfa(actor: Actor, id: number, reason: unknown, db: Db = prisma) {
+  assertCanManage(actor);
+  if (id === actor.id) throw new OrgError("自己的二次验证要另一个总部账号来重置（只有一个总部时在服务器上跑 pnpm mfa:reset）");
+  const why = typeof reason === "string" ? reason.trim().slice(0, 100) : "";
+  if (!why) throw new OrgError("写一下为什么重置（比如换手机、手机丢了）");
+  const target = await db.user.findUnique({ where: { id }, select: { mfaSecretEnc: true } });
+  if (!target) throw new OrgError("员工不存在");
+  if (!target.mfaSecretEnc) throw new OrgError("这个人还没绑定二次验证，不用重置");
+  await db.user.update({ where: { id }, data: { mfaSecretEnc: null, mfaEnabledAt: null, mfaLastStep: null, sessionVersion: { increment: 1 } } });
+  await writeAudit({ userId: actor.id, action: "user.mfa_reset", entity: "user", entityId: id, detail: { reason: why } }, asTx(db));
 }
 
 /**
