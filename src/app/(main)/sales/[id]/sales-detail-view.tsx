@@ -11,6 +11,7 @@ import { SUBSIDY_STATUS_COLORS, SUBSIDY_STATUS_LABELS } from "@/lib/subsidy";
 import { INVOICE_ACTIVE_STATUSES, INVOICE_KIND_LABELS, INVOICE_STATUS_COLORS, INVOICE_STATUS_LABELS } from "@/lib/invoice";
 import type { SalesOrderDetail } from "@/server/sales/sales-service";
 import { voidSalesOrderAction } from "../actions";
+import { openPrint } from "@/app/print/print-toolbar";
 
 type Item = SalesOrderDetail["items"][number];
 
@@ -83,6 +84,15 @@ export function SalesDetailView({ order, canVoid, canSell, showCost }: { order: 
             <Link href="/sales">
               <Button size="small">返回列表</Button>
             </Link>
+            {/* 小票、保修卡（口径第 23 节）：新窗口打开打印页，自动弹出打印对话框 */}
+            <Button size="small" onClick={() => openPrint(`/print/sales/${order.id}/receipt`, "receipt")}>
+              打印小票
+            </Button>
+            {order.status === "COMPLETED" && order.items.some((i) => i.deviceId !== null && i.returnedQty < i.qty) ? (
+              <Button size="small" onClick={() => openPrint(`/print/sales/${order.id}/warranty`, "warranty")}>
+                打印保修卡
+              </Button>
+            ) : null}
             {canSell ? (
               <Link href="/sales/new">
                 <Button size="small" type="primary">

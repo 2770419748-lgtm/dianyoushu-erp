@@ -13,6 +13,7 @@ import type { AvailableTradeIn } from "@/server/tradein/trade-in-service";
 import { searchCustomersAction } from "../../customers/actions";
 import { TradeInForm, type CreatedTradeIn, type TradeInSkuOption } from "../../trade-ins/trade-in-form";
 import { createSalesOrderAction, lookupForSaleAction } from "../../sales/actions";
+import { openPrint } from "@/app/print/print-toolbar";
 
 interface Line {
   key: string;
@@ -203,6 +204,9 @@ export function MobileSaleView({
               <Space orientation="vertical" style={{ width: "100%" }}>
                 <Button type="primary" block style={BIG} onClick={reset}>
                   再开一单
+                </Button>
+                <Button block style={BIG} onClick={() => openPrint(`/print/sales/${done.id}/receipt`, "receipt")}>
+                  打印小票
                 </Button>
                 <Link href={`/sales/${done.id}`}>
                   <Button block style={BIG}>
