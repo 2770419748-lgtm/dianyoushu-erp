@@ -82,10 +82,18 @@ jobs:
           echo "::add-mask::$SECRET"
           echo "::add-mask::$ENC_KEY"
           echo "::add-mask::$IDX_KEY"
-          # 应用在生产模式下会拒绝默认密码 postgres，给容器单建一个随机密码的账号（临时库，跑完就没了）
-          PGPASSWORD=postgres psql -h localhost -U postgres -d ci -v ON_ERROR_STOP=1 -q -c "CREATE ROLE erp_ci LOGIN SUPERUSER PASSWORD '$DB_PW'"
+          RO_PW=$(openssl rand -hex 16)
+          echo "::add-mask::$RO_PW"
+          # 分账号（口径第 20 节）：用部署时同一个脚本建 erp_app（应用用，只能增删改查）和 erp_readonly（只读）
+          PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres POSTGRES_DB=ci DB_OWNER=postgres \
+            APP_DB_PASSWORD="$DB_PW" READONLY_DB_PASSWORD="$RO_PW" sh docker/db-roles.sh
+          # 业务账号删不了表，只读账号写不进去，但都能查
+          if PGPASSWORD="$DB_PW" psql -h localhost -U erp_app -d ci -q -c "DROP TABLE audit_logs" 2>/dev/null; then echo "erp_app 竟然能删表"; exit 1; fi
+          if PGPASSWORD="$RO_PW" psql -h localhost -U erp_readonly -d ci -q -c "DELETE FROM audit_logs WHERE false" 2>/dev/null; then echo "erp_readonly 竟然能写"; exit 1; fi
+          PGPASSWORD="$RO_PW" psql -h localhost -U erp_readonly -d ci -At -c "SELECT count(*) > 0 FROM customers" | grep -q t
+          # 应用容器连业务账号（生产模式下会拒绝默认密码 postgres）
           docker run -d --name erp-ci --network host \
-            -e DATABASE_URL="postgresql://erp_ci:$DB_PW@localhost:5432/ci?schema=public" \
+            -e DATABASE_URL="postgresql://erp_app:$DB_PW@localhost:5432/ci?schema=public" \
             -e SESSION_SECRET="$SECRET" -e DEMO_MODE=1 \
             -e DATA_ENCRYPTION_KEY="$ENC_KEY" -e DATA_INDEX_KEY="$IDX_KEY" \
             dianyoushu-erp:ci
@@ -97,6 +105,27 @@ jobs:
           echo
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/login)" = "200"
           echo "登录页 200"
+
+      # 备份加密（口径第 20 节）：用 compose 里同一个镜像和脚本备份临时库，备份文件不解密就读不了，解开后 pg_restore 能列出表
+      - name: 加密备份能备能解
+        run: |
+          docker build -q -t dianyoushu-erp-backup:ci -f docker/backup.Dockerfile docker > /dev/null
+          PASS=$(openssl rand -base64 24)
+          echo "::add-mask::$PASS"
+          mkdir -p ci-backups
+          docker run --rm --network host -e PGHOST=localhost -e PGUSER=postgres -e PGPASSWORD=postgres -e PGDATABASE=ci \
+            -e BACKUP_PASSPHRASE="$PASS" -v "$PWD/ci-backups:/backups" -v "$PWD/docker/backup.sh:/backup.sh:ro" \
+            dianyoushu-erp-backup:ci sh /backup.sh now
+          FILE=$(ls ci-backups/*.dump.enc | head -1)
+          # 没口令拒绝备份
+          if docker run --rm --network host -e PGHOST=localhost -e PGUSER=postgres -e PGPASSWORD=postgres -e PGDATABASE=ci \
+            -v "$PWD/docker/backup.sh:/backup.sh:ro" dianyoushu-erp-backup:ci sh /backup.sh now 2>/dev/null; then echo "没口令竟然备份了"; exit 1; fi
+          # 不解密 pg_restore 认不出来；错口令解不开；对的口令解开能列出 customers 表
+          if pg_restore --list "$FILE" > /dev/null 2>&1; then echo "备份没加密"; exit 1; fi
+          if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass pass:wrong-passphrase -in "$FILE" -out /tmp/wrong.dump 2>/dev/null && pg_restore --list /tmp/wrong.dump > /dev/null 2>&1; then echo "错口令竟然解开了"; exit 1; fi
+          BACKUP_PASSPHRASE="$PASS" openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_PASSPHRASE -in "$FILE" -out /tmp/ok.dump
+          docker run --rm -v /tmp/ok.dump:/ok.dump:ro dianyoushu-erp-backup:ci pg_restore --list /ok.dump | grep -q "TABLE public customers"
+          echo "加密备份：备得出、错口令解不开、对的口令能恢复"
 
       - name: 容器日志（上一步失败时看）
         if: failure()

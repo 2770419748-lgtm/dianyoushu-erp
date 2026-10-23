@@ -26,8 +26,13 @@ services:
       POSTGRES_USER: erp
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?在 .env 里设置 POSTGRES_PASSWORD}
       POSTGRES_DB: dianyoushu_erp
+      # 分账号（口径第 20 节）：第一次初始化时建 erp_app（应用用，只能增删改查）和 erp_readonly（只读）
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?在 .env 里设置 APP_DB_PASSWORD}
+      READONLY_DB_PASSWORD: ${READONLY_DB_PASSWORD:?在 .env 里设置 READONLY_DB_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/db-roles.sh:/docker-entrypoint-initdb.d/10-db-roles.sh:ro
+      - ./docker/db-roles.sh:/db-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U erp -d dianyoushu_erp"]
       interval: 5s
@@ -38,7 +43,8 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
-      DATABASE_URL: postgresql://erp:${POSTGRES_PASSWORD}@db:5432/dianyoushu_erp?schema=public
+      # 应用用业务账号 erp_app：只能增删改查，改不了表结构（口径第 20 节）；迁移走 tools 服务（表的所有者 erp）
+      DATABASE_URL: postgresql://erp_app:${APP_DB_PASSWORD}@db:5432/dianyoushu_erp?schema=public
       SESSION_SECRET: ${SESSION_SECRET:?在 .env 里设置 SESSION_SECRET}
       # 个人信息加密的两把钥匙（口径第 20 节），丢了数据就解不开，另外离线存一份
       DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?在 .env 里设置 DATA_ENCRYPTION_KEY}
@@ -75,14 +81,18 @@ services:
     depends_on:
       - app
 
-  # 每天凌晨 3 点备份数据库到 ./backups，留 14 天；手动备份：docker compose exec backup sh /backup.sh now
+  # 每天凌晨 3 点备份数据库到 ./backups，加密（口径第 20 节），留 14 天；手动备份：docker compose exec backup sh /backup.sh now
   backup:
-    image: postgres:17
+    build:
+      context: ./docker
+      dockerfile: backup.Dockerfile
     restart: unless-stopped
     logging: *default-logging
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD}
       TZ: Asia/Shanghai
+      # 备份加密口令，另外离线存一份，丢了备份打不开
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:?在 .env 里设置 BACKUP_PASSPHRASE}
     entrypoint: ["sh", "/backup.sh"]
     volumes:
       - ./docker/backup.sh:/backup.sh:ro
