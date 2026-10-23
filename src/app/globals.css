@@ -27,3 +27,20 @@ body {
     display: none;
   }
 }
+
+/* 切换条（Segmented）选项多时，窄屏上在自己的框里横着滑，不把整页撑宽（复查第 81～83 条） */
+.ant-segmented {
+  max-width: 100%;
+  overflow-x: auto;
+}
+/* 横排（Space）里的一项最宽只到外面的宽度：里面的切换条、长输入框在窄屏上不再把整页撑宽 */
+.ant-space {
+  max-width: 100%;
+}
+.ant-space-item {
+  max-width: 100%;
+}
+/* 没设横向滚动的表格也在自己的框里横着滚（窄屏上的兜底） */
+.ant-table-wrapper .ant-table-content {
+  overflow-x: auto;
+}

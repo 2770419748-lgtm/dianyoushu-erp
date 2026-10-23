@@ -106,7 +106,7 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
           title={`要退的机器还买了 ${orphanServices.map((i) => i.name).join("、")}：一般服务也一起退（勾上它）；不退的话服务照常有效，但会标“机器已退回”，不再算这台机器的保障。`}
         />
       ) : null}
-      <Space orientation="vertical" style={{ marginTop: 16 }} size="middle">
+      <Space orientation="vertical" style={{ marginTop: 16, width: "100%" }} size="middle">
         <Typography.Text>
           原单应收 {formatFen(ctx.order.totalFen)} 元，已退 {formatFen(ctx.refundedFen)} 元；这次勾选的商品最多退 <Typography.Text strong>{formatFen(capFen)}</Typography.Text> 元
         </Typography.Text>
@@ -119,7 +119,7 @@ export function ReturnForm({ ctx }: { ctx: ReturnContext }) {
           <span>退款方式</span>
           <Select style={{ width: 140 }} value={method} onChange={setMethod} options={ctx.refundMethods.map((m) => ({ value: m, label: PAYMENT_METHOD_LABELS[m] }))} placeholder={ctx.refundMethods.length ? "选择" : "原单全是抵扣，不用退钱"} disabled={ctx.refundMethods.length === 0} />
         </Space>
-        <Input placeholder="退货原因" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)} style={{ width: 360 }} />
+        <Input placeholder="退货原因" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)} style={{ width: "min(360px, 100%)" }} />
         <Button type="primary" danger loading={pending} disabled={ctx.todayClosed || selectedCount === 0 || overCap || (refundFen > 0 && !method)} onClick={submit}>
           确认退货（退 {formatFen(refundFen)} 元）
         </Button>

@@ -53,7 +53,7 @@ export function KfView({ mode, list, detail }: { mode: "real" | "simulated"; lis
         <Statistic title="人工接待中" value={list.human} />
       </Space>
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
-        <Card size="small" title="会话" style={{ width: 300, flex: "none" }} styles={{ body: { padding: 0, maxHeight: 620, overflowY: "auto" } }}>
+        <Card size="small" title="会话" style={{ width: "min(300px, 100%)", flex: "none" }} styles={{ body: { padding: 0, maxHeight: 620, overflowY: "auto" } }}>
           {list.sessions.length === 0 ? (
             <Empty style={{ margin: 24 }} description="还没有客户发过消息" />
           ) : (
@@ -84,7 +84,7 @@ export function KfView({ mode, list, detail }: { mode: "real" | "simulated"; lis
 
         <Card
           size="small"
-          style={{ flex: 1, minWidth: 320 }}
+          style={{ flex: 1, minWidth: "min(320px, 100%)" }} // 窄屏上不超过屏幕（复查第 83 条顺手）
           title={
             detail ? (
               <Space wrap>

@@ -156,6 +156,7 @@ export function TransferForm({
           columns={deviceColumns}
           dataSource={devicePage.rows}
           loading={loadingDevices}
+          scroll={{ x: true }} // 手机上表格自己横着滚，不把整页撑宽（复查第 82 条）
           pagination={{
             current: devicePage.page,
             pageSize: devicePage.pageSize,
@@ -174,7 +175,7 @@ export function TransferForm({
         <Typography.Title level={5} style={{ marginTop: 16 }}>
           配件（填调出数量）
         </Typography.Title>
-        <Table rowKey="skuId" size="small" columns={accessoryColumns} dataSource={accessories} pagination={false} />
+        <Table rowKey="skuId" size="small" columns={accessoryColumns} dataSource={accessories} pagination={false} scroll={{ x: true }} />
 
         <Space style={{ marginTop: 24 }}>
           <Button type="primary" htmlType="submit" loading={pending}>
