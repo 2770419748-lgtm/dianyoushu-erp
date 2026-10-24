@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { canAccessStore, canSeeWecomFollow, getDataScope, getMenuForRole } from "@/server/auth/permissions";
+import { groupMenu, MENU_GROUPS } from "@/lib/menu";
 
 const storeA = { id: 1, regionId: 10 }; // 华东区 A 店
 const storeB = { id: 2, regionId: 10 }; // 华东区 B 店
@@ -52,6 +53,28 @@ describe("菜单：getMenuForRole", () => {
   it("店员菜单里没有日结，店长有", () => {
     expect(getMenuForRole("STAFF").some((m) => m.key === "daily-close")).toBe(false);
     expect(getMenuForRole("STORE_MANAGER").some((m) => m.key === "daily-close")).toBe(true);
+  });
+
+  it("分成一级、二级（口径第 25 节）：每个角色的每一项都归了组（没有掉进“其他”的），一项不丢、不重复；组和组里的先后照固定顺序；看不到的组不显示", () => {
+    const order = MENU_GROUPS.flatMap((g) => g.items as readonly string[]);
+    for (const role of ["STAFF", "STORE_MANAGER", "REGIONAL_MANAGER", "HQ"] as const) {
+      for (const wecom of [false, true]) {
+        const flat = getMenuForRole(role, { wecom });
+        const groups = groupMenu(flat);
+        expect(groups.some((g) => g.key === "other")).toBe(false);
+        expect(groups.flatMap((g) => g.items).map((m) => m.key).sort()).toEqual(flat.map((m) => m.key).sort());
+        expect(groups.every((g) => g.items.length > 0)).toBe(true);
+        const at = groups.flatMap((g) => g.items).map((m) => order.indexOf(m.key));
+        expect(at).toEqual([...at].sort((x, y) => x - y));
+      }
+    }
+    expect(new Set(order).size).toBe(order.length); // 一项只归一组
+    // 店员“系统”里只有后续规划；区域经理没有企微那一组；总部开了企微，“客户与企微”是客户、企微对接
+    expect(groupMenu(getMenuForRole("STAFF")).find((g) => g.key === "system")?.items.map((m) => m.key)).toEqual(["roadmap"]);
+    expect(groupMenu(getMenuForRole("REGIONAL_MANAGER", { wecom: true })).some((g) => g.key === "customer")).toBe(false);
+    expect(groupMenu(getMenuForRole("HQ", { wecom: true })).find((g) => g.key === "customer")?.items.map((m) => m.key)).toEqual(["customers", "wecom"]);
+    // 新加的菜单项忘了归组，不会丢，放进最后的“其他”
+    expect(groupMenu([{ key: "new-page", label: "新页面", href: "/new" }]).map((g) => g.label)).toEqual(["其他"]);
   });
 });
 

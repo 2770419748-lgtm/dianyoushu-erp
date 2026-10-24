@@ -1,4 +1,5 @@
 import type { Role } from "@/generated/prisma/enums";
+import type { MenuEntry } from "@/lib/menu";
 
 // 角色与数据范围的判断函数。纯函数，不查库，方便单元测试。
 // 口径（临时，等《业务口径》定稿后对齐）：
@@ -226,11 +227,8 @@ export function canVoidSales(role: Role): boolean {
   return role === "STORE_MANAGER" || role === "HQ";
 }
 
-export interface MenuEntry {
-  key: string;
-  label: string;
-  href?: string; // 没有 href 的还没做成页面，先显示为灰字
-}
+// 菜单项的定义和一级分组（哪一项归哪一组、组里的先后）在 src/lib/menu.ts（口径第 25 节）；这里只管每个角色看得到哪些项
+export type { MenuEntry } from "@/lib/menu";
 
 const ROADMAP: MenuEntry = { key: "roadmap", label: "后续规划", href: "/roadmap" };
 const ALERTS: MenuEntry = { key: "alerts", label: "智能提醒", href: "/alerts" };

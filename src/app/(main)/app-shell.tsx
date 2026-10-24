@@ -1,10 +1,10 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Alert, Breadcrumb, Button, Grid, Layout, Menu, Space, Tag, Typography } from "antd";
-import type { MenuEntry } from "@/server/auth/permissions";
+import { groupMenu, type MenuEntry } from "@/lib/menu";
 import { breadcrumbFor } from "@/lib/routes";
 import { logout } from "@/app/(auth)/login/actions";
 import type { MyNotifications } from "@/server/alerts/alert-service";
@@ -51,6 +51,13 @@ export function AppShell({
   const selectedKey = menu
     .filter((m) => m.href && (pathname === m.href || pathname.startsWith(m.href + "/")))
     .sort((a, b) => (b.href?.length ?? 0) - (a.href?.length ?? 0))[0]?.key;
+  // 一级分组（口径第 25 节）：默认只展开当前页面所在的那一组；点开别的组时收起前一组（一次只开一组，菜单不会又变得很长）
+  const groups = groupMenu(menu);
+  const currentGroup = groups.find((g) => g.items.some((m) => m.key === selectedKey))?.key;
+  const groupKey = (k: string) => `group-${k}`;
+  const [open, setOpen] = useState({ for: currentGroup, keys: currentGroup ? [groupKey(currentGroup)] : [] });
+  // 换了页面、所在的组变了：只展开新的那一组（在渲染里按“上一次是哪组”调整，不用 effect）
+  if (open.for !== currentGroup) setOpen({ for: currentGroup, keys: currentGroup ? [groupKey(currentGroup)] : [] });
   const crumbs = breadcrumbFor(pathname).map((c) => ({
     title: c.href ? <Link href={c.href}>{c.title}</Link> : c.title,
   }));
@@ -58,7 +65,17 @@ export function AppShell({
   return (
     <Layout style={{ minHeight: "100vh" }}>
       {/* 窄屏时菜单收起成左上角的按钮，放进顶栏（顶栏左边留了 56px），不挡内容 */}
-      <Sider breakpoint="lg" collapsedWidth={0} theme="dark" zeroWidthTriggerStyle={{ top: 12 }} className={hydrated ? undefined : "sider-before-hydration"}>
+      <Sider
+        breakpoint="lg"
+        collapsedWidth={0}
+        theme="dark"
+        zeroWidthTriggerStyle={{ top: 12 }}
+        className={hydrated ? undefined : "sider-before-hydration"}
+        // 收起时菜单会清掉展开的组；窄屏点开菜单时，重新只展开当前页面所在的那一组
+        onCollapse={(collapsed) => {
+          if (!collapsed) setOpen({ for: currentGroup, keys: currentGroup ? [groupKey(currentGroup)] : [] });
+        }}
+      >
         <Link href="/" style={{ display: "block", color: "#fff", fontSize: 18, fontWeight: 600, padding: "16px 24px" }}>
           店有数 ERP
         </Link>
@@ -66,10 +83,16 @@ export function AppShell({
           theme="dark"
           mode="inline"
           selectedKeys={selectedKey ? [selectedKey] : []}
-          items={menu.map((m) => ({
-            key: m.key,
-            label: m.href ? <Link href={m.href}>{m.label}</Link> : m.label,
-            disabled: !m.href,
+          openKeys={open.keys}
+          onOpenChange={(keys) => setOpen({ for: currentGroup, keys: keys.filter((k) => !open.keys.includes(k)).slice(-1) })}
+          items={groups.map((g) => ({
+            key: groupKey(g.key),
+            label: g.label,
+            children: g.items.map((m) => ({
+              key: m.key,
+              label: m.href ? <Link href={m.href}>{m.label}</Link> : m.label,
+              disabled: !m.href,
+            })),
           }))}
         />
       </Sider>
