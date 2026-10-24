@@ -58,6 +58,8 @@ export function AppShell({
   const [open, setOpen] = useState({ for: currentGroup, keys: currentGroup ? [groupKey(currentGroup)] : [] });
   // 换了页面、所在的组变了：只展开新的那一组（在渲染里按“上一次是哪组”调整，不用 effect）
   if (open.for !== currentGroup) setOpen({ for: currentGroup, keys: currentGroup ? [groupKey(currentGroup)] : [] });
+  // 侧栏是不是收着（窄屏 < 992 默认收着，点左上角打开）：Sider 自己管开关，通过 onCollapse 告诉这里
+  const [siderCollapsed, setSiderCollapsed] = useState(false);
   const crumbs = breadcrumbFor(pathname).map((c) => ({
     title: c.href ? <Link href={c.href}>{c.title}</Link> : c.title,
   }));
@@ -71,8 +73,9 @@ export function AppShell({
         theme="dark"
         zeroWidthTriggerStyle={{ top: 12 }}
         className={hydrated ? undefined : "sider-before-hydration"}
-        // 收起时菜单会清掉展开的组；窄屏点开菜单时，重新只展开当前页面所在的那一组
+        // 窄屏自动收起、点左上角打开都会走到这里。收起时菜单会清掉展开的组；点开菜单时，重新只展开当前页面所在的那一组
         onCollapse={(collapsed) => {
+          setSiderCollapsed(collapsed);
           if (!collapsed) setOpen({ for: currentGroup, keys: currentGroup ? [groupKey(currentGroup)] : [] });
         }}
       >
@@ -83,7 +86,8 @@ export function AppShell({
           theme="dark"
           mode="inline"
           selectedKeys={selectedKey ? [selectedKey] : []}
-          openKeys={open.keys}
+          // 侧栏收着时菜单是“弹出”方式，这时给它展开的组，就会在内容上面浮出那一组的子菜单、不会消失（复查第 97 条）
+          openKeys={siderCollapsed ? [] : open.keys}
           onOpenChange={(keys) => setOpen({ for: currentGroup, keys: keys.filter((k) => !open.keys.includes(k)).slice(-1) })}
           items={groups.map((g) => ({
             key: groupKey(g.key),

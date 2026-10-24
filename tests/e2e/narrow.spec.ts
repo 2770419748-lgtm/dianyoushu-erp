@@ -66,9 +66,10 @@ const CANNOT_ENTER: Record<string, Record<string, string>> = {
 const MAY_BE_EMPTY: Record<string, (w: Who) => string | null> = {
   "/purchase/[id]/edit": () => "演示数据里可能没有草稿采购单",
   "/setup/import/[id]": () => "演示数据里没有期初入库单（端到端导入测试跑完会删掉）",
-  // 门店账号只看得到自己店的：刚灌的演示数据里这家店没有盘点单、调拨单（盘点、调拨的端到端测试排在后面才建），同一个页面 hq 那一遍扫过
-  "/stocktakes/[id]": (w) => (w.storeId ? "这家店还没有盘点单" : null),
-  "/transfers/[id]": (w) => (w.storeId ? "这家店还没有调拨单" : null),
+  // 演示数据不生成盘点单、调拨单（盘点、调拨的端到端测试排在后面才建）：刚灌的库里这个角色一张都看不到时不扫；
+  // 只要库里有这个角色看得到的（hq 看全部，门店账号看本店），上面 FROM_DB 就会挑出来照扫
+  "/stocktakes/[id]": (w) => (w.storeId ? "这家店还没有盘点单" : "库里还没有盘点单"),
+  "/transfers/[id]": (w) => (w.storeId ? "这家店还没有调拨单" : "库里还没有调拨单"),
 };
 
 async function measure(page: Page, url: string) {
@@ -139,5 +140,38 @@ for (const who of ["hq", "staff"]) {
     expect(missing, `这几个带参数的页面没找到能打开的地址：${missing.join("、")}`).toEqual([]);
     expect(notReal, `这几个带参数的页面打开的不是那一页（这个角色进不了的写进 CANNOT_ENTER）：\n${notReal.join("\n")}`).toEqual([]);
     expect(wide, wide.join("\n")).toEqual([]);
+  });
+}
+
+// 窄屏（< 992）侧栏收着时，点页面里的链接换到别的组的页面：左边不能浮出那一组的子菜单盖住内容（复查第 97 条）。
+// 换组要走页面里的链接（客户端跳转），page.goto 是整页重新加载，碰不到这个问题
+for (const width of [390, 800]) {
+  test(`窄屏（${width}）侧栏收着时换到别的组的页面、后退，左边不浮出子菜单`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: true, hasTouch: true, locale: "zh-CN", timezoneId: "Asia/Shanghai" });
+    const page = await context.newPage();
+    const noPopup = () => expect(page.locator(".ant-menu-submenu-popup:visible")).toHaveCount(0);
+    await page.goto("/login");
+    await page.locator('input[name="username"]').fill("hq");
+    await page.locator('input[name="password"]').fill("demo1234");
+    await page.locator('button[type="submit"]').click();
+    await page.waitForURL((u) => u.pathname !== "/login");
+    await page.goto("/sales", { waitUntil: "networkidle" }); // “销售”组
+    await page.locator(".ant-breadcrumb a", { hasText: "首页" }).click();
+    await page.waitForURL((u) => u.pathname === "/");
+    await page.locator(".ant-layout-content a[href='/stock']").first().click(); // 首页卡片“库存”：换到“库存”组
+    await page.waitForURL((u) => u.pathname === "/stock");
+    await page.waitForLoadState("networkidle");
+    await noPopup();
+    // 浏览器后退两次回到“销售”组的页面
+    await page.goBack();
+    await page.waitForURL((u) => u.pathname === "/");
+    await page.goBack();
+    await page.waitForURL((u) => u.pathname === "/sales");
+    await page.waitForLoadState("networkidle");
+    await noPopup();
+    // 点左上角打开菜单：展开的是“销售”那一组
+    await page.locator(".ant-layout-sider-zero-width-trigger").click();
+    await expect(page.locator(".ant-layout-sider .ant-menu-submenu-open > .ant-menu-submenu-title")).toHaveText(["销售"]);
+    await context.close();
   });
 }
